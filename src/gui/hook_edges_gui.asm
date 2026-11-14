@@ -737,12 +737,12 @@ str_hge_kind_app:      db "app", 0
 str_hge_kind_widget:   db "widget", 0
 str_hge_kind_service:  db "service", 0
 str_hge_term_schema:   db "inst=<wm_slot> list=WINDOWS(term:<slot>) get=TERMFEED@VTSTAT{COLS,TROWS,CUR,SSH,CAP,FOCUS,MODES,CRC} input=<hex set-1 scancodes>:TERMFEED@KEY(focused,unlocked) observe=COLS,TROWS,CUR,CAP,FOCUS,MODES,CRC set=na cancel=na", 0
-str_hge_wgt_schema:    db "inst=<widget_id> list=WIDGETLIST([<from>] page=24,no values) get=<field>:WIDGETGET(secret type redacted) set=<field> <value>:WIDGETSET(action fields na) observe=<field> input=na cancel=na", 0
+str_hge_wgt_schema:    db "inst=<widget_id> list=WIDGETLIST([<from>] page=24,no values) get=<field>:WIDGETGET(census=lifetime,public role/label,state;content withheld;mutation unchecked;content=button text_hex,disabled/open bool or public label text_hex/read value,text or public textfield text_hex; textfield/read value,text,disabled,submits; textfield/builtin_set value,text,disabled (submits=u32 readonly; disabled=0|1) or registered toggle scalar/read value or registered slider/numeric scalar/read value,min,max,step, status/read value,text, progress/read value,max,text_mode,indeterminate,cadence,phase,ticks,job_id; progress/builtin_set value,max,text_mode,indeterminate,cadence,job_id (phase,ticks readonly; text_mode=none|percentage|value,indeterminate=0|1,cadence=1..10,value<=max,max>0,job_id=u64); supported fields only/authority unchecked;secret type redacted) set=<field> <value>:WIDGETSET(action fields na) observe=<field> input=na cancel=na", 0
 str_hge_dpms_schema:   db "inst=none get=DPMS{blanked,idle_ms,timeout_ms,presents} set=1:DPMS BLANK(owner only)|0:DPMS WAKE observe=blanked list=na input=na cancel=na", 0
 str_hge_term_witness:  db " COLS=",0," TROWS=",0," CUR=",0," CAP=",0," FOCUS=",0," MODES=",0," CRC=",0,0
 str_hge_dpms_witness:  db " blanked=",0,0
 str_hge_wgt_actions:   db "open",0,"action",0,"input",0,"spawn",0,"close",0,"feed",0,"minimize",0,"restore",0,0
-str_hge_wgt_public_fields: db "role",0,"label",0,"intent",0,"intent_seq",0,0
+str_hge_wgt_public_fields: db "role",0,"label",0,"intent",0,"intent_seq",0,"census",0,0
 str_hge_verb_termfeed: db "TERMFEED", 0
 str_hge_verb_windows:  db "WINDOWS", 0
 str_hge_verb_wlist:    db "WIDGETLIST", 0

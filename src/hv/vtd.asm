@@ -712,6 +712,12 @@ vtd_ownership_init:
     test eax, eax
     jz   .skip_te_bind
     mov  byte [rel vtd_native_ready], 1
+    ; W4a: ownership with no native NIC bound closes later PCI NET registration
+    ; (net/netdev netdev_policy_admit); a USB NIC adds no requester and stays open.
+    cmp  byte [rel vtd_native_nic_found], 0
+    jne  .late_pci_open
+    mov  byte [rel netdev_late_pci_closed], 1
+.late_pci_open:
     lea  rdi, [rel vtd_hda_attach]         ; RCQ-36 S5b: HDA asks for DID 3 through core/dma
     lea  rsi, [rel vtd_hda_receipt]
     call dma_domain_bind
@@ -1303,18 +1309,24 @@ vtd_native_nic_current:
     ret
 
 
-; Discovery/native DMA construction may omit a command NIC only in boot_only,
-; which deliberately forbids native networking. A published native witness is
-; always checked in full; it can never become optional after a lost claim or
-; changed registration. A newly selectable native backend (valid or broken)
-; is not absence and cannot be silently adopted after the boot bind.
+; Discovery/native DMA construction may omit a command NIC in boot_only, which
+; forbids native networking, and (W4a, ROOT109426 (2)(a), SEC109455) in normal
+; policy when no native NIC is bound: otherwise a stock Intel machine without a
+; native driver ran with no DMA remapping at all. network_guest reserves PCI
+; NICs before probes and uses the same strict absence check as normal. It does
+; not invent a native lifeline or relax actual group/reset qualification.
+; Any other policy value refuses.
+; A published native witness is always checked in full; it can never become
+; optional after a lost claim or changed registration. A newly selectable
+; native backend (valid or broken) is not absence and cannot be silently
+; adopted after the boot bind.
 ; This does not relax the legacy secondary-NIC assignment/lifeline gates.
 ; Preserve every register except RAX, like vtd_native_nic_current.
 vtd_native_nic_optional_current:
     cmp  byte [rel vtd_native_nic_found], 0
     jne  vtd_native_nic_current
-    cmp  qword [rel native_driver_selected_policy], 1 ; NDP_BOOT_ONLY
-    jne  .bad
+    cmp  qword [rel native_driver_selected_policy], 2 ; normal/boot_only/network_guest
+    ja   .bad
     push rcx
     push rdx
     push rdi
@@ -1328,6 +1340,12 @@ vtd_native_nic_optional_current:
     jnz  .unexpected_native
     cmp  byte [rel vtd_nic_probe_backend], 0
     jne  .unexpected_native
+    cmp  qword [rel native_driver_selected_policy], 1
+    je   .absent                          ; boot_only: the gate already forbids native NET
+    call vtd_normal_absence_strict
+    test eax, eax
+    jz   .unexpected_native
+.absent:
     mov  eax, 1
     jmp  .out
 .unexpected_native:
@@ -1344,6 +1362,47 @@ vtd_native_nic_optional_current:
     ret
 .bad:
     xor  eax, eax
+    ret
+
+; Under normal/network_guest "no selectable native NIC" is not yet absence. A
+; native NIC registered at any health (DEGRADED, LINK_WAIT) or claimed by a
+; native NIC driver (BOUND, or FAILED as discovery also counts it) may have
+; armed rings; it must be witnessed, never left unwitnessed in DID 1. Requires
+; no such member, no such claim, and an exact claim record (none dropped).
+; EAX=1 strict absence, else 0. Read-only; clobbers RAX,RCX,RDX,RSI,RDI,R8-R11.
+vtd_normal_absence_strict:
+    sub  rsp, 512 + 8
+    call netdev_pci_member_present
+    test eax, eax
+    jnz  .no
+    mov  rdi, rsp
+    call pci_claim_snapshot
+    test edx, edx
+    jnz  .no
+    xor  ecx, ecx
+.claim:
+    cmp  ecx, eax
+    jae  .yes
+    mov  edx, ecx
+    shl  edx, 4
+    mov  edx, [rsp + rdx + 4]             ; driver id
+    cmp  edx, PCI_DRV_E1000E
+    je   .no
+    cmp  edx, PCI_DRV_RTL8125
+    je   .no
+    cmp  edx, PCI_DRV_RTL8126
+    je   .no
+    cmp  edx, PCI_DRV_RTL8168
+    je   .no
+    inc  ecx
+    jmp  .claim
+.yes:
+    mov  eax, 1
+    add  rsp, 512 + 8
+    ret
+.no:
+    xor  eax, eax
+    add  rsp, 512 + 8
     ret
 
 ; Run device/DMA maintenance at a clean VM exit without consuming VM-entry's
@@ -1731,13 +1790,14 @@ vtd_find_include_all_drhd:
 .none:
     jmp  vtd_find_scoped_drhd
 
-; Native bounded scoped prerequisite (RCQ-36): one segment-zero DRHD, no
-; additional remapping structures, explicit single-hop root-bus endpoint
-; scopes covering EXACTLY the complete live PCI inventory. This deliberately
-; permits one resolved root-complex IOAPIC (below), excludes bridges, RMRRs,
-; multiple units and unknown scope kinds. It is not
-; the PAOS_VTD_QEMU_SCOPED_DRHD harness override. No PCI/MMIO writes here.
-; Include-all ownership and all downstream CAP/TE/DID security gates remain.
+; Native bounded scoped prerequisite: one segment-zero DRHD, no other
+; remapping structures, explicit one-hop scopes covering the complete live
+; inventory. Retains flat root-bus endpoints and additionally accepts exactly
+; one root-bus PCI bridge with a single bus and one explicitly scoped Ethernet
+; endpoint at child device0/function0. No nested/shared bus or implied coverage.
+; The optional root-complex IOAPIC is resolved against the validated MADT.
+; This is not PAOS_VTD_QEMU_SCOPED_DRHD; no PCI/MMIO writes here. All unit,
+; lifeline, group, CAP/TE/DID, assignment and reset gates remain authoritative.
 vtd_find_scoped_drhd:
     push r12
     push r13
@@ -1770,10 +1830,13 @@ vtd_find_scoped_drhd:
     ret
 
 ; RDI = accessible DMAR span, ESI = exact bounded length -> RAX = unit or 0.
-; Caller owns the span (live locate at discovery, protected copy thereafter).
-; Two 256-bit maps prove scopes == unique enumerated endpoint inventory and
-; permit explicit lifeline membership checks. Maximum 256 PCI scopes/functions
-; plus one IOAPIC scope. The latter never enters the PCI bitmap or a DMA domain.
+; Match each scope to one index in the complete <=256-function inventory,
+; rather than truncating packed BDF to a root-bus bitmap. A 256-bit seen set
+; rejects duplicate scopes. A type2 bridge also covers its independently
+; enumerated sole Ethernet child (VT-d 8.3.1); an explicit child is optional.
+; Equal covered cardinality proves no inventory omission or duplicate entry.
+; Full 16-bit BDF identity survives every comparison.
+; Only one sole-bus/sole-Ethernet child bridge is supported beyond bus zero.
 vtd_scoped_drhd_validate:
     push rbx
     push rbp
@@ -1788,7 +1851,7 @@ vtd_scoped_drhd_validate:
     pop  rdi
     test eax, eax
     jz   .no_witness
-    sub  rsp, 80                         ; bitmap pair + separate IOAPIC presence
+    sub  rsp, 72                         ; seen[32], PCI count, bridge bus, child bus, IOAPIC, census count
     xor  eax, eax
     mov  [rsp], rax
     mov  [rsp + 8], rax
@@ -1796,12 +1859,17 @@ vtd_scoped_drhd_validate:
     mov  [rsp + 24], rax
     mov  [rsp + 32], rax
     mov  [rsp + 40], rax
-    mov  [rsp + 48], rax
-    mov  [rsp + 56], rax
-    mov  [rsp + 64], rax
+    cmp  byte [rel vtd_bdf_overflow], 0
+    jne  .bad
+    mov  eax, [rel vtd_bdf_count]
+    test eax, eax
+    jz   .bad
+    cmp  eax, 256
+    ja   .bad
+    mov  [rsp + 48], eax
     test rdi, rdi
     jz   .bad
-    cmp  esi, 72                         ; header + DRHD + at least one endpoint
+    cmp  esi, 72                         ; header + DRHD + at least one scope
     jb   .bad
     cmp  esi, VTD_DMAR_SNAP_PAGES * 4096
     ja   .bad
@@ -1839,71 +1907,45 @@ vtd_scoped_drhd_validate:
     test esi, 7
     jnz  .bad
     shr  esi, 3
-    cmp  esi, 257
+    cmp  esi, 257                        ; <=256 PCI scopes plus one IOAPIC
     ja   .bad
     mov  r13d, esi
     add  r12, 16
 .scope:
     cmp  dword [r12], 0x00000803         ; IOAPIC, length8, reserved0
     je   .ioapic
-    cmp  dword [r12], 0x00000801         ; endpoint, length8, reserved0
+    mov  ebp, [r12]
+    cmp  ebp, 0x00000801                ; endpoint, length8, reserved0
+    je   .pci_scope
+    cmp  ebp, 0x00000802                ; sub-hierarchy, length8, reserved0
     jne  .bad
-    cmp  word [r12 + 4], 0              ; enumeration ID0, start bus0
+.pci_scope:
+    cmp  byte [r12 + 4], 0              ; PCI enumeration ID reserved
     jne  .bad
+    movzx ebx, byte [r12 + 5]           ; full starting bus, no truncation
+    shl  ebx, 8
     movzx eax, byte [r12 + 6]
     cmp  eax, 31
     ja   .bad
     shl  eax, 3
-    movzx edx, byte [r12 + 7]
-    cmp  edx, 7
+    or   ebx, eax
+    movzx eax, byte [r12 + 7]
+    cmp  eax, 7
     ja   .bad
-    or   eax, edx
-    bts  qword [rsp], rax
-    jc   .bad                           ; duplicate scope is ambiguous
-    jmp  .scope_next
-.ioapic:
-    cmp  byte [rsp + 64], 0
-    jne  .bad                           ; exactly zero or one IOAPIC, regardless of order/ID
-    ; Intel VT-d 8.3.1: enumeration ID names the MADT IOAPIC; a one-hop
-    ; root-complex path is a static source ID. This slice supports only the
-    ; Q35 platform source ff:00.0, not a bridge or arbitrary non-PCI route.
-    cmp  byte [r12 + 5], 0xFF
-    jne  .bad
-    cmp  word [r12 + 6], 0
-    jne  .bad
-    mov  rdi, [rel vtd_ioapic_madt]
-    mov  esi, [rel vtd_ioapic_madt_len]
-    call vtd_ioapic_madt_validate
-    test eax, eax
-    jz   .bad
-    dec  eax                            ; resolver returns ID+1 (ID0 is valid)
-    cmp  al, [r12 + 4]
-    jne  .bad
-    mov  edi, 0xFF00
-    xor  esi, esi
-    call pci_bdf_read
-    cmp  eax, -1
-    jne  .bad                           ; pseudo-source must not alias a live PCI function
-    mov  byte [rsp + 64], 1
-.scope_next:
-    add  r12, 8
-    dec  r13d
-    jnz  .scope
-    cmp  byte [rel vtd_bdf_overflow], 0
-    jne  .bad
-    mov  ebp, [rel vtd_bdf_count]
-    test ebp, ebp
-    jz   .bad
-    cmp  ebp, 256
-    ja   .bad
-    lea  r12, [rel vtd_bdf_list]
-.inventory:
-    mov  ebx, [r12]
-    cmp  ebx, 255                       ; downstream buses require bridge-path support
-    ja   .bad
-    btr  qword [rsp], rbx
-    jnc  .bad                           ; unscoped or duplicate enumerated requester
-    bts  qword [rsp + 32], rbx
+    or   ebx, eax
+    lea  rdx, [rel vtd_bdf_list]
+    xor  ecx, ecx
+.find_scope:
+    cmp  ecx, [rsp + 48]
+    jae  .bad                           ; scope without an enumerated function
+    cmp  ebx, [rdx + rcx*4]
+    je   .scope_member
+    inc  ecx
+    jmp  .find_scope
+.scope_member:
+    bts  qword [rsp], rcx
+    jc   .bad                           ; duplicate scope / ambiguous identity
+    inc  dword [rsp + 32]
     mov  edi, ebx
     xor  esi, esi
     call pci_bdf_read
@@ -1916,53 +1958,167 @@ vtd_scoped_drhd_validate:
     call pci_bdf_read
     shr  eax, 16
     and  eax, 0x7F
-    jnz  .bad                           ; bridge/CardBus headers unsupported, never masked into endpoints
-    add  r12, 4
-    dec  ebp
-    jnz  .inventory
-    mov  rax, [rsp]
-    or   rax, [rsp + 8]
-    or   rax, [rsp + 16]
-    or   rax, [rsp + 24]
-    jnz  .bad                           ; absent extra scope is not a complete live fact
+    cmp  ebp, 0x00000802
+    je   .bridge
+    test eax, eax                       ; endpoint scope must name header0
+    jnz  .bad
+    cmp  ebx, 255
+    jbe  .scope_next                    ; retained root-bus endpoint
+    test bl, bl                         ; only child device0/function0
+    jnz  .bad
+    cmp  dword [rsp + 40], 0
+    jne  .bad                           ; exactly one downstream endpoint
+    mov  eax, ebx
+    shr  eax, 8
+    mov  [rsp + 40], eax
+    mov  edi, ebx
+    mov  esi, 8
+    call pci_bdf_read
+    shr  eax, 8
+    cmp  eax, 0x020000                  ; Ethernet only, exact class/prog-if
+    jne  .bad
+    jmp  .scope_next
+.bridge:
+    cmp  eax, 1
+    jne  .bad
+    cmp  ebx, 255                       ; no nested bridge or multihop paths
+    ja   .bad
+    test bl, 7                         ; root port function0 only
+    jnz  .bad
+    cmp  dword [rsp + 36], 0
+    jne  .bad                           ; exactly one downstream bus/bridge
+    mov  edi, ebx
+    mov  esi, 8
+    call pci_bdf_read
+    shr  eax, 16
+    cmp  eax, 0x0604                    ; genuine PCI-to-PCI bridge
+    jne  .bad
+    mov  edi, ebx
+    mov  esi, 0x18
+    call pci_bdf_read
+    test al, al                         ; primary bus zero
+    jnz  .bad
+    shr  eax, 8
+    test al, al                         ; nonzero secondary
+    jz   .bad
+    movzx edx, al
+    shr  eax, 8
+    cmp  al, dl                         ; secondary == subordinate, no hidden bus range
+    jne  .bad
+    mov  [rsp + 36], edx
+    jmp  .scope_next
+.ioapic:
+    cmp  dword [rsp + 44], 0
+    jne  .bad                           ; exactly zero or one IOAPIC
+    ; The static Q35 root-complex source ff:00.0 must resolve to the MADT ID.
+    cmp  byte [r12 + 5], 0xFF
+    jne  .bad
+    cmp  word [r12 + 6], 0
+    jne  .bad
+    mov  rdi, [rel vtd_ioapic_madt]
+    mov  esi, [rel vtd_ioapic_madt_len]
+    call vtd_ioapic_madt_validate
+    test eax, eax
+    jz   .bad
+    dec  eax
+    cmp  al, [r12 + 4]
+    jne  .bad
+    mov  edi, 0xFF00
+    xor  esi, esi
+    call pci_bdf_read
+    cmp  eax, -1
+    jne  .bad                           ; pseudo-source cannot alias live PCI
+    mov  dword [rsp + 44], 1
+.scope_next:
+    add  r12, 8
+    dec  r13d
+    jnz  .scope
+    cmp  dword [rsp + 36], 0
+    je   .coverage_count                ; retained flat-bus form
+    cmp  dword [rsp + 40], 0
+    jne  .coverage_count                ; retained explicit-child form
+    ; The checked type2 bridge scope includes downstream devices. Admit only
+    ; the same bounded sole device0/function0 Ethernet child as above. Neither
+    ; a live config response nor a bridge window invents census membership.
+    mov  ebx, [rsp + 36]
+    shl  ebx, 8
+    lea  rdx, [rel vtd_bdf_list]
+    xor  ecx, ecx
+.implicit_find:
+    cmp  ecx, [rsp + 48]
+    jae  .bad
+    cmp  ebx, [rdx + rcx*4]
+    je   .implicit_member
+    inc  ecx
+    jmp  .implicit_find
+.implicit_member:
+    bts  qword [rsp], rcx
+    jc   .bad
+    mov  edi, ebx
+    xor  esi, esi
+    call pci_bdf_read
+    cmp  ax, 0xFFFF
+    je   .bad
+    test ax, ax
+    jz   .bad
+    mov  edi, ebx
+    mov  esi, 0x0C
+    call pci_bdf_read
+    shr  eax, 16
+    and  eax, 0x7F
+    jnz  .bad                           ; independently live header0
+    mov  edi, ebx
+    mov  esi, 8
+    call pci_bdf_read
+    shr  eax, 8
+    cmp  eax, 0x020000                  ; Ethernet only, exact class/prog-if
+    jne  .bad
+    inc  dword [rsp + 32]
+    mov  eax, [rsp + 36]
+    mov  [rsp + 40], eax
+.coverage_count:
+    mov  eax, [rsp + 32]
+    cmp  eax, [rsp + 48]
+    jne  .bad                           ; all inventory indices covered once
+    mov  eax, [rsp + 36]
+    cmp  eax, [rsp + 40]
+    jne  .bad                           ; bridge and sole child must name the same bus
     cmp  byte [rel vtd_sata_found], 1
     jne  .bad
     cmp  byte [rel vtd_xhci_found], 1
     jne  .bad
     cmp  byte [rel vtd_native_nic_found], 0
     je   .storage_lifelines
-    mov  eax, [rel vtd_native_nic_bdf]
-    cmp  eax, 255
-    ja   .bad
-    bt   qword [rsp + 32], rax
-    jnc  .bad
+    cmp  byte [rel vtd_native_nic_found], 1
+    jne  .bad
+    mov  edi, [rel vtd_native_nic_bdf]
+    call .member
+    test eax, eax
+    jz   .bad
 .storage_lifelines:
-    mov  eax, [rel vtd_sata_bdf]
-    cmp  eax, 255
-    ja   .bad
-    bt   qword [rsp + 32], rax
-    jnc  .bad
-    mov  eax, [rel vtd_xhci_bdf]
-    cmp  eax, 255
-    ja   .bad
-    bt   qword [rsp + 32], rax
-    jnc  .bad
+    mov  edi, [rel vtd_sata_bdf]
+    call .member
+    test eax, eax
+    jz   .bad
+    mov  edi, [rel vtd_xhci_bdf]
+    call .member
+    test eax, eax
+    jz   .bad
     cmp  byte [rel vtd_nvme_found], 0
     je   .ok
     cmp  byte [rel vtd_nvme_found], 1
     jne  .bad
-    mov  eax, [rel vtd_nvme_bdf]
-    cmp  eax, 255
-    ja   .bad
-    bt   qword [rsp + 32], rax
-    jnc  .bad
+    mov  edi, [rel vtd_nvme_bdf]
+    call .member
+    test eax, eax
+    jz   .bad
 .ok:
     mov  rax, r15
     jmp  .out
 .bad:
     xor  eax, eax
 .out:
-    add  rsp, 80
+    add  rsp, 72
 .no_witness:
     pop  r15
     pop  r14
@@ -1970,6 +2126,24 @@ vtd_scoped_drhd_validate:
     pop  r12
     pop  rbp
     pop  rbx
+    ret
+.member:
+    ; Every inventory entry already has checked scope coverage. A lifeline
+    ; must still have its recorded full BDF in that census; never infer it.
+    xor  ecx, ecx
+    lea  rdx, [rel vtd_bdf_list]
+.member_next:
+    cmp  ecx, [rsp + 56]                ; caller census at +48, return address adds8
+    jae  .member_missing
+    cmp  edi, [rdx + rcx*4]
+    je   .member_found
+    inc  ecx
+    jmp  .member_next
+.member_found:
+    mov  eax, 1
+    ret
+.member_missing:
+    xor  eax, eax
     ret
 
 ; Optional boot lookup through native ACPI's unique, checksummed, RAM-bounded

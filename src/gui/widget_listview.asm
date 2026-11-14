@@ -1,7 +1,7 @@
 ;; MODULE gui/widget_listview
 ;; LAYER 6
-;; EXPORTS wgt_listview_draw, wgt_listview_set, wgt_listview_get, wgt_listview_overlay_draw, wgt_listview_pointer_press, wgt_listview_dropdown_press, wgt_listview_dropdown_kat, wgt_listview_modes_kat, wgt_listview_parse_parents, wgt_listview_type, wgt_listview_set_hook, wgt_listview_get_hook, wgt_listview_pointer_hook
-;; IMPORTS core/unicode_edit, gui/widget, gui/window, gui/chat_app, gui/form_loader, gui/window_mgmt, gui/wm_pointer, core/lib/fmt, core/lib/str, boot/serial
+;; EXPORTS wgt_listview_draw, wgt_listview_set, wgt_listview_fill, wgt_listview_get, wgt_listview_overlay_draw, wgt_listview_pointer_press, wgt_listview_dropdown_press, wgt_listview_dropdown_kat, wgt_listview_modes_kat, wgt_listview_parse_parents, wgt_listview_type, wgt_listview_set_hook, wgt_listview_get_hook, wgt_listview_pointer_hook
+;; IMPORTS svc/cpu_policy_report, core/unicode_edit, gui/widget, gui/window, gui/chat_app, gui/form_loader, gui/window_mgmt, gui/wm_pointer, core/lib/fmt, core/lib/str, boot/serial, gui/netmon_form
 ;; CAPS
 ;; OWNER saga:gui_foundation_ladder
 
@@ -797,6 +797,91 @@ wgt_listview_set_full:
     pop  rbx
     ret
 
+; EDI=stock list id, RSI=NUL-terminated items whose bytes the caller has
+; checked (printable UTF-8), EDX=0 check only or 1 apply -> EAX 0 done,
+; 1 malformed, 2 refused, 3 busy. Guest ITEMS (A1b): 1..39 bytes in the
+; existing inline option store and 1..16 non-empty comma items, never
+; truncated. A tree's parent map is tied to its old count, so it refuses; an
+; open popup is busy. Apply resets selection, scroll and disabled choices.
+wgt_listview_fill:
+    push rbx
+    push r12
+    push r13
+    mov  r12d, edi
+    mov  r13, rsi
+    mov  ebx, edx
+    xor  ecx, ecx                       ; bytes
+    xor  edx, edx                       ; completed items
+    xor  r8d, r8d                       ; bytes in this item
+.scan:
+    movzx eax, byte [r13 + rcx]
+    test eax, eax
+    jz   .end
+    cmp  ecx, WGT_TEXTFIELD_VAL_MAX      ; the existing inline option store
+    jae  .malformed
+    inc  ecx
+    cmp  eax, ','
+    je   .comma
+    inc  r8d
+    jmp  .scan
+.comma:
+    test r8d, r8d                       ; an empty item
+    jz   .malformed
+    inc  edx
+    xor  r8d, r8d
+    jmp  .scan
+.end:
+    test r8d, r8d                       ; nothing, or a trailing comma
+    jz   .malformed
+    inc  edx
+    cmp  edx, LV_OPTIONS_MAX
+    ja   .malformed
+    mov  r8d, ecx
+    mov  edi, r12d
+    call wgt_slot_ptr
+    cmp  byte [rax + LV_MODE], LV_MODE_TREE
+    je   .refused
+    cmp  byte [rax + LV_MODE], LV_MODE_RADIO
+    ja   .refused                       ; no other mode exists
+    cmp  byte [rax + LV_OPEN], 0
+    jne  .busy
+    test ebx, ebx
+    jz   .done
+    mov  rbx, rax
+    lea  rdi, [rbx + WGI_VAL]
+    xor  eax, eax
+    mov  ecx, 5                         ; the whole 40-byte store
+    cld
+    rep  stosq
+    lea  rdi, [rbx + WGI_VAL]
+    mov  rsi, r13
+    mov  ecx, r8d
+    mov  [rbx + WGI_VLEN], ecx
+    rep  movsb
+    mov  dword [rbx + WGI_SEL_LO], 0
+    mov  dword [rbx + WGI_SCROLL], 0
+    mov  qword [rbx + LV_DISABLED], 0
+    mov  dword [rbx + WGI_INTENT], LV_INTENT_VERB_SET
+    inc  qword [rbx + WGI_INTENT_SEQ]
+    mov  edi, r12d
+    call wgt_draw_id
+.done:
+    xor  eax, eax
+    jmp  .out
+.malformed:
+    mov  eax, 1
+    jmp  .out
+.refused:
+    mov  eax, 2
+    jmp  .out
+.busy:
+    mov  eax, 3
+.out:
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+
 wgt_listview_get:
     push r12
     push r13
@@ -809,6 +894,57 @@ wgt_listview_get:
     test rax, rax
     jnz  .out
 .builtin:
+    ; Explicit bounded policy0..policy63 getter; normal diagnostics unchanged.
+    mov rdi,r13
+    lea rsi,[rel str_lv_policy]
+.policy_prefix:
+    mov al,[rsi]
+    test al,al
+    jz .policy_number
+    cmp [rdi],al
+    jne .diagnostics
+    inc rdi
+    inc rsi
+    jmp .policy_prefix
+.policy_number:
+    call cpu_policy_report_parse
+    test eax,eax
+    js .policy_missing
+    mov esi,eax
+    mov edi,r12d
+    call form_sysprops_policy_page
+    jmp .out
+.policy_missing:
+    xor eax,eax
+    jmp .out
+.diagnostics:
+    lea  rdi, [rel str_lv_diagnostics]
+    mov  rsi, r13
+    call strcmp
+    test rax, rax
+    jnz .ordinary
+    mov edi, r12d
+    call form_sysprops_diagnostics
+    jmp .out
+.ordinary:
+    lea rdi,[rel str_lv_guest_policy]
+    mov rsi,r13
+    call strcmp
+    test rax,rax
+    jnz .network_field
+    mov edi,r12d
+    call form_guest_policy_observe
+    jmp .out
+.network_field:
+    lea rdi,[rel str_lv_network]
+    mov rsi,r13
+    call strcmp
+    test rax,rax
+    jnz .ordinary_field
+    mov edi,r12d
+    call netmon_observe_widget
+    jmp .out
+.ordinary_field:
     lea  rdi, [rel str_lv_mode]
     mov  rsi, r13
     call strcmp
@@ -2014,6 +2150,10 @@ wgt_listview_dropdown_kat:
 str_lv_selection: db "selection",0
 str_lv_scroll:    db "scroll",0
 str_lv_value:     db "value",0
+str_lv_policy: db "policy",0
+str_lv_guest_policy: db "guest_policy",0
+str_lv_network: db "network",0
+str_lv_diagnostics: db "diagnostics",0
 str_lv_mode:      db "mode",0
 str_lv_open:      db "open",0
 str_lv_overlay:   db "overlay",0

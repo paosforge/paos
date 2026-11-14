@@ -1,7 +1,7 @@
 ;; MODULE bus/acpi
 %include "core/abi/build_profile.inc"
 ;; LAYER 2
-;; EXPORTS acpi_ownership_snapshot, power_button_ownership_state, power_button_ownership_pm1, acpi_selftest, acpi_irqmap_report, acpi_irqmap_parse, acpi_find_table, acpi_dsdt_contains_pair, acpi_xsdt, acpi_madt, smp_selftest_after_acpi, acpi_table_state, acpi_table_present, acpi_root_state, acpi_apic_count, acpi_apic_ids, acpi_mcfg_count, acpi_mcfg_entries, acpi_fadt_revision, acpi_hpet_base, acpi_hpet_period, acpi_hpet_period_state, acpi_kat_ok, acpi_state_name, acpi_fixed_button_decode, acpi_fixed_button_init, acpi_fixed_button_poll, acpi_fixed_button_state, acpi_fixed_button_disarm, acpi_sci_prepare, acpi_sci_hold, acpi_sci_check, acpi_sci_release, acpi_sci_contain
+;; EXPORTS acpi_ownership_snapshot, power_button_ownership_state, power_button_ownership_pm1, acpi_selftest, acpi_irqmap_report, acpi_irqmap_parse, acpi_irqmap_complete, acpi_irqmap_io, acpi_irqmap_io_count, acpi_find_table, acpi_dsdt_contains_pair, acpi_xsdt, acpi_madt, smp_selftest_after_acpi, acpi_table_state, acpi_table_present, acpi_root_state, acpi_apic_count, acpi_apic_ids, acpi_mcfg_count, acpi_mcfg_entries, acpi_fadt_revision, acpi_hpet_base, acpi_hpet_period, acpi_hpet_period_state, acpi_kat_ok, acpi_state_name, acpi_fixed_button_decode, acpi_fixed_button_init, acpi_fixed_button_poll, acpi_fixed_button_state, acpi_fixed_button_disarm, acpi_sci_prepare, acpi_sci_hold, acpi_sci_check, acpi_sci_release, acpi_sci_contain
 ;; IMPORTS bus/hest, core/mca_cmci, boot/serial, boot/header, boot/paging, core/lib/fmt, core/time
 ;; CAPS io
 ;; OWNER saga:bus
@@ -1564,6 +1564,7 @@ acpi_irqmap_parse:
     inc  dword [rel acpi_irqmap_lnmi]
     jmp  .next
 .done:
+    mov  byte [rel acpi_irqmap_complete], 1 ; VM 106840/SEC 106852: whole MADT read, sole writer
     clc
     pop  r12
     pop  rbx
@@ -1931,6 +1932,7 @@ acpi_irqmap_iso_mask: dd 0
 acpi_irqmap_nmi: dd 0
 acpi_irqmap_lnmi: dd 0
 acpi_irqmap_pcat: db 0
+acpi_irqmap_complete: db 0             ; 1 only after a whole MADT parse (cleared with the state)
 acpi_irqmap_state_end:
 %endmacro
 WDATA_DEFER WDATA_bus_acpi_irqmap

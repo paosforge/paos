@@ -1,6 +1,6 @@
 ;; MODULE sec/data_config_local
 ;; LAYER 5
-;; EXPORTS data_config_write_local
+;; EXPORTS data_config_write_local, data_config_write_updates, data_config_write_daily
 ;; IMPORTS sec/session, fs/data_config_authority, boot/boot_v2_handoff, svc/command
 ;; CAPS
 ;; OWNER saga:fs_wave
@@ -32,6 +32,49 @@ data_config_local_check:                 ; R8=captured PID, R9=authority
     jmp .out
 .no:
     mov rax, -1
+.out:
+    pop r9
+    pop r8
+    pop rdx
+    ret
+
+; Native Settings update policy ONLY: preserve the fixed local owner checker
+; and add exact original40 generation/deadline at EVERY provider effect.
+; No caller-supplied callback, PIO grant or worker assertion enters here.
+; settings_update_policy_current is the fixed native composition checker,
+; like app_store_effect_check; no replacement callback is supplied by a caller.
+data_config_write_updates:
+    lea r11, [rel data_config_updates_check]
+    jmp data_config_write_updates_guarded
+
+data_config_updates_check:
+    push rdx
+    push r8
+    push r9
+    call data_config_local_check
+    test eax, eax
+    jnz .out
+    call settings_update_policy_current
+.out:
+    pop r9
+    pop r8
+    pop rdx
+    ret
+
+; Native daily preference only. Neither scheduled CHECK nor UPDATE.CFG's
+; original40 creates this authority. Repeated before EVERY provider effect.
+data_config_write_daily:
+    lea r11, [rel data_config_daily_check]
+    jmp data_config_write_daily_guarded
+
+data_config_daily_check:
+    push rdx
+    push r8
+    push r9
+    call data_config_local_check
+    test eax, eax
+    jnz .out
+    call settings_update_daily_policy_current
 .out:
     pop r9
     pop r8

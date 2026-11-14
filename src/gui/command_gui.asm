@@ -1,7 +1,7 @@
 ;; MODULE gui/command_gui
 ;; LAYER 6
 ;; EXPORTS gui_declare, gui_dpms_declare, gui_cursor_apply_relative, cmd_verb_kbinj, cmd_verb_kbdbuf, cmd_verb_mouseinj, cmd_verb_mousestat, cmd_verb_flicker, clock_zone_select, gui_out_buf, gui_out_ready, gui_out_cur
-;; IMPORTS core/lib/fmt, svc/command, svc/command_auth, gui/window, gui/cadence_mark, dev/input/ps2, gui/input_route, dev/usb/hid, gui/wm_pointer, gui/widget, gui/chat_app, core/time, gui/window_mgmt, sec/keyprov, gui/input_domain_pad
+;; IMPORTS gui/kbd_prefs, gui/lang_prefs, gui/wallpaper_prefs, gui/config_prefs, gui/clock_prefs, core/lib/fmt, svc/command, svc/command_auth, gui/window, gui/cadence_mark, dev/input/ps2, gui/input_route, dev/usb/hid, gui/wm_pointer, gui/widget, gui/chat_app, core/time, gui/window_mgmt, sec/keyprov, gui/input_domain_pad
 ;; CAPS
 ;; OWNER saga:gui_substrate_input
 ; ============================================================================
@@ -313,6 +313,7 @@ cmd_verb_clock:
     call gui_out_hhmm
     call gui_out_tz_zone
     call gui_out_clock_src
+    call gui_out_clock_prefs
     mov  byte [rel gui_out_ready], 1
     pop  rsi
     pop  rdi
@@ -321,9 +322,82 @@ cmd_verb_clock:
     mov  qword [rsi + RSP_CODE], CMDE_OK
     ret
 
+; Bounded public preference projection on the existing CLOCK read. The signed
+; DATA cache is public; machine/owner keys and legacy HMAC bytes stay private.
+; Raw prefs_min is the stored fallback, distinct from seasonal display tz_min.
+gui_out_clock_prefs:
+    push rbx
+    push r12
+    lea rdi, [rel str_ckp_zone]
+    call gui_out_str
+    movzx edi, byte [rel clock_tz_zone]
+    call gui_out_dec
+    lea rdi, [rel str_ckp_min]
+    call gui_out_str
+    movsxd rdi, dword [rel clock_tz_min]
+    call gui_out_sdec
+    ; Same read-only choices config_prefs_save snapshots. This lets a caller
+    ; detect RAM/stored divergence before a public Apply saves every preference.
+    lea rdi, [rel str_ckp_kbd]
+    call gui_out_str
+    call kbd_prefs_data_choice
+    movsxd rdi, eax
+    call gui_out_sdec
+    lea rdi, [rel str_ckp_wallpaper]
+    call gui_out_str
+    movzx edi, byte [rel wallpaper_stock_choice]
+    call gui_out_dec
+    lea rdi, [rel str_ckp_lang]
+    call gui_out_str
+    call lang_prefs_data_choice
+    mov rdi, rax
+    mov rsi, [rel gui_out_cur]
+    mov edx, 16                         ; packed little-endian padded ASCII tag
+    call fmt_hex
+    add [rel gui_out_cur], rax
+    call config_prefs_clock_record
+    mov rbx, rax
+    mov r12d, edx
+    lea rdi, [rel str_ckp_data]
+    call gui_out_str
+    mov edi, r12d
+    call gui_out_dec
+    lea rdi, [rel str_ckp_record]
+    call gui_out_str
+    test rbx, rbx
+    jz .none
+    xor r12d, r12d
+.record:
+    movzx edi, byte [rbx+r12]
+    mov rsi, [rel gui_out_cur]
+    mov edx, 2
+    call fmt_hex
+    add [rel gui_out_cur], rax
+    inc r12d
+    cmp r12d, 256
+    jb .record
+    jmp .legacy
+.none:
+    lea rdi, [rel str_ckp_none]
+    call gui_out_str
+.legacy:
+    call clock_prefs_clock_match
+    mov ebx, eax
+    mov r12d, edx
+    lea rdi, [rel str_ckp_legacy]
+    call gui_out_str
+    mov edi, r12d
+    call gui_out_dec
+    lea rdi, [rel str_ckp_match]
+    call gui_out_str
+    mov edi, ebx
+    call gui_out_dec
+    pop r12
+    pop rbx
+    ret
+
 ; gui_out_clock_src — RCQ-17 (B1): " src=none|rtc|ntp", what last set the wall
-; (core/time.asm time_wall_source). Always the last CLOCK key, so the reply
-; before it is unchanged. A byte outside the table prints "none".
+; (core/time.asm time_wall_source). A byte outside the table prints "none".
 gui_out_clock_src:
     lea  rdi, [rel str_ck_src]
     call gui_out_str
@@ -1558,3 +1632,14 @@ str_gu_intent:      db " intent=",0
 str_gu_0x:          db "0x", 0
 str_gu_0dot:        db "0.", 0
 str_gu_sp:          db " ", 0
+
+str_ckp_kbd: db ' prefs_kbd=',0
+str_ckp_wallpaper: db ' prefs_wallpaper=',0
+str_ckp_lang: db ' prefs_lang=',0
+str_ckp_zone: db ' prefs_zone=',0
+str_ckp_min: db ' prefs_min=',0
+str_ckp_data: db ' prefs_data_state=',0
+str_ckp_record: db ' prefs_data_record=',0
+str_ckp_none: db 'none',0
+str_ckp_legacy: db ' prefs_legacy_state=',0
+str_ckp_match: db ' prefs_legacy_match=',0

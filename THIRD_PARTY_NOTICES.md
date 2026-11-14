@@ -370,10 +370,12 @@ BSD-3-Clause/USL notices. The required advertising acknowledgment is:
 Retain it in applicable advertising materials mentioning features or use of the
 covered software. Placement in the eventual release/site materials still needs
 review. The fact-record hashes match the prior packet; current driver hashes
-have changed and need source/derivation review and selected-binary binding.
-Notices alone do not cure incompatible derivation. AX88179, RTL8125/RTL8126
-and the other provenance leads remain unresolved; none receives an MPL grant
-by virtue of this file.
+have changed and need selected-binary binding. Peter116520 / ROOT116522 (11/12):
+RTL8168 complies with its notices permanently, including the advertising
+acknowledgment; no RTL8168 derivation check or counsel dependency. This does not
+clear I219 or other unresolved provenance leads. AX88179, RTL8125/RTL8126 and the
+other provenance leads remain unresolved; none receives an MPL grant by virtue
+of this file.
 
 ## Mozc romaji preedit conversion table (BSD-3-Clause)
 
@@ -478,7 +480,9 @@ pack, engine or external resource distribution.
 Rescue, Linux guests, GRUB, shim, static libraries, browser inputs, firmware,
 models, images and bundled host tools need an exact selected-component inventory,
 license/notice map and corresponding source/relink inputs where applicable.
-This file is not a GPL source offer. Public source curation must exclude the
+Peter116520 / ROOT116522: ship complete corresponding source next to every
+binary with GPL code (GPLv2 3(a)); no written source offer or counsel check.
+This file is not the corresponding source. Public source curation must exclude the
 private development factory, vendor ACPI fixtures and serial-bearing lab data.
 The readiness gates remain red until their evidence is complete.
 

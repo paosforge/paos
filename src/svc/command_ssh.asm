@@ -1,7 +1,7 @@
 ;; MODULE svc/command_ssh
 ;; LAYER 5
 ;; EXPORTS command_ssh_init, command_guestcpu_public_observation, ssh_cmd_out_buf, ssh_cmd_out_ready, SSH_CMD_OUT_CAP
-;; IMPORTS svc/command, svc/command_guestcpu, svc/ssh, svc/ssh_auth, svc/ssh_channel, svc/command_audit, core/lib/mem, core/lib/fmt
+;; IMPORTS net/tcp, svc/command, svc/command_guestcpu, svc/ssh, svc/ssh_auth, svc/ssh_channel, svc/command_audit, core/lib/mem, core/lib/fmt
 ;; CAPS
 ;; OWNER saga:ssh_server
 ; Public read-only TOFU projection. The handler is reachable only through the
@@ -132,6 +132,20 @@ command_ssh_init:
     call command_register_verb
     test eax, eax
     js   .out
+%ifdef PAOS_PUBLICITY_LAB_PROFILE
+%if PAOS_PUBLICITY_LAB_PROFILE
+    ; Explicit owner opt-in only; no generic public read/arming authority.
+    lea  rdi, [rel str_verb_sshpretrace]
+    lea  rsi, [rel cmd_verb_sshpretrace]
+    xor  edx, edx
+    mov  ecx, ARGT_TEXT
+    xor  r8d, r8d
+    mov  r9d, 1                         ; existing consumed AUTH1 MUTATE scope
+    call command_register_verb
+    test eax, eax
+    js   .out
+%endif
+%endif
     ; Password-only authority observation: owner carrier, scoped inner request.
     lea  rdi, [rel str_verb_authpwkey]
     lea  rsi, [rel cmd_verb_authpwkey]
@@ -172,6 +186,20 @@ command_ssh_init:
     call command_register_verb
     test eax, eax
     js   .out
+%ifdef PAOS_PUBLICITY_LAB_PROFILE
+%if PAOS_PUBLICITY_LAB_PROFILE
+    ; Lab only; registry still consumes existing AUTH1 MUTATE authority.
+    lea  rdi, [rel str_verb_sshprofilefault]
+    lea  rsi, [rel cmd_verb_sshprofilefault]
+    xor  edx, edx
+    mov  ecx, ARGT_TEXT
+    xor  r8d, r8d
+    mov  r9d, 1
+    call command_register_verb
+    test eax, eax
+    js   .out
+%endif
+%endif
     ; Explicit outgoing server trust, same consumed OWNER AUTH1 MUTATE gate.
     lea  rdi, [rel str_verb_sshkhtrust]
     lea  rsi, [rel cmd_verb_sshkhtrust]
@@ -379,3 +407,16 @@ str_verb_sshcliprofile: db "SSHCLIPROFILE",0
 str_verb_sshpresence: db "SSHPRESENCE",0
 %include "svc/ssh_presence_command.inc"
 str_verb_sshkhreplace: db "SSHKHREPLACE",0
+
+%ifdef PAOS_PUBLICITY_LAB_PROFILE
+%if PAOS_PUBLICITY_LAB_PROFILE
+str_verb_sshprofilefault: db "SSHPROFILEFAULT",0
+%endif
+%endif
+
+%ifdef PAOS_PUBLICITY_LAB_PROFILE
+%if PAOS_PUBLICITY_LAB_PROFILE
+str_verb_sshpretrace: db "SSHPRETRACE",0
+%include "svc/ssh_preauth_trace_command.inc"
+%endif
+%endif

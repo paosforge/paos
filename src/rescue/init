@@ -396,7 +396,7 @@ boundary listener-gate "enabled=$ROUTE_LISTENER"
 # Both local and signed remote actions now share a stable mounted ESP. The
 # independent menu never delays the listener; timeout/Repair simply stays here.
 SL_QUIESCENT=0
-/sbin/paos-rescue-console --recovery-choices /dev/tty1 \
+/sbin/paos-rescue-console --recovery-session /dev/tty1 \
     </dev/null >/run/paos-rescue-console.log 2>&1 &
 if [ "$ROUTE_LISTENER" = 1 ]; then
     # Optional signed-carrier extension. Port9996 and all OP1/2/5 paths stay

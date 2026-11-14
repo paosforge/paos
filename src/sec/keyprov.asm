@@ -48,7 +48,7 @@ KC_MASK      equ 16
 KC_VALID     equ 24
 KC_SIZE      equ 32
 KP_SLOTS     equ 8                      ; = KO_SLOTS (dev/input/ps2); pinned by the host suite
-KP_FIELD_MAX equ 64                     ; = WGT_MAX (gui/widget); pinned by the host suite
+KP_FIELD_MAX equ 128                    ; = WGT_MAX (gui/widget); pinned by the host suite
 KP_FIELD_CTX equ 8                      ; writer contexts remembered at once
 KP_FIELD_UNTETHERED equ 0xFF
 

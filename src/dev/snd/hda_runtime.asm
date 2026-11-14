@@ -1,6 +1,6 @@
 ;; MODULE dev/snd/hda_runtime
 ;; LAYER 3
-;; EXPORTS hda_probe_controller_busy, hda_probe_guest_claim, hda_probe_tone, hda_probe_init_at, hda_probe_error, hda_probe_stage, hda_probe_generate
+;; EXPORTS hda_probe_terminal, hda_probe_power_guard, hda_probe_controller_busy, hda_probe_guest_claim, hda_probe_tone, hda_probe_init_at, hda_probe_error, hda_probe_stage, hda_probe_generate
 ;; IMPORTS boot/native_driver_gate, dev/snd/hda_loopback_native, dev/snd/hda_transport, dev/snd/hda_codec, dev/snd/hda_output, bus/pci, boot/paging, boot/serial, core/time, core/dma
 ;; CAPS mmio dma
 ;; OWNER saga:audio
@@ -32,6 +32,9 @@
 ; Callers MUST gate CPUID.1:ECX[31] before this ungated MMIO/DMA seam.
 ; Host model calls this same consumer without executing PCI port IO.
 hda_probe_init_at:
+    cmp dword [rel hdar_terminal_latched],0
+    jne hdart_denied
+    call hdarf_new_attempt         ; invalidate historical failure observation
     NATIVE_DRIVER_REFUSE 7
     push rbx
     push r12
@@ -313,6 +316,8 @@ hdar_init_fail:
     mov byte [rbx + 0x4C], 0
     mov byte [rbx + 0x5C], 0
     and dword [rbx + 8], 0xFFFFFEFE
+    mov eax,1                     ; original init-failure boundary
+    call hdarf_capture             ; passive readback; original result unchanged
     mov rax, -1
 hdar_init_out:
     pop r15
@@ -422,6 +427,8 @@ hdar_budget:
 ; Single serialized command; zero is a legal response. Error/timeout poisons
 ; this session; no same-command retry or new discovery until controller reset.
 hdar_command:
+    cmp dword [rel hdar_terminal_latched],0
+    jne hdart_denied
     push r12
     push r13
     push r14
@@ -460,6 +467,8 @@ hdar_command:
     pop r12
     ret
 hdar_command_guard:
+    cmp dword [rel hdar_terminal_latched],0
+    jne .bad
     dec r14d
     jz .bad
     mov rax, [rel hdar_mmio]
@@ -731,6 +740,144 @@ hdar_widget_power_amp:
 ; promise. PCM generation/reference stays exactly24000 frames, no replay.
 HDAR_TONE_BYTES       equ 96000
 HDAR_CODEC_DRAIN_BYTES equ 8192
+; Existing foreground diagnostic, distinct from loopback-native and guest owners.
+; Trusted96B RDI, original serialized BSP/IF0 terminal caller. RAM-only guard;
+; no policy/PCI/MMIO reads, no stop/reset/cleanup and no ownership transfer.
+; RAX0 means ONLY this original diagnostic has no retained lifetime/work.
+; RAX-1 refuses before effect. Even STOPPED9/FAILED10 retains DMA custody;
+; successful foreground return never independently proved terminal closure.
+; Sticky guest claim is exported HISTORY, not native I/O ownership/work.
+hda_probe_power_guard:
+    pushfq
+    pop r11
+    shr r11d,9
+    and r11d,1
+    mov dword [rdi],1
+    mov dword [rdi+4],-1
+    mov dword [rdi+8],3
+    mov dword [rdi+12],3             ; original globals and embedded contexts read
+    xor r9d,r9d
+    xor eax,eax
+    cmp qword [rel hdar_mmio],0
+    setne al
+    mov [rdi+24],eax
+    shl eax,0
+    or r9d,eax
+    xor eax,eax
+    cmp qword [rel hdar_dma],0
+    setne al
+    mov [rdi+28],eax
+    shl eax,1
+    or r9d,eax
+    xor eax,eax
+    cmp qword [rel hdar_map_serial],0
+    setne al
+    mov [rdi+32],eax
+    shl eax,2
+    or r9d,eax
+    xor eax,eax
+    cmp qword [rel hdar_transport + hda_transport.mmio],0
+    setne al
+    mov [rdi+36],eax
+    shl eax,3
+    or r9d,eax
+    xor eax,eax
+    cmp qword [rel hdar_transport + hda_transport.corb],0
+    setne al
+    mov [rdi+40],eax
+    shl eax,4
+    or r9d,eax
+    xor eax,eax
+    cmp qword [rel hdar_transport + hda_transport.rirb],0
+    setne al
+    mov [rdi+44],eax
+    shl eax,5
+    or r9d,eax
+    xor eax,eax
+    cmp qword [rel hdar_output + hda_output.mmio],0
+    setne al
+    mov [rdi+56],eax
+    shl eax,6
+    or r9d,eax
+    xor eax,eax
+    cmp qword [rel hdar_output + hda_output.bdl],0
+    setne al
+    mov [rdi+60],eax
+    shl eax,7
+    or r9d,eax
+    xor eax,eax
+    cmp qword [rel hdar_output + hda_output.pcm],0
+    setne al
+    mov [rdi+64],eax
+    shl eax,8
+    or r9d,eax
+    xor eax,eax
+    cmp qword [rel hdar_output + hda_output.position],0
+    setne al
+    mov [rdi+68],eax
+    shl eax,9
+    or r9d,eax
+    xor eax,eax
+    cmp qword [rel hdar_output + hda_output.bdl_dma],0
+    setne al
+    shl eax,10
+    or r9d,eax
+    xor eax,eax
+    cmp qword [rel hdar_output + hda_output.pcm_dma],0
+    setne al
+    shl eax,11
+    or r9d,eax
+    xor eax,eax
+    cmp qword [rel hdar_output + hda_output.position_dma],0
+    setne al
+    shl eax,12
+    or r9d,eax
+    mov [rdi+16],r9d
+    movzx eax,byte [rel hdar_guest_claimed]
+    mov [rdi+20],eax
+    mov eax,[rel hdar_transport + hda_transport.pending]
+    mov [rdi+48],eax
+    mov eax,[rel hdar_transport + hda_transport.fault]
+    mov [rdi+52],eax
+    mov eax,[rel hdar_output + hda_output.state]
+    mov [rdi+72],eax
+    mov eax,[rel hda_probe_stage]
+    mov [rdi+76],eax
+    mov eax,[rel hda_probe_error]
+    mov [rdi+80],eax
+    mov eax,[rel hdar_bdf]
+    mov [rdi+84],eax
+    mov eax,[rel hdar_pci_id]
+    mov [rdi+88],eax
+    mov [rdi+92],r11d
+    test r11d,r11d
+    jnz .if_refusal
+    cmp dword [rdi+48],0
+    jne .work_refusal
+    mov eax,[rdi+72]
+    test eax,eax
+    jz .lifetime
+    cmp eax,8
+    jbe .work_refusal                ; original configured/in-flight output1..8
+    jmp .refuse                     ; STOPPED/FAILED/unknown is not closure
+.lifetime:
+    test r9d,r9d
+    jnz .refuse
+    cmp dword [rdi+52],0
+    jne .refuse
+    mov dword [rdi+4],0
+    mov dword [rdi+8],0
+    xor eax,eax
+    ret
+.if_refusal:
+    mov dword [rdi+8],1
+    jmp .refuse
+.work_refusal:
+    mov dword [rdi+8],2
+.refuse:
+    mov rax,-1
+    ret
+
 hda_probe_controller_busy:
     mov rax,[rel hdar_mmio]
     test rax,rax
@@ -753,6 +900,10 @@ hda_probe_guest_claim:
 .out:
     ret
 hda_probe_tone:
+    cmp dword [rel hdar_terminal_latched],0
+    jne hdart_denied
+    call hdarf_new_attempt         ; original native attempt, no device effect
+    call hdart_entry_prepare       ; original prior completed owner, RAM only
     push rbx
     push r12
     push r13
@@ -782,7 +933,7 @@ hda_probe_tone:
     call pci_scan_with_filter
     mov rdi, [rel hdar_found]
     test rdi, rdi
-    jz .fail
+    jz .scan_failed
     call hda_probe_init_at
     test rax, rax
     js .fail
@@ -897,11 +1048,16 @@ hda_probe_tone:
     call serial_string
     xor eax, eax
     jmp .out
+.scan_failed:
+    call hdart_scan_failed         ; original no-candidate rejection, no MMIO
+    jmp .fail
 .fail_reset:
     mov rax, [rel hdar_mmio]
     mov byte [rax + 0x4C], 0
     mov byte [rax + 0x5C], 0
     and dword [rax + 8], 0xFFFFFEFE
+    mov eax,2                     ; original tone failure stop/reset boundary
+    call hdarf_capture             ; no additional device write or retry
 .fail:
     mov eax, [rel hda_probe_stage]
     inc eax
@@ -964,6 +1120,9 @@ hdar_pci_cb:
     push r12
     push r13
     push r14
+    push r15
+    push rbp
+    sub rsp,8                       ; scanner SysV entry8 -> calls0
     cmp qword [rel hdar_found], 0
     jne .out
     cmp cx, 0x8086
@@ -971,11 +1130,13 @@ hdar_pci_cb:
     cmp cx, 0x1022
     jne .out
 .vendor_ok:
+    mov r15d,ecx                    ; original scanner identity, before calls
     mov r12d, edi
     mov r13d, esi
     mov r14d, edx
     mov ecx, 8
     call pci_cfg_read32
+    mov ebp,eax                     ; original raw class/revision
     shr eax, 8
     and eax, 0xFFFF7F               ; HDA progIF00/80 only; all other bits exact
     cmp eax, 0x040300
@@ -1038,19 +1199,66 @@ hdar_pci_cb:
     and rcx, rbx
     cmp rax, rcx
     jne .out
+    ; Immutable first claim, before the original PCI enable write. Refuse a
+    ; retained pre-anchor lifetime; never reconstruct its provenance here.
+    mov eax,r12d
+    shl eax,8
+    mov ecx,r13d
+    shl ecx,3
+    or eax,ecx
+    or eax,r14d
+    cmp dword [rel hdar_anchor_valid],0
+    jne .anchor_replay
+    cmp qword [rel hdar_mmio],0
+    jne .out
+    cmp qword [rel hdar_dma],0
+    jne .out
+    cmp dword [rel hdar_terminal_latched],0
+    jne .out
+    mov [rel hdar_anchor_bdf],eax
+    mov [rel hdar_anchor_id],r15d
+    mov [rel hdar_anchor_class],ebp
+    mov [rel hdar_anchor_bar],rbx
+    mov rcx,[rel hdar_pde]
+    mov [rel hdar_anchor_pde],rcx
+    mov dword [rel hdar_anchor_valid],1
+    jmp .anchor_ok
+.anchor_replay:
+    cmp dword [rel hdar_terminal_latched],0
+    jne .out
+    cmp [rel hdar_anchor_bdf],eax
+    jne .out
+    cmp [rel hdar_anchor_id],r15d
+    jne .out
+    cmp [rel hdar_anchor_class],ebp
+    jne .out
+    cmp [rel hdar_anchor_bar],rbx
+    jne .out
+    mov rcx,[rel hdar_pde]
+    xor rcx,[rel hdar_anchor_pde]
+    and rcx,~0x60                  ; hardware Accessed/Dirty may advance
+    jnz .out
+.anchor_ok:
     mov dword [rel hdar_discovery_error], 9
     mov edi, r12d
     mov esi, r13d
     mov edx, r14d
     mov ecx, 4
     call pci_cfg_read32
+    cmp eax, -1
+    je .command_unknown                 ; refuse before deriving/writing Command
     and eax, 0xFFFF                      ; NEVER replay W1C PCI Status
     or eax, 6
     mov r8d, eax
     mov edx, r14d
+    ; Whole-scan provenance: attempted enable is an effect even if readback
+    ; fails or a later candidate rejects before enable. Never clear here.
+    mov dword [rel hdart_scan_effects],1
     call pci_cfg_write32
     mov edx, r14d
     call pci_cfg_read32
+    cmp eax, -1
+    je .command_unknown                 ; unknown is not an enabled controller
     and eax, 6
     cmp eax, 6
     jne .out
@@ -1069,7 +1277,16 @@ hdar_pci_cb:
     call pci_cfg_read32
     mov [rel hdar_pci_id], eax
     mov dword [rel hdar_discovery_error], 0
+    jmp .out
+.command_unknown:
+    ; Whole-attempt availability is sticky across later callbacks. Keep the
+    ; separate actual write-attempt operand: an initial unknown read wrote
+    ; nothing, while an unknown readback followed an attempted enable.
+    mov dword [rel hdart_scan_observed],2
 .out:
+    add rsp,8
+    pop rbp
+    pop r15
     pop r14
     pop r13
     pop r12
@@ -1172,3 +1389,5 @@ hdar_bdf: resd 1                    ; packed BDF of the selected controller
 hdar_pci_id: resd 1                 ; exact controller device:vendor dword
 %endmacro
 WDATA_BSS_DEFER WDATA_hdar_dom
+
+%include "dev/snd/hda_runtime_terminal.inc"

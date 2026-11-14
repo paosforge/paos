@@ -597,7 +597,10 @@ ssh_namelist_has:
 
 ; RDI=cursor, RSI=end -> RAX=data, EDX=len, R8=next or -1.
 ssh_string_read:
-    lea  rax, [rdi + 4]
+    ; Reject a wrapped header before dereferencing the caller cursor.
+    mov  rax, rdi
+    add  rax, 4
+    jc   .bad
     cmp  rax, rsi
     ja   .bad
     mov  edx, [rdi]
@@ -2290,6 +2293,12 @@ ssh_process_one:
     jne  .bad
     cmp  dword [rax + 1], 0x20000000
     jne  .bad
+    push rax
+    mov  rdi, [rbx + SSH_C_TCB]
+    mov  esi, 3                         ; complete ECDH_INIT validated, pre-crypto
+    xor  edx, edx
+    call tcp_ssh_trace_event
+    pop  rax
     lea  rdi, [rbx + SSH_C_CLIENT_Q]
     lea  rsi, [rax + 5]
     mov  edx, 32
@@ -2300,6 +2309,12 @@ ssh_process_one:
     call ssh_make_ecdh_reply
     test eax, eax
     js   .bad
+    push rax
+    mov  rdi, [rbx + SSH_C_TCB]
+    mov  esi, 4                         ; X25519/signature/derivation complete
+    xor  edx, edx
+    call tcp_ssh_trace_event
+    pop  rax
     mov  edx, eax
     mov  rdi, rbx
     lea  rsi, [rel ssh_reply_payload]
@@ -2575,6 +2590,11 @@ ssh_accept_cb:
     jz   .refuse
     mov  rdi, r12
     call ssh_record_accept
+    mov  rdi, rbx
+    mov  esi, 1                         ; admitted native SSH connection
+    movzx edx, word [rbx + TCB_REMOTE_PORT]
+    mov  rcx, [r12 + SSH_C_REC_SERIAL]
+    call tcp_ssh_trace_event
     lea  rcx, [rel ssh_receive_cb]
     mov  [rbx + TCB_RECV_CB], rcx
     call time_monotonic_now_us

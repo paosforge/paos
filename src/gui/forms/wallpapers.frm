@@ -11,3 +11,4 @@ widget type=button id=pick6 x=20 y=296 w=360 h=30 text=Midnight_Skyline role=but
 widget type=button id=pick7 x=20 y=332 w=360 h=30 text=Lake_at_dawn role=button
 widget type=button id=pick8 x=20 y=368 w=360 h=30 text=Misty_ridges role=button
 widget type=button id=pick9 x=20 y=404 w=360 h=30 text=Painted_light role=button
+widget type=button id=pick10 x=20 y=440 w=360 h=30 text=Color_quadrants_(BMP) role=button

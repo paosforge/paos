@@ -1,8 +1,8 @@
 ;; MODULE sec/principal
 %include "core/abi/build_profile.inc"
 ;; LAYER 5
-;; EXPORTS principal_try_local_begin, principal_first_owner_available, principal_first_owner_stage, principal_selftest, principal_authorization_selftest, principal_declare, principal_switch, principal_current, principal_execution_snapshot, principal_restore_execution, principal_restore_active, principal_capabilities, principal_derive, principal_credential, principal_system_auth_credential, principal_credentials_init, principal_enter_system, principal_leave_system, principal_clear_bound, principal_boot_fixture_begin, principal_boot_fixture_end, principal_boot_fixture_close, authenticate_bind, cmd_verb_prinwrite, cmd_verb_prinread, cmd_verb_prinswitch, cmd_verb_prinkdf, principal_local_password, principal_push_handle, principal_wipe_owner_boot_key, principal_system_status_append
-;; IMPORTS sec/wifi_profile, boot/boot_v2_handoff, core/capability, core/lock, core/lib/ed25519, svc/ssh_auth, core/lib/auth_derive, core/lib/pbkdf2_sha256, core/lib/hkdf_sha256, core/lib/aes256_gcm, core/csprng, core/time, core/lib/fmt, core/lib/mem, data/kvstore, fs/safe_write, sec/session, svc/command, svc/command_auth, svc/command_aihook, svc/command_udp, svc/push_auth, boot/serial, fs/storage_access, boot/nvram_access, config/keep_config, core/reset_wipe, sec/system_secret, sec/replay_floor, sec/owner_store, sec/wifi_store
+;; EXPORTS principal_try_local_begin, principal_first_owner_available, principal_first_owner_stage, principal_selftest, principal_authorization_selftest, principal_declare, principal_switch, principal_current, principal_execution_snapshot, principal_restore_execution, principal_restore_active, principal_capabilities, principal_derive, principal_credential, principal_system_auth_credential, principal_credentials_init, principal_enter_system, principal_leave_system, principal_clear_bound, principal_boot_fixture_begin, principal_boot_fixture_end, principal_boot_fixture_close, authenticate_bind, cmd_verb_prinwrite, cmd_verb_prinread, cmd_verb_prinswitch, cmd_verb_prinkdf, principal_local_password, principal_local_password_recheck, principal_push_handle, principal_wipe_owner_boot_key, principal_system_status_append
+;; IMPORTS core/smp, sec/wifi_profile, boot/boot_v2_handoff, core/capability, core/lock, core/lib/ed25519, svc/ssh_auth, core/lib/auth_derive, core/lib/pbkdf2_sha256, core/lib/hkdf_sha256, core/lib/aes256_gcm, core/csprng, core/time, core/lib/fmt, core/lib/mem, data/kvstore, fs/safe_write, sec/session, svc/command, svc/command_auth, svc/command_aihook, svc/command_udp, svc/push_auth, boot/serial, fs/storage_access, boot/nvram_access, config/keep_config, core/reset_wipe, sec/system_secret, sec/replay_floor, sec/owner_store, sec/wifi_store
 ;; CAPS
 ;; OWNER saga:sec
 ;; LOCK: prin_state_lock PROTECTS principal_cap_table, authenticate_bind_table
@@ -32,8 +32,8 @@
 ; LIVE UDP surface (staged into prin_out_buf, framed by command_udp.asm — the
 ; SAME per-command staging pattern thermal/reinit/boot_ab/command_gui use):
 ;   PRINWRITE <pid> <token>  -> store a row tagged with pid carrying token; the
-;       DETERMINISTIC BARRIER rejects any pid != OWNER (cross-principal write
-;       denied — the barrier is code, never the AI, SECURITY §8). Reply
+;       DETERMINISTIC BARRIER rejects a target unequal to the actual authenticated
+;       OWNER/SYSTEM request principal (cross-principal write denied — the barrier is code, never the AI, SECURITY §8). Reply
 ;       "PRINWRITE ACK pid=N token=..." or "ERR cross_principal_write_denied".
 ;   PRINREAD  <pid>          -> "pid=N token=..." (the exact stored token +
 ;       the pid it was written under; per-principal read-back). A foreign pid
@@ -467,6 +467,8 @@ principal_hkdf32:
 ; -> RAX=bound pid (0 on refusal), RDI=the same output-only pid,
 ;    RDX=session key HANDLE or 0. The ctx asserted-pid field is never read.
 authenticate_bind:
+    xor edx,edx                       ; ordinary bind; never verifier-only
+.recheck_entry:
     push rbx
     push r12
     push r13
@@ -474,6 +476,7 @@ authenticate_bind:
     sub  rsp, PRIN_CREDENTIAL_LEN       ; PUSH candidate; wiped before return
     mov  r12, rdi
     mov  r13, rsi
+    mov  r14, rdx                     ; private recheck flag, not AUTH_CTX data
     test rsi, rsi
     jz   .miss_unlocked
     mov  r10, r12
@@ -613,12 +616,12 @@ authenticate_bind:
     mov  byte [rel prin_pw_fail_step], 12 ; durable password replay floor
     mov  rax, [r13 + AUTH_CTX_SEQUENCE]
     cmp  rax, [rel prin_password_last_sequence]
-    jbe  .miss_credential
+    jbe  .password_replay_refused
     ; SEC-replay-record-mac §9.3: like a command, nothing above this boot's
     ; committed floor window, so the next boot's B covers every sequence used.
     mov  byte [rel prin_pw_fail_step], 13 ; committed command seal
     cmp  rax, [rel command_auth_seal]
-    ja   .miss_credential
+    ja   .password_replay_refused
     mov  [rel prin_password_last_sequence], rax
     mov  rax, [rel prin_password_now]
     mov  byte [rel prin_pw_fail_step], 6
@@ -666,6 +669,11 @@ authenticate_bind:
     call principal_record_persist
     test eax, eax
     jnz  .password_fail
+    test r14d,r14d
+    jz .password_login
+    call principal_wipe_password_scratch
+    jmp .authority_only              ; no bind, key derivation, DATA open or push
+.password_login:
     ; Publish the transient KEK input only after the durable anti-replay state
     ; has committed. A failed record write can therefore never mint a session.
     lea  rdi, [rel prin_password_master]
@@ -715,6 +723,9 @@ authenticate_bind:
     call memset
     jmp .miss_credential
 %endif
+.password_replay_refused:
+    call principal_wipe_password_scratch
+    jmp .miss_credential
 .password_fail:
     ; serial-only diagnostic: which check refused (the wire reply stays wrong_password)
     lea  rdi, [rel str_pr_pw_fail_step]
@@ -826,6 +837,26 @@ authenticate_bind:
     pop  r12
     pop  rbx
     ret
+
+; Private native ingress: no new wire method or bind-table row. The caller
+; must already own the local session. It verifies PASSWORD with the exact
+; durable TTL/replay/hammer machinery, then exits before key/session mutation.
+principal_password_recheck_bind:
+    push rdi
+    push rsi
+    call principal_password_recheck_allowed
+    pop rsi
+    pop rdi
+    test eax,eax
+    jz .bad
+    mov edi,AUTH_BIND_PASSWORD
+    mov edx,1
+    jmp authenticate_bind.recheck_entry
+.bad:
+    xor eax,eax
+    xor edx,edx
+    ret
+
 
 principal_wipe_password_scratch:
     lea  rdi, [rel prin_password_master]
@@ -2946,22 +2977,34 @@ cmd_verb_authenroll:
 ; wiping caller input and stack context; the GUI hands outputs to sec/session.
 ; RDI=transient input, RSI=length -> RAX=pid or 0, RDX=handle or 0.
 principal_local_password:
+    xor edx,edx
+.common:
     push rbx
     push r12
     push r13
     push r14
+    push r15
+    mov r14,rdx
     mov  r12, rdi
     mov  r13, rsi
-    sub  rsp, AUTH_CTX_SIZE
+    sub  rsp, AUTH_CTX_SIZE + 8
     mov  rdi, rsp
     xor  esi, esi
     mov  edx, AUTH_CTX_SIZE
     call memset
     mov  [rsp + AUTH_CTX_CREDENTIAL], r12
     mov  [rsp + AUTH_CTX_CRED_LEN], r13
+    test r14d,r14d
+    jz .issue
+    call principal_password_recheck_allowed
+    test eax,eax
+    jz .refused_before_issue
+    mov r15,rdx                      ; original local session epoch
+.issue:
     call time_wall_local_issue_s          ; a native window at now (ended after the bind)
     mov  [rsp + AUTH_CTX_ISSUED], rax
     add  rax, PRIN_AUTH_MAX_TTL
+    jc .overflow
     mov  [rsp + AUTH_CTX_EXPIRES], rax
     ; The single GUI/UDP consumer serializes submissions. Start after both
     ; durable floors so local typing and signed wire attempts can alternate.
@@ -2977,6 +3020,8 @@ principal_local_password:
     ; A delivered login code can also be typed into the local secret field as
     ; push:<code32>. Reset approvals are never accepted as desktop logins.
 %if !PAOS_PUBLIC_BUILD
+    test r14d,r14d
+    jnz .method_ready
     cmp r13, 37
     jne .method_ready
     cmp byte [rel pu_state], PU_PENDING
@@ -2996,7 +3041,21 @@ principal_local_password:
 %endif
 .method_ready:
     mov  rsi, rsp
+    test r14d,r14d
+    jz .login_bind
+    call principal_password_recheck_bind
+    mov rbx,rax
+    call principal_password_recheck_allowed
+    test eax,eax
+    jz .overflow
+    cmp rdx,r15
+    jne .overflow
+    mov rax,rbx
+    xor edx,edx
+    jmp .bound_result
+.login_bind:
     call authenticate_bind
+.bound_result:
     mov  rbx, rax
     mov  r14, rdx
     jmp  .wipe
@@ -3005,7 +3064,10 @@ principal_local_password:
     xor  r14d, r14d
 .wipe:
     call time_wall_local_issue_end
+.wipe_input:
     mov  rdi, r12
+    test rdi,rdi
+    jz .wipe_ctx
     xor  esi, esi
     mov  rdx, r13
     cmp  rdx, PRIN_PASSWORD_MAX
@@ -3013,17 +3075,59 @@ principal_local_password:
     mov  edx, PRIN_PASSWORD_MAX
 .bounded:
     call memset
+.wipe_ctx:
     mov  rdi, rsp
     xor  esi, esi
     mov  edx, AUTH_CTX_SIZE
     call memset
-    add  rsp, AUTH_CTX_SIZE
+    add  rsp, AUTH_CTX_SIZE + 8
     mov  rax, rbx
     mov  rdx, r14
+    pop  r15
     pop  r14
     pop  r13
     pop  r12
     pop  rbx
+    ret
+
+.refused_before_issue:
+    xor ebx,ebx
+    xor r14d,r14d
+    jmp .wipe_input
+
+; RDI=transient input, RSI=len -> RAX=OWNER on a fresh password, else zero;
+; RDX always zero. Wipes input on every outcome. Never signs in or rebinds.
+principal_local_password_recheck:
+    mov edx,1
+
+    jmp principal_local_password.common
+
+; Output EAX=1 and RDX=epoch only for the actual local owner on idle BSP.
+; No credential, GUI or request-supplied principal participates in this guard.
+principal_password_recheck_allowed:
+    call smp_current_logical
+    test eax,eax
+    jnz .bad
+    cmp byte [rel cmd_in_dispatch],0
+    jne .bad
+    cmp dword [rel cmd_dispatch_depth],0
+    jne .bad
+    cmp byte [rel command_auth_remote_active],0
+    jne .bad
+    cmp byte [rel session_injected_input],0
+    jne .bad
+    call session_shell_local_authority
+    cmp rax,PRIN_OWNER
+    jne .bad
+    test rdx,rdx
+    jz .bad
+    cmp rdx,-1
+    je .bad
+    mov eax,1
+    ret
+.bad:
+    xor eax,eax
+    xor edx,edx
     ret
 
 ; AUTHLOGIN <password> — the signed AUTH1 permission ticket supplies the
@@ -3300,6 +3404,16 @@ cmd_verb_authsys:
     ; projection; do not let command_udp select the nested staging buffer.
     mov  byte [rel command_auth_out_ready], 0
     mov  byte [rel command_auth_refusal_ready], 0
+    ; Optional resource operation uses the existing internally authenticated
+    ; AIhook, after restoring the exact outer execution frame. No key exported.
+    mov  rdi, r12
+    mov  rsi, r13
+    call principal_restore_execution
+    mov  rdi, [rbx + REQ_ARG]
+    call prin_parse_u64
+    call prin_skip_sp
+    cmp  byte [rdi], 0
+    jne  .resource
     call prin_out_reset
     lea  rdi, [rel str_pr_system_bound]
     call prin_out_str
@@ -3311,6 +3425,19 @@ cmd_verb_authsys:
     call prin_out_dec
     lea  rdi, [rel str_pr_system_refused]
     call prin_out_str
+    call principal_publish_wire_reply
+    mov  qword [rel prin_wire_owner_credential], 0
+    mov  qword [rel prin_wire_owner_credential_len], 0
+    mov  rdi, r12
+    mov  rsi, r13
+    call principal_restore_execution
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+
+.resource:
+    call principal_probe_system
     call principal_publish_wire_reply
     mov  qword [rel prin_wire_owner_credential], 0
     mov  qword [rel prin_wire_owner_credential_len], 0
@@ -3364,7 +3491,7 @@ cmd_verb_authkvprobe:
 
 ; ---------------------------------------------------------------------------
 ; VERB: PRINWRITE <pid> <token> — store a row tagged with pid carrying token.
-;   NEGATIVE BARRIER (deterministic code): pid != OWNER => DENIED, no row written.
+;   NEGATIVE BARRIER: target must equal authenticated OWNER or SYSTEM request PID.
 ;   Reply "PRINWRITE ACK pid=N token=..." or "ERR cross_principal_write_denied".
 ; ---------------------------------------------------------------------------
 cmd_verb_prinwrite:
@@ -3377,24 +3504,28 @@ cmd_verb_prinwrite:
     mov  r14, rax                           ; r14 = requested pid
     call prin_skip_sp                       ; RDI -> token start
     mov  r15, rdi                           ; r15 = token ptr
-    ; --- barrier: only the OWNER may write (v1 caller principal == OWNER) ---
-    cmp  r14, PRIN_OWNER
-    jne  .denied
+    ; The request principal is stamped by the shared authenticated entry.
+    ; Same verb, same barrier for owner wire and internally bound SYSTEM.
+    mov  rdi, [rsp + 8]
+    call principal_probe_row
+    test rax, rax
+    jz   .denied
+    mov  [rax], r14
+    mov  r14, rax
     ; store the row: pid + token (copy until space/CR/LF/NUL, bounded)
-    mov  [rel prin_row_pid], r14
-    lea  rdi, [rel prin_row_token]
+    lea  rdi, [r14 + 16]
     mov  rsi, r15
     call prin_copy_token                    ; copies bounded token into the row
-    mov  byte [rel prin_row_present], 1
+    mov  byte [r14 + 8], 1
     ; reply "PRINWRITE ACK pid=N token=..."
     call prin_out_reset
     lea  rdi, [rel str_pr_wr_ack]
     call prin_out_str
-    mov  rdi, [rel prin_row_pid]
+    mov  rdi, [r14]
     call prin_out_dec
     lea  rdi, [rel str_pr_token]
     call prin_out_str
-    lea  rdi, [rel prin_row_token]
+    lea  rdi, [r14 + 16]
     call prin_out_str
     mov  byte [rel prin_out_ready], 1
     jmp  .reply
@@ -3404,6 +3535,11 @@ cmd_verb_prinwrite:
     call prin_out_str
     mov  byte [rel prin_out_ready], 1
 .reply:
+    pop  rsi
+    pop  rdi
+    push rdi
+    push rsi
+    call principal_probe_request_append
     pop  rsi
     pop  rdi
     mov  rax, [rdi + REQ_ARG]
@@ -3429,15 +3565,19 @@ cmd_verb_prinread:
     call prin_out_str
     mov  rdi, r14
     call prin_out_dec
-    ; row present AND pid matches the stored owner row?
-    cmp  byte [rel prin_row_present], 1
+    ; Read through the same caller/target barrier, never expose a foreign row.
+    mov  rdi, [rsp + 8]
+    call principal_probe_row
+    test rax, rax
+    jz   .norow
+    cmp  [rax], r14
     jne  .norow
-    mov  rax, [rel prin_row_pid]
-    cmp  rax, r14
+    mov  r14, rax
+    cmp  byte [r14 + 8], 1
     jne  .norow
     lea  rdi, [rel str_pr_token]
     call prin_out_str
-    lea  rdi, [rel prin_row_token]
+    lea  rdi, [r14 + 16]
     call prin_out_str
     jmp  .reply
 .norow:
@@ -3445,6 +3585,11 @@ cmd_verb_prinread:
     call prin_out_str
 .reply:
     mov  byte [rel prin_out_ready], 1
+    pop  rsi
+    pop  rdi
+    push rdi
+    push rsi
+    call principal_probe_request_append
     pop  rsi
     pop  rdi
     mov  rax, [rdi + REQ_ARG]
@@ -3862,11 +4007,14 @@ prin_push_handle_domain:  db "paos-push-handle-v1"
 .len equ $ - prin_push_handle_domain
 %endif
 
-; --- the stored data ROW (header carries the owning-principal id field) ---
+; --- stored diagnostic rows: qword PID, byte present, aligned token at +16 ---
+align 8
 prin_row_pid:      dq 0                       ; owning-principal id (the tagged field)
 prin_row_present:  db 0
 align 8
 prin_row_token:    times PRIN_TOKEN_MAX db 0
+align 8
+prin_system_row:   times (16 + PRIN_TOKEN_MAX) db 0
 ; --- paging-domain switch scratch ---
 prin_cr3_saved:    dq 0
 prin_cr3_restored: dq 0
@@ -3977,3 +4125,6 @@ prin_pw_authority:    resb 1            ; PRIN_PWA_*
 prin_owner_pw_state:  resb 1            ; 0 not taken, 1 taken with OWR_LOCAL, 2 taken, none
 %endmacro
 WDATA_BSS_DEFER WDATA_BSS_sec_principal_owner
+
+%include "sec/principal_probe.asm"
+%include "sec/principal_system_probe.asm"

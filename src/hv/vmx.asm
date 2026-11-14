@@ -5,8 +5,8 @@
 %include "hv/boot_guest_lab_profile.inc"
 
 ;; LAYER 5
-;; EXPORTS hv_terminal_status, hv_terminal_attach, hv_terminal_read, hv_terminal_write, hv_terminal_detach, hv_linux_exit_hex, hv_linux_exits, hv_linux_host_slices, hv_linux_mb_token, hv_linux_mb_gen, hv_vcon_pmr_bind, hv_vcon_pmr_stop, hv_vcon_pmr_unbind, hv_vcon_pmr_retry, hv_media_guest_select, hv_media_guest_launch, hv_media_window_release, hv_linux_boot_start, hv_linux_boot_poll, hv_linux_load_yield, hv_vmx_detect, hv_guest_linux_start, hv_linux_region, hv_linux_region_capacity, hv_linux_region_resident, hv_linux_gpr, hv_linux_exit_dispatch, hv_linux_host_slice, hv_linux_save_host_msrs, hv_linux_restore_host, hv_linux_restore_host_quiet, hv_linux_host_xsave, hv_linux_xcr0_to_host, hv_linux_xcr0_to_guest, hv_linux_vector_scrub, hv_linux_cr_gpr_map, hv_linux_arm_deadline, hv_linux_wrmsr_rax, hv_launch_mode, hv_launches, hv_launch_rflags, hv_launch_cr0, hv_launch_cr4, hv_launch_hcr0, hv_launch_hcr4, hv_first_ud_bitmap_value, hv_first_ud_latch_arm, hv_vmx_enable, hv_vmx_setup, hv_vmx_map, hv_vmx_launch, hv_vmx_exit_dispatch, hv_vmx_selftest, hv_vmx_can_inject_extint, hv_vmx_inject_extint, hv_vmx_intr_window, hv_vmx_slat_flush, hv_vmx_slat_bits, hv_vmx_guest_cr3, hv_vmx_guest_read, hv_w, hv_register_verbs, hv_status_line, hv_out_ready, hv_out_buf, hv_out_reset, hv_out_str, hv_out_dec, hv_tok_is, hv_skip_spaces, hv_vcon_pmr_bound, hv_vcon_pmr_pending, hv_vcon_pmr_fault, hv_vmx_present, hv_vmxon_ok, hv_ept_built, hv_linux_kboot, hv_guest_launched, hv_guest_booted, hv_guest_launched_ms, hv_vcon_ready, hv_linux_running, hv_linux_vmx_live, hv_linux_eptp, hv_linux_run_req, hv_linux_stop_req, hv_linux_task_started, hv_linux_start_active, hv_linux_start_gen, hv_linux_start_consumed, hv_linux_run_start_tsc, hv_linux_panicked, hv_guest_linux_request_start, hv_guest_linux_task, hv_linux_gpa2hva, hv_linux_gva2hva, hv_vcon_rx_line, hv_vcon_q_ready, hv_vcon_capture_len, hv_vcon_capture_overflow, hv_vcon_capture, hv_vcon_proof_roll_begin, hv_vcon_proof_roll_finish, hv_vcon_proof_roll_abort, hv_vcon_proof_roll_state_reset, hv_vcon_proof_roll_fixture_selftest, hv_vcon_proof_roll_fixture_ok, hv_linux_load_err, hv_launch_refused, hv_launch_vmcsfail, hv_launch_vmxonfail, hv_instr_err, hv_vmwrite_fails, hv_exit_reason, hv_guestcpu_run_tsc_accum, hv_guestcpu_last_progress_tsc, hv_guestcpu_interrupts, hv_guestcpu_halt_wakes, hv_guestcpu_faults, hv_linux_ept_classify, hv_linux_ept_note_decode, hv_ept_exit_gpa, hv_ept_exit_qual, hv_ept_exit_rip, hv_ept_exit_gla, hv_ept_exit_insn, hv_ept_exit_gen, hv_ept_exit_ilen, hv_ept_exit_insn_len, hv_ept_exit_decode_len, hv_ept_exit_access, hv_ept_exit_decode, hv_ept_exit_class, hv_ept_exit_action, hv_ept_exit_bar_match, hv_first_ud_fixture_selftest, hv_first_ud_fixture_ok, hv_first_ud_fixture_stage, hv_first_ud_valid, hv_first_ud_info, hv_first_ud_error, hv_first_ud_idt_info, hv_first_ud_idt_error, hv_first_ud_rip, hv_first_ud_rsp, hv_first_ud_rflags, hv_first_ud_cr2, hv_first_ud_cr3, hv_first_ud_cr4, hv_first_ud_cs, hv_first_ud_gen, hv_first_ud_ordinal, hv_first_ud_no_reinject, hv_first_ud_exit_reason, hv_first_ud_walker_valid, hv_first_ud_page_size, hv_first_ud_gpa, hv_first_ud_offset, hv_first_ud_pml4e, hv_first_ud_pdpte, hv_first_ud_pde, hv_first_ud_pte, hv_first_ud_insn_len, hv_first_ud_console_len, hv_first_ud_console_overflow, hv_first_ud_bitmap_requested, hv_first_ud_bitmap_readback, hv_first_ud_first_r0_info, hv_first_ud_first_r0_gen, hv_first_ud_insn, hv_first_ud_gpr, hv_first_ud_console
-;; IMPORTS hv/boundary_execution, hv/guest_transport, hv/vcpu_svm_dispatch, svc/command_auth, hv/vcpu_status, hv/vcpu_start_admit, hv/vcpu_start_close, hv/vcpu_write_guard, hv/vcpu_bsp_context, hv/vcpu_bsp_state, hv/vcpu_bsp, hv/vcpu_ap, hv/vcpu_ap_run, hv/boundary, hv/warm_lifecycle, media/pmr1_host_private, boot/boot_v2_handoff, boot/boot_esp_guid, boot/header, hv/guest_power, boot/serial, boot/gdt, boot/header, core/dma, core/memmap, core/time, core/sched, svc/command, svc/command_udp, fs/vfs, svc/command_guestfile, hv/vtd, hv/guest_surface, hv/cdp_bridge, hv/domain_channel, hv/hv_ops, hv/guestdisplay, hv/svm, hv/vm_profile, hv/guestentropy, hv/guestrestore, hv/guestsnap, hv/pad_channel, hv/pci_assign, core/memory_budget, hv/input_domain_command, hv/driver_domain, hv/wifi_channel, hv/guestwifi, hv/nic_observation
+;; EXPORTS hv_linux_kernel_size, hv_linux_initrd_size, hv_linux_initrd_gpa, hv_guest_panic_request, hv_panic_armed, hv_panic_injected, hv_panic_text, hv_terminal_status, hv_terminal_attach, hv_terminal_read, hv_terminal_write, hv_terminal_resize, hv_terminal_detach, hv_linux_exit_hex, hv_linux_exits, hv_linux_host_slices, hv_linux_mb_token, hv_linux_mb_gen, hv_vcon_pmr_bind, hv_vcon_pmr_stop, hv_vcon_pmr_unbind, hv_vcon_pmr_retry, hv_media_guest_select, hv_media_guest_launch, hv_media_window_release, hv_linux_boot_start, hv_linux_boot_poll, hv_linux_load_yield, hv_vmx_detect, hv_guest_linux_start, hv_linux_region, hv_linux_region_capacity, hv_linux_region_resident, hv_linux_gpr, hv_linux_exit_dispatch, hv_linux_host_slice, hv_linux_save_host_msrs, hv_linux_restore_host, hv_linux_restore_host_quiet, hv_linux_host_xsave, hv_linux_xcr0_to_host, hv_linux_xcr0_to_guest, hv_linux_vector_scrub, hv_linux_cr_gpr_map, hv_linux_arm_deadline, hv_linux_wrmsr_rax, hv_launch_mode, hv_launches, hv_launch_rflags, hv_launch_cr0, hv_launch_cr4, hv_launch_hcr0, hv_launch_hcr4, hv_first_ud_bitmap_value, hv_first_ud_latch_arm, hv_vmx_enable, hv_vmx_setup, hv_vmx_map, hv_vmx_launch, hv_vmx_exit_dispatch, hv_vmx_selftest, hv_vmx_can_inject_extint, hv_vmx_inject_extint, hv_vmx_intr_window, hv_vmx_slat_flush, hv_vmx_slat_bits, hv_vmx_guest_cr3, hv_vmx_guest_read, hv_w, hv_register_verbs, hv_status_line, hv_out_ready, hv_out_buf, hv_out_reset, hv_out_str, hv_out_dec, hv_tok_is, hv_skip_spaces, hv_vcon_pmr_bound, hv_vcon_pmr_pending, hv_vcon_pmr_fault, hv_vmx_present, hv_vmxon_ok, hv_ept_built, hv_linux_kboot, hv_guest_launched, hv_guest_booted, hv_guest_launched_ms, hv_vcon_ready, hv_linux_running, hv_linux_vmx_live, hv_linux_eptp, hv_linux_run_req, hv_linux_stop_req, hv_linux_task_started, hv_linux_start_active, hv_linux_start_gen, hv_linux_start_consumed, hv_linux_run_start_tsc, hv_linux_panicked, hv_guest_linux_request_start, hv_guest_linux_task, hv_linux_gpa2hva, hv_linux_gva2hva, hv_vcon_rx_line, hv_vcon_q_ready, hv_vcon_capture_len, hv_vcon_capture_overflow, hv_vcon_capture, hv_vcon_proof_roll_begin, hv_vcon_proof_roll_finish, hv_vcon_proof_roll_abort, hv_vcon_proof_roll_state_reset, hv_vcon_proof_roll_fixture_selftest, hv_vcon_proof_roll_fixture_ok, hv_linux_load_err, hv_launch_refused, hv_launch_vmcsfail, hv_launch_vmxonfail, hv_instr_err, hv_vmwrite_fails, hv_exit_reason, hv_guestcpu_run_tsc_accum, hv_guestcpu_last_progress_tsc, hv_guestcpu_interrupts, hv_guestcpu_halt_wakes, hv_guestcpu_faults, hv_linux_ept_classify, hv_linux_ept_note_decode, hv_ept_exit_gpa, hv_ept_exit_qual, hv_ept_exit_rip, hv_ept_exit_gla, hv_ept_exit_insn, hv_ept_exit_gen, hv_ept_exit_ilen, hv_ept_exit_insn_len, hv_ept_exit_decode_len, hv_ept_exit_access, hv_ept_exit_decode, hv_ept_exit_class, hv_ept_exit_action, hv_ept_exit_bar_match, hv_first_ud_fixture_selftest, hv_first_ud_fixture_ok, hv_first_ud_fixture_stage, hv_first_ud_valid, hv_first_ud_info, hv_first_ud_error, hv_first_ud_idt_info, hv_first_ud_idt_error, hv_first_ud_rip, hv_first_ud_rsp, hv_first_ud_rflags, hv_first_ud_cr2, hv_first_ud_cr3, hv_first_ud_cr4, hv_first_ud_cs, hv_first_ud_gen, hv_first_ud_ordinal, hv_first_ud_no_reinject, hv_first_ud_exit_reason, hv_first_ud_walker_valid, hv_first_ud_page_size, hv_first_ud_gpa, hv_first_ud_offset, hv_first_ud_pml4e, hv_first_ud_pdpte, hv_first_ud_pde, hv_first_ud_pte, hv_first_ud_insn_len, hv_first_ud_console_len, hv_first_ud_console_overflow, hv_first_ud_bitmap_requested, hv_first_ud_bitmap_readback, hv_first_ud_first_r0_info, hv_first_ud_first_r0_gen, hv_first_ud_insn, hv_first_ud_gpr, hv_first_ud_console
+;; IMPORTS hv/driver_domain_restart, hv/interpreter_execution, hv/context_execution, hv/boundary_execution, hv/guest_transport, hv/vcpu_svm_dispatch, svc/command_auth, hv/vcpu_status, hv/vcpu_observe, hv/vcpu_start_admit, hv/vcpu_start_close, hv/vcpu_write_guard, hv/vcpu_bsp_context, hv/vcpu_bsp_state, hv/vcpu_bsp, hv/vcpu_ap, hv/vcpu_ap_run, hv/boundary, hv/warm_lifecycle, media/pmr1_host_private, boot/boot_v2_handoff, boot/boot_esp_guid, boot/header, hv/guest_power, boot/serial, boot/gdt, core/dma, core/memmap, core/time, core/sched, svc/command, svc/command_udp, fs/vfs, svc/command_guestfile, hv/vtd, hv/guest_surface, hv/cdp_bridge, hv/domain_channel, hv/hv_ops, hv/guestdisplay, hv/svm, hv/vm_profile, hv/guestentropy, hv/guestrestore, hv/guestsnap, hv/pad_channel, hv/pci_assign, core/memory_budget, hv/input_domain_command, hv/driver_domain, hv/wifi_channel, hv/guestwifi, hv/nic_observation, hv/capability_observation
 ;; CAPS
 ;; OWNER saga:hv
 %include "hv/vcpu_bsp.inc"
@@ -176,6 +176,7 @@ HV_LINUX_IO_CHUNK    equ 0x10000
 %assign HV_LINUX_RUN_MS 180000                ; ESSENCE E8 dilation-aware ceiling
 HV_LINUX_BOOT_GRACE_MS equ 2000               ; Classic: flat-out timer calibration
 HV_LINUX_LOAD_QUANTUM_MS equ 100             ; a loading START gives the host a turn at least this often
+HV_VMX_GUEST_FLOOR_SHIFT equ 2               ; SEC109922 G1: Q_min = 1 ms >> 2, 250 us of guest time per entry
 HV_LINUX_CLEAR_SLICE equ 0x200000            ; guest-RAM bytes zeroed between START load turns
 HV_VCON_GPA          equ 0xD0000000           ; virtio-mmio console window
 HV_VCON_PAGE         equ 0x5000               ; guest-readable register page
@@ -197,13 +198,19 @@ HV_GUESTRST_GPA      equ 0xD0005000           ; opt-in paos.restore control port
 HV_GUESTFSC_PAGE     equ 0x88000              ; explicit filesystem hvc1 backing
 HV_GUESTFSB_PAGE     equ 0x89000              ; explicit leased-block backing
 HV_GUESTWIFI_PAGE equ 0x8A000
+HV_GUESTPWR_GPA      equ 0xD0009000           ; C10b-1a paos.power port, driver-domain closure only, IRQ5 shared
+HV_GUESTPWR_PAGE     equ 0x8B000              ; host-only backing after Wi-Fi, below the NIC pool
 HV_GUESTRST_PAGE     equ 0x22000              ; host-only backing after entropy; wire GPA above
 %if (HV_GUESTRST_PAGE & 0xFFF) || HV_GUESTRST_PAGE != HV_GUESTRNG_PAGE + 0x1000 || HV_GUESTRST_PAGE + 0x1000 > HV_LINUX_CTRL_BYTES
     %error "restore-port register page must follow entropy, aligned and inside control reserve"
 %endif
 HV_SLAT_RAM_PD1      equ 0x24000              ; RCQ-50: SLAT PD for PDPT[1], guest RAM 1..2 GiB
 HV_SLAT_RAM_PD2      equ 0x25000              ; RCQ-50: SLAT PD for PDPT[2], guest RAM 2..3 GiB
-HV_SLAT_RAM_HI_MAX   equ 1024                 ; their 2 MiB leaves: low RAM ends below PDPT[3] (0xC0000000)
+HV_SLAT_RAM_HI_MAX   equ 1152                 ; PD1/PD2 + 128 leaves at GPA4GiB (3328 MiB RAM)
+HV_SLAT_RAM_PD4      equ 0xA0000              ; after NIC private pool; GPA4..4.25GiB, compact host backing
+%if HV_SLAT_RAM_PD4 < 0x90000 + 16*4096 || HV_SLAT_RAM_PD4 + 4096 > HV_LINUX_CTRL_BYTES
+    %error "high RAM PD overlaps NIC pool or exceeds control reserve"
+%endif
 %if HV_SLAT_RAM_PD1 < HV_GUESTRST_PAGE + 0x1000 || HV_SLAT_RAM_PD2 != HV_SLAT_RAM_PD1 + 0x1000 || HV_SLAT_RAM_PD2 + 0x1000 > HV_LINUX_CTRL_BYTES
     %error "RAM PDs for PDPT[1..2] must follow the register pages, adjacent, inside control reserve"
 %endif
@@ -253,6 +260,7 @@ HV_EPT_ACTION_RESUME       equ 1
 %include "hv/terminal_console.inc"
 %include "hv/guest_request.asm"
 %include "hv/guest_transport.asm"
+%include "hv/terminal_transport.asm"
 
 hv_vmx_detect:
     push rbx
@@ -567,6 +575,7 @@ hv_register_verbs:
 %ifdef PAOS_NIC_ASSIGNMENT
     call nd_register_verbs
     call nics_register_verbs
+    call pcc_register_verbs
 %endif
 %if !PAOS_PUBLIC_BUILD
     call browser_appliance_register
@@ -648,7 +657,22 @@ cmd_verb_guestvm:
     call hv_tok_is
     test al, al
     jnz  .do_audiostat
+    mov rdi,rbx
+    lea rsi,[rel str_sub_capcase]
+    call hv_tok_is
+    test al,al
+    jnz .do_capcase
     mov  rdi, rbx
+    lea  rsi, [rel str_sub_boundcost]
+    call hv_tok_is
+    test al, al
+    jnz  .do_boundcost
+    mov  rdi, rbx
+    lea  rsi, [rel str_sub_ctxexec]
+    call hv_tok_is
+    test al, al
+    jnz .do_ctxexec
+    mov rdi,rbx
     lea  rsi, [rel str_sub_boundexec]
     call hv_tok_is
     test al, al
@@ -916,7 +940,66 @@ cmd_verb_guestvm:
 .audio_render:
     call hv_render_audiostat
     jmp  .done
+.do_capcase:
+    lea rdi,[rbx+7]
+    call hv_skip_spaces
+    movzx edx,byte [rax]
+    sub edx,'0'
+    cmp edx,1
+    ja .cap_args
+    cmp byte [rax+1],' '
+    jne .cap_args
+    movzx esi,byte [rax+2]
+    sub esi,'0'
+    cmp esi,2
+    ja .cap_args
+    cmp byte [rax+3],0
+    jne .cap_args
+    mov edi,edx
+    call capability_case_render
+    jmp .done
+.cap_args:
+    call hv_out_reset
+    lea rdi,[rel str_hv_cap_args]
+    call hv_out_str
+    jmp .done
+.do_boundcost:
+    mov r11d,1
+    jmp .exec_cpu
+.do_ctxexec:
+    lea rdi,[rbx+7]
+    call hv_skip_spaces
+    movzx edi,byte [rax]
+    sub edi,'0'
+    cmp edi,9
+    ja .ctx_args
+    cmp byte [rax+1],0
+    je .ctx_number
+    cmp edi,1
+    jne .ctx_args
+    movzx edx,byte [rax+1]
+    sub edx,'0'
+    cmp edx,3
+    ja .ctx_args
+    cmp byte [rax+2],0
+    jne .ctx_args
+    lea edi,[rdx+10]
+.ctx_number:
+    cmp edi,6
+    jae .ctx_interpreter
+    call context_execution_render
+    jmp .done
+.ctx_interpreter:
+    call interpreter_execution_render
+    jmp .done
+.ctx_args:
+    call hv_out_reset
+    lea rdi,[rel str_hv_ctx_args]
+    call hv_out_str
+    jmp .done
 .do_boundexec:
+    xor r11d,r11d
+.exec_cpu:
     lea rdi,[rbx+9]
     call hv_skip_spaces
     movzx edi,byte [rax]
@@ -940,7 +1023,12 @@ cmd_verb_guestvm:
     cmp edi,31
     ja .exec_args
 .exec_render:
+    test r11d,r11d
+    jnz .cost_render
     call hv_boundary_exec_render
+    jmp .done
+.cost_render:
+    call hv_boundary_cost_render
     jmp .done
 .exec_args:
     call hv_out_reset
@@ -987,6 +1075,7 @@ cmd_verb_guestvm:
 .do_exitstat:
     call hv_linux_exit_render
     call hv_linux_async_render
+    call hv_linux_startup_render
     jmp  .done
 .do_profiles:
     call vm_profile_render_list
@@ -1169,10 +1258,9 @@ cmd_verb_guestvm:
     jne  .panic_no
     cmp  byte [rel hv_vcon_ready], 1
     jne  .panic_no
-    call hv_vcon_capture_reset             ; fatal evidence must follow this request
-    mov  byte [rel hv_panic_text], 0
-    mov  byte [rel hv_panic_injected], 0
-    mov  byte [rel hv_panic_armed], 1       ; request only; guest evidence earns state
+    call hv_guest_panic_request
+    cmp eax,1
+    jne .panic_no
     lea  rdi, [rel str_hv_panic_armed]
     call hv_out_str
     jmp  .done
@@ -1195,6 +1283,27 @@ cmd_verb_guestvm:
     pop  r13
     pop  r12
     pop  rbx
+    ret
+
+; Shared real guest failure request; no success flag until backend fatal output.
+hv_guest_panic_request:
+    cmp byte [rel hv_linux_running],1
+    jne .bad
+    cmp byte [rel hv_vcon_ready],1
+    jne .bad
+    cmp byte [rel hv_linux_panicked],0
+    jne .bad
+    sub rsp,8
+    call hv_vcon_capture_reset             ; fatal evidence must follow this request
+    mov  dword [rel hv_panic_match], 0
+    mov  byte [rel hv_panic_text], 0
+    mov  byte [rel hv_panic_injected], 0
+    mov  byte [rel hv_panic_armed], 1       ; request only; guest evidence earns state
+    add rsp,8
+    mov eax,1
+    ret
+.bad:
+    xor eax,eax
     ret
 
 ; hv_skip_spaces(RDI=text) -> RAX=first non-space byte (may be the NUL).
@@ -1508,6 +1617,7 @@ hv_guest_linux_start:
     call guestsound_state_zero
     call guestentropy_state_zero            ; revoke before every admitted START
     call guestrestore_state_zero            ; same: no restore port before START binding
+    call guestpower_start                   ; C10b-1a: no power port, request or old clean result
     call padc_state_zero                    ; RCQ-36: no PAD1 binding before START binding
     call guestdisplay_reset                 ; revoke before any START preparation
     call vm_profile_live_reset
@@ -1522,6 +1632,10 @@ hv_guest_linux_start:
     mov  [rel hv_linux_exits], eax
     mov  [rel hv_linux_intr_exits], eax
     mov  [rel hv_linux_host_slices], eax
+    mov  [rel hv_linux_slice_begin_tsc], rax  ; T2-4 D8: same per-START reset (RAX=0)
+    mov  [rel hv_linux_slice_end_tsc], rax
+    mov  [rel hv_linux_slice_yield_tsc], rax
+    mov  [rel hv_linux_slice_max_gap_tsc], rax
     mov  [rel hv_linux_kernel_size], eax
     mov  [rel hv_linux_initrd_size], eax
     mov  [rel hv_tick_inj_ct], eax
@@ -1651,6 +1765,7 @@ hv_guest_linux_start:
     call guestsound_state_zero
     call guestentropy_state_zero            ; no old queue/IRQ/scratch after STOP or failure
     call guestrestore_state_zero            ; no restore port/request after STOP or failure
+    call guestpower_state_zero              ; C10b-1a S3: disarm after nd_backend_stopped recorded clean
     call padc_state_zero                    ; RCQ-36: detach + retire after the actual stop
     call guestdisplay_reset                 ; stop, launch failure and refused START
     cmp  byte [rel hv_linux_release_deferred], 0
@@ -1669,10 +1784,11 @@ hv_guest_linux_start:
     ret
 
 ; hv_linux_slat_ram_hi(RDI=control base, RSI=next RAM leaf, HPA|leaf bits) -> EAX=1/0.
-; RCQ-50: guest RAM past the first GiB continues flat in PDPT[1] and PDPT[2],
-; below the PDPT[3] MMIO hole. Every entry of both PDs is written (leaf or 0) and
+; RCQ-50: the second and third GiB of guest RAM continue flat in PDPT[1] and PDPT[2],
+; below the PDPT[3] MMIO hole. Every entry of all RAM PDs is written (leaf or 0) and
 ; an unused PDPT slot is 0, so no leaf survives from a larger earlier START.
-; A RAM size beyond 3 GiB is refused before any write.
+; Excess RAM uses PDPT[4], compact HPA after low3GiB; PDPT[3] stays MMIO.
+; A RAM size beyond 3328 MiB is refused before any write.
 hv_linux_slat_ram_hi:
     ; S7: table lifetime is frozen until both vCPUs are retired.
     cmp  qword [rel vca_ready], 0
@@ -1693,7 +1809,7 @@ hv_linux_slat_ram_hi:
     call hv_slat_bits
     lea  r8, [rbx + HV_SLAT_RAM_PD1]
     lea  r9, [rbx + 0x3000 + 1*8]
-    mov  r10d, 2
+    mov  r10d, 3
 .pd:
     xor  ecx, ecx
     test r13, r13
@@ -1718,7 +1834,13 @@ hv_linux_slat_ram_hi:
     add  r8, 0x1000
     add  r9, 8
     dec  r10d
-    jnz  .pd
+    jz   .done
+    cmp  r10d, 1
+    jne  .pd
+    lea  r8, [rbx + HV_SLAT_RAM_PD4]
+    lea  r9, [rbx + 0x3000 + 4*8]             ; skip existing device subtree
+    jmp  .pd
+.done:
     mov  eax, 1
 .out:
     pop  r13
@@ -2576,7 +2698,18 @@ hv_linux_prepare:
     mov  qword [r13 + 0x2D8], 0x9FC00
     mov  dword [r13 + 0x2E0], 1
     mov  qword [r13 + 0x2E4], 0x100000
-    mov  rax, [rel hv_linux_ram_bytes]
+    mov  rax, [rel hv_linux_ram_bytes]        ; RAM amount, not final GPA
+    mov  edx, 0xC0000000
+    cmp  rax, rdx
+    jbe  .e820_low
+    mov  byte [r13 + 0x1E8], 3
+    sub  rax, rdx
+    mov  qword [r13 + 0x2F8], 0              ; third range begins at 4GiB
+    mov  dword [r13 + 0x2FC], 1
+    mov  [r13 + 0x300], rax
+    mov  dword [r13 + 0x308], 1
+    mov  rax, rdx
+.e820_low:
     sub  rax, 0x100000
     mov  qword [r13 + 0x2EC], rax
     mov  dword [r13 + 0x2F4], 1
@@ -2669,6 +2802,9 @@ hv_linux_prepare:
     cmp  r12, [rax + VPD_SIZE]
     jne  .pin_bad
     mov  rax, [rel hv_linux_ram_bytes]
+    mov  edx, 0xC0000000                    ; initrd always in contiguous low RAM
+    cmp  rax, rdx
+    cmova rax, rdx
     mov  edx, [rbx + 0x22C]                  ; RCQ-50: initrd_addr_max (protocol >= 2.03)
     inc  rdx                                 ; exclusive end, no 32-bit wrap
     cmp  rax, rdx
@@ -2815,6 +2951,11 @@ hv_linux_prepare:
     call nd_prepare
     test eax,eax
     jz .assign_bad
+    cmp byte [rel guestpower_live],1
+    jne .nd_prepared
+    call guestpower_device_reset             ; C10b-1a: paos.power bound to this attached START
+    test eax,eax
+    jz .assign_bad
 .nd_prepared:
 %endif
     test dword [rel vm_profile_live_devices],VP_DEV_WIFI
@@ -2926,6 +3067,7 @@ hv_linux_prepare:
     call guestsound_state_zero
     call guestentropy_state_zero
     call guestrestore_state_zero
+    call guestpower_state_zero              ; C10b-1a S3: a failed loader disarms
     call guestdisplay_reset                 ; failed loader never exports a frame
     mov  eax, -1
 .out:
@@ -2949,6 +3091,7 @@ hv_linux_map_devices:
     mov  eax, edx
     and  eax, VP_DEV_TIMER | VP_DEV_LAPIC | VP_DEV_WARMCHAN | VP_DEV_PINCHAN ; PIT/PIC-lite and the guest LAPIC are reset on every START
     mov  [rel vm_profile_live_devices], eax
+    mov  byte [rel guestpower_live], 0 ; C10b-1a: set only by .power below
     test edx, VP_DEV_CONSOLE | VP_DEV_NET | VP_DEV_INPUT | VP_DEV_DISPLAY | VP_DEV_ENTROPY | VP_DEV_SOUND | VP_DEV_RESTORE | VP_DEV_FILESYSTEM | VP_DEV_WIFI
     jz   .count
     ; Classic's proven virtio-mmio EPT shape: reads hit a real register page;
@@ -3025,11 +3168,19 @@ hv_linux_map_devices:
     or dword [rel vm_profile_live_devices],VP_DEV_FILESYSTEM
 .wifi:
     test edx,VP_DEV_WIFI
-    jz .display
+    jz .power
     lea rax,[rdi+HV_GUESTWIFI_PAGE]
     or rax,r8
     mov [rdi+HV_VCON_EPT_PT+64],rax
     or dword [rel vm_profile_live_devices],VP_DEV_WIFI
+.power:
+    call guestpower_selected                 ; C10b-1a B1: the exact driver-domain closure only
+    test eax,eax
+    jz .display
+    lea rax,[rdi+HV_GUESTPWR_PAGE]
+    or rax,r8                                ; tenth page: paos.power port, same trap contract
+    mov [rdi+HV_VCON_EPT_PT+72],rax
+    mov byte [rel guestpower_live],1   ; no profile bit: the mapped page is the datum
 .display:
     test edx, VP_DEV_DISPLAY
     jz   .count
@@ -3056,8 +3207,14 @@ hv_linux_map_devices:
     inc  r8d
 .scan_hi2:
     cmp  qword [rdi + 0x3000 + 2*8], 0
-    je   .scan_pt
+    je   .scan_hi4
     cmp  qword [rdi + HV_SLAT_RAM_PD2 + rcx*8], 0
+    je   .scan_hi4
+    inc  r8d
+.scan_hi4:
+    cmp  qword [rdi + 0x3000 + 4*8], 0
+    je   .scan_pt
+    cmp  qword [rdi + HV_SLAT_RAM_PD4 + rcx*8], 0
     je   .scan_pt
     inc  r8d
 .scan_pt:
@@ -4057,6 +4214,8 @@ hv_linux_enter:
     call hv_w
     call hv_linux_arm_deadline
     call hv_linux_reset_timer
+    call hv_vmx_host_deadline_renew          ; ROOT109896 (4): first host deadline, 1 ms after START's turn
+    call hv_vmx_host_timer_arm               ; time left to it, floor Q_min (SEC109899 H1, SEC109922 G1)
     cmp  dword [rel hv_vmwrite_fails], 0
     jne  .vmcs_fail
     cmp  qword [rel vst_native_restore], 1
@@ -4771,7 +4930,7 @@ hv_vcon_reset:
     mov  dword [rdx + 0x004], 2           ; modern transport
     mov  dword [rdx + 0x008], 3           ; virtio console
     mov  dword [rdx + 0x00C], 0x536F6150  ; vendor "PaOS"
-    mov  dword [rdx + 0x010], HV_VCON_INDIRECT ; only implemented page-0 feature
+    mov  dword [rdx + 0x010], HV_VCON_INDIRECT | 1 ; INDIRECT + CONSOLE_F_SIZE
     mov  dword [rdx + 0x034], HV_VCON_QMAX
     mov  dword [rdx + 0x044], 0
     mov  dword [rdx + 0x060], 0
@@ -4785,17 +4944,61 @@ hv_vcon_reset:
 hv_linux_gpa2hva:
     cmp  qword [rel hv_linux_ram], 0         ; RC-speed-reserve: no span outside a START
     je   .bad
+    push r11
+    push r8
+    push r9
+    mov  r8, [rel hv_linux_ram]
+    mov  r9, [rel hv_linux_ram_bytes]
     mov  rax, rdi
     mov  ecx, esi
-    add  rax, rcx
-    jc   .bad
-    cmp  rax, [rel hv_linux_ram_bytes]
-    ja   .bad
-    mov  rax, [rel hv_linux_ram]
-    add  rax, rdi
+    call .offset
+    jc   .range_bad
+    add  rax, r8
+    jc   .range_bad
+    pop  r9
+    pop  r8
+    pop  r11
     ret
+.range_bad:
+    pop  r9
+    pop  r8
+    pop  r11
+    jmp  .bad
 .bad:
     xor  eax, eax
+    ret
+
+; RAX=GPA, RCX=extent, R9=RAM amount -> RAX=compact HPA offset, CF refusal.
+; Low3GiB ends before the device hole; high RAM starts at4GiB. No extent may
+; bridge the hole, wrap, or exceed the actual resident subset. R11 scratch.
+.offset:
+    mov  r11d, 0xC0000000
+    cmp  rax, r11
+    jb   .offset_low
+    mov  r11, 0x100000000
+    cmp  rax, r11
+    jb   .offset_bad
+    sub  rax, 0x40000000
+    jmp  .offset_end
+.offset_low:
+    mov  r11, rax
+    add  r11, rcx
+    jc   .offset_bad
+    push rax
+    mov  eax, 0xC0000000
+    cmp  r11, rax
+    pop  rax
+    ja   .offset_bad
+.offset_end:
+    mov  r11, rax
+    add  r11, rcx
+    jc   .offset_bad
+    cmp  r11, r9
+    ja   .offset_bad
+    clc
+    ret
+.offset_bad:
+    stc
     ret
 
 ; RDI=guest virtual address -> RAX=host VA through the live guest page tables.
@@ -4835,9 +5038,11 @@ hv_linux_gva_walk_core:
     jne  .bad
     mov  rax, 0x000FFFFFFFFFF000
     and  rsi, rax
-    cmp  rsi, r9
-    jae  .bad
-    lea  rbx, [r8 + rsi]
+    mov  rax, rsi
+    mov  ecx, 4096
+    call .offset
+    jc   .bad
+    lea  rbx, [r8 + rax]
     mov  rcx, r12
     shr  rcx, 39
     and  ecx, 511
@@ -4849,11 +5054,13 @@ hv_linux_gva_walk_core:
     jnz  .bad
     mov  rax, 0x000FFFFFFFFFF000
     and  rdx, rax
-    cmp  rdx, r9
-    jae  .bad
+    mov  rax, rdx
+    mov  ecx, 4096
+    call .offset
+    jc   .bad
 
     mov  byte [rel hv_gva_walk_fail_level], 3
-    lea  rbx, [r8 + rdx]
+    lea  rbx, [r8 + rax]
     mov  rcx, r12
     shr  rcx, 30
     and  ecx, 511
@@ -4875,10 +5082,12 @@ hv_linux_gva_walk_core:
 .l2:
     mov  rax, 0x000FFFFFFFFFF000
     and  rdx, rax
-    cmp  rdx, r9
-    jae  .bad
+    mov  rax, rdx
+    mov  ecx, 4096
+    call .offset
+    jc   .bad
     mov  byte [rel hv_gva_walk_fail_level], 2
-    lea  rbx, [r8 + rdx]
+    lea  rbx, [r8 + rax]
     mov  rcx, r12
     shr  rcx, 21
     and  ecx, 511
@@ -4900,10 +5109,12 @@ hv_linux_gva_walk_core:
 .l1:
     mov  rax, 0x000FFFFFFFFFF000
     and  rdx, rax
-    cmp  rdx, r9
-    jae  .bad
+    mov  rax, rdx
+    mov  ecx, 4096
+    call .offset
+    jc   .bad
     mov  byte [rel hv_gva_walk_fail_level], 1
-    lea  rbx, [r8 + rdx]
+    lea  rbx, [r8 + rax]
     mov  rcx, r12
     shr  rcx, 12
     and  ecx, 511
@@ -4920,17 +5131,53 @@ hv_linux_gva_walk_core:
     mov  qword [rel hv_gva_walk_page_size], 0x1000
 
 .final:
-    cmp  rdx, r9
-    jae  .bad
+    mov  rax, rdx
+    mov  ecx, 1
+    call .offset
+    jc   .bad
     mov  [rel hv_gva_walk_gpa], rdx
+    add  rax, r8
+    jc   .bad
     mov  byte [rel hv_gva_walk_valid], 1
-    lea  rax, [r8 + rdx]
     jmp  .out
 .bad:
     xor  eax, eax
 .out:
     pop  r12
     pop  rbx
+    ret
+
+; RAX=GPA, RCX=extent, R9=RAM amount -> RAX=compact HPA offset, CF refusal.
+; Low3GiB ends before the device hole; high RAM starts at4GiB. No extent may
+; bridge the hole, wrap, or exceed the actual resident subset. R11 scratch.
+.offset:
+    mov  r11d, 0xC0000000
+    cmp  rax, r11
+    jb   .offset_low
+    mov  r11, 0x100000000
+    cmp  rax, r11
+    jb   .offset_bad
+    sub  rax, 0x40000000
+    jmp  .offset_end
+.offset_low:
+    mov  r11, rax
+    add  r11, rcx
+    jc   .offset_bad
+    push rax
+    mov  eax, 0xC0000000
+    cmp  r11, rax
+    pop  rax
+    ja   .offset_bad
+.offset_end:
+    mov  r11, rax
+    add  r11, rcx
+    jc   .offset_bad
+    cmp  r11, r9
+    ja   .offset_bad
+    clc
+    ret
+.offset_bad:
+    stc
     ret
 
 ; Copy ECX bytes from a GVA, re-walking every byte so a page boundary is
@@ -5409,7 +5656,7 @@ hv_vcon_features_ok:
     cmp  dword [rel hv_vcon_drvfeat + 4], 1 ; VERSION_1 is mandatory
     jne  .bad
     mov  eax, [rel hv_vcon_drvfeat]
-    test eax, ~HV_VCON_INDIRECT
+    test eax, ~(HV_VCON_INDIRECT | 1)
     jnz  .bad
     mov  eax, 1
     ret
@@ -5476,7 +5723,7 @@ hv_vcon_write:
     jmp  .done
 .dfsel:
     mov  [rel hv_vcon_dfsel], esi
-    mov  eax, HV_VCON_INDIRECT
+    mov  eax, HV_VCON_INDIRECT | 1
     test esi, esi
     jz   .df_store
     xor  eax, eax
@@ -5568,7 +5815,7 @@ hv_vcon_write:
     test esi, esi
     jnz  .status_set
     call hv_vcon_state_zero               ; addresses/features/indices reclaimed
-    mov  dword [rbx + 0x10], HV_VCON_INDIRECT
+    mov  dword [rbx + 0x10], HV_VCON_INDIRECT | 1
     mov  dword [rbx + 0x60], 0
     mov  dword [rbx + 0x44], 0
     mov  dword [rbx + 0x70], 0
@@ -5678,8 +5925,13 @@ hv_linux_ept_classify:
     mov  rax, rdi
     mov  ecx, HV_VCON_GPA                 ; zero-extend: do not sign-extend imm32
     sub  rax, rcx
-    cmp  rax, 0x9000                     ; selected optional pages, same write-only gate
+    cmp  rax, 0xA000                     ; selected optional pages, same write-only gate
     jae  .non_virtio
+    cmp  eax, 0x9000                     ; C10b-1a S7: paos.power only when B1 mapped it;
+    jb   .bank                           ; otherwise exactly the base classification
+    cmp  byte [rel guestpower_live], 1
+    jne  .non_virtio
+.bank:
     ; RCQ-18: an omitted device's page is a foreign GPA, never emulated.
     mov  edi, eax
     call vm_profile_page_selected
@@ -5859,8 +6111,14 @@ hv_linux_virtio_mmio:
     call guestfilesystem_mmio_write
     jmp .write_done
 .wifi_write:
+    cmp edi,0x9000
+    jae .power_write
     sub edi,0x8000
     call guestwifi_mmio_write
+    jmp .write_done
+.power_write:
+    sub edi,0x9000
+    call guestpower_mmio_write               ; C10b-1a: reached only when B1 selected the page
 .write_done:
     mov  edi, VMXF_G_RIP
     call hv_guest_read
@@ -5996,6 +6254,7 @@ hv_vcon_capture_byte:
     mov rax,[rsp]
 %endif
     call nd_console_byte
+    call nd_restart_byte
 %endif
     call guestnet_console_byte               ; only real guest TX may ack shell probe
     pop  rax
@@ -6882,6 +7141,8 @@ struc HV_VCON_RX_WORK
     .devices: resd 1
     .features: resd 1
     .config: resq 7                      ; both queues' addresses and sizes
+    .geometry: resd 1                    ; cols/rows pair, not a guest pointer
+    .config_generation: resd 1
     .table: resq HV_VCON_QMAX * 2         ; one private bounded descriptor table
 endstruc
 
@@ -6889,6 +7150,13 @@ endstruc
 ; Bind features/reset epoch, actual backend/profile/START and queue configuration
 ; as well as the existing RAM/region checks in each consumer.
 hv_vcon_owner_take:
+    mov  rdx, [rel hv_linux_region]
+    test rdx, rdx
+    jz   hv_vcon_owner_current.bad
+    mov  eax, [rdx + HV_VCON_PAGE + 0x100]
+    mov  [rdi + HV_VCON_RX_WORK.geometry], eax
+    mov  eax, [rdx + HV_VCON_PAGE + 0xFC]
+    mov  [rdi + HV_VCON_RX_WORK.config_generation], eax
     mov  eax, [rel hv_vcon_drvfeat]
     mov  [rdi + HV_VCON_RX_WORK.features], eax
     mov  rax, [rel hv_vcon_epoch]
@@ -6957,6 +7225,15 @@ hv_vcon_owner_current:
     mov  rax, [rdi + HV_VCON_RX_WORK.ram]
     add  rax, [rdi + HV_VCON_RX_WORK.ram_bytes]
     jc   .bad                            ; full host backing must not wrap
+    mov  rdx, [rel hv_linux_region]
+    test rdx, rdx
+    jz   .bad
+    mov  eax, [rdi + HV_VCON_RX_WORK.geometry]
+    cmp  eax, [rdx + HV_VCON_PAGE + 0x100]
+    jne  .bad
+    mov  eax, [rdi + HV_VCON_RX_WORK.config_generation]
+    cmp  eax, [rdx + HV_VCON_PAGE + 0xFC]
+    jne  .bad
     mov  rax, [rdi + HV_VCON_RX_WORK.config + 48]
     cmp  rax, [rel hv_vcon_q_num]
     jne  .bad
@@ -7597,6 +7874,9 @@ hv_linux_host_slice:
     call hvw_revoke
 .warm_policy_done:
     call vtd_deadman_check                   ; VM-exit heartbeat owns lease expiry
+    call hv_vmx_two_vcpu                     ; ROOT109896 (4) H2/H4: VMX two-vCPU never waits on kboot
+    test eax, eax                            ; or the grace, as SVM vsm_enter already runs
+    jnz  .yield
     cmp  byte [rel hv_linux_kboot], 1
     je   .yield
     rdtsc
@@ -7610,14 +7890,17 @@ hv_linux_host_slice:
 .rate:
     imul rcx, rcx, HV_LINUX_BOOT_GRACE_MS
     cmp  rax, rcx
-    jb   .done
+    jb   .grace
 .yield:
     call hv_svm_host_release                ; full SVM host restore/AP release before scheduling
     call hv_vmx_host_release                ; closed Intel pair/writer gate before STI/yield
     inc  dword [rel hv_linux_host_slices]    ; RCQ-18 S2-0: a slice that ran host work
+    call hv_linux_slice_yield_begin          ; T2-4 D8: passive timing only
     sti
     call sched_yield
     cli
+    call hv_linux_slice_yield_end
+    call hv_vmx_host_deadline_renew          ; SEC109922 G1: the next deadline runs from this turn's END
 .done:
 %ifidn RCQ_SERVICE_PROGRESS_PRERX,1
     call service_progress_prerx_slice_return
@@ -7625,6 +7908,153 @@ hv_linux_host_slice:
     ret
 
 .handoff_return:
+    ret
+
+.grace:
+    ; Single-vCPU Classic grace (SEC109914 named residual): no host turn, and the
+    ; guest keeps a whole window, as before the deadline existed. Never reached
+    ; by the two-vCPU profile, and it ends 2 s after hv_linux_arm_deadline.
+    call hv_vmx_host_deadline_renew
+    jmp  .done
+
+; ROOT109896 (4), SEC109899 H1-H4, SEC109922 G1: the VMX host-turn deadline.
+; hv_vmx_host_deadline is set at launch and at the END of each host turn, and
+; nowhere else on the two-vCPU profile. Every resuming VMX exit checks it, and
+; every BSP entry programs the preemption timer to the time left, never less
+; than Q_min of guest time. None of this acts during an AP handoff (the AP VMCS
+; is current and there is no guest entry; the owed turn is taken at the first
+; BSP exit after it) or on SVM, which keeps its own runners.
+
+; EAX = 1 on VMX with the two-vCPU profile: the same profile test that
+; hv_svm_linux_enter uses to route to vsm_enter.
+hv_vmx_two_vcpu:
+    xor  eax, eax
+    lea  rdx, [rel hv_ops_vmx]
+    cmp  [rel hv_ops_active], rdx
+    jne  .out
+    mov  rdx, [rel vm_profile_active]
+    test rdx, rdx
+    jz   .out
+    cmp  dword [rdx + 36], 2
+    jne  .out
+    mov  eax, 1
+.out:
+    ret
+
+; RAX = TSC ticks in one 1 ms window: tsc_khz, or the file's bounded fallback.
+hv_vmx_turn_rate:
+    mov  rax, [rel tsc_khz]
+    test rax, rax
+    jnz  .out
+    mov  eax, 3000000
+.out:
+    ret
+
+; Deadline = now + one window. Clobbers RAX, RCX, RDX.
+hv_vmx_host_deadline_renew:
+    call hv_vmx_turn_rate
+    mov  rcx, rax
+    rdtsc
+    shl  rdx, 32
+    or   rax, rdx
+    add  rax, rcx
+    mov  [rel hv_vmx_host_deadline], rax
+    ret
+
+; First instruction of every resuming exit (hv_linux_exit_dispatch .resume),
+; whatever the reason: a due deadline takes the host turn before resuming.
+hv_vmx_host_turn_due:
+    lea  rax, [rel hv_ops_vmx]
+    cmp  [rel hv_ops_active], rax
+    jne  .out
+    cmp  dword [rel vcb_handoff_active], 0
+    jne  .out                                ; H3(b): no turn and no window spent here
+    rdtsc
+    shl  rdx, 32
+    or   rax, rdx
+    cmp  rax, [rel hv_vmx_host_deadline]
+    jb   .out
+    call hv_linux_host_slice                 ; renews the deadline at the turn's end
+.out:
+    ret
+
+; Before every VMX BSP entry: preemption timer = the time left to the deadline,
+; at most one window, at least Q_min (G1: the guest always progresses), at
+; least one tick. Never during a handoff: the AP VMCS is current then.
+hv_vmx_host_timer_arm:
+    lea  rax, [rel hv_ops_vmx]
+    cmp  [rel hv_ops_active], rax
+    jne  .out
+    cmp  dword [rel vcb_handoff_active], 0
+    jne  .out
+    push rbx
+    call hv_vmx_turn_rate
+    mov  rbx, rax                            ; one window
+    rdtsc
+    shl  rdx, 32
+    or   rax, rdx
+    mov  rsi, [rel hv_vmx_host_deadline]
+    sub  rsi, rax
+    jae  .left
+    xor  esi, esi                            ; already due
+.left:
+    cmp  rsi, rbx
+    jbe  .capped
+    mov  rsi, rbx
+.capped:
+    mov  rax, rbx
+    shr  rax, HV_VMX_GUEST_FLOOR_SHIFT        ; Q_min
+    cmp  rsi, rax
+    jae  .floored
+    mov  rsi, rax
+.floored:
+    mov  ecx, 0x485
+    rdmsr                                    ; IA32_VMX_MISC[4:0]: timer rate
+    and  eax, 0x1F
+    mov  ecx, eax
+    shr  rsi, cl
+    test rsi, rsi
+    jnz  .write
+    mov  esi, 1
+.write:
+    mov  edi, VMXF_PREEMPT_TIMER
+    call hv_w
+    pop  rbx
+.out:
+    ret
+
+; T2-4 D8 (VM 107717) passive host-slice timing. Diagnostic only: nothing reads
+; these values except hv_render_stat. Begin records the yield start and the gap
+; since the previous yield's end; the first yield of a START only sets the
+; baseline, so the designed pre-kboot grace is never a gap. Clobbers RAX,RCX,RDX.
+hv_linux_slice_yield_begin:
+    rdtsc
+    shl  rdx, 32
+    or   rax, rdx
+    mov  [rel hv_linux_slice_begin_tsc], rax
+    mov  rcx, [rel hv_linux_slice_end_tsc]
+    test rcx, rcx
+    jz   .out
+    sub  rax, rcx
+    jb   .out                                ; a backwards TSC records nothing
+    cmp  rax, [rel hv_linux_slice_max_gap_tsc]
+    jbe  .out
+    mov  [rel hv_linux_slice_max_gap_tsc], rax
+.out:
+    ret
+
+; End adds the time spent in sched_yield and sets the next gap's start.
+hv_linux_slice_yield_end:
+    rdtsc
+    shl  rdx, 32
+    or   rax, rdx
+    mov  [rel hv_linux_slice_end_tsc], rax
+    sub  rax, [rel hv_linux_slice_begin_tsc]
+    jb   .out
+    add  [rel hv_linux_slice_yield_tsc], rax
+    jnc  .out
+    mov  qword [rel hv_linux_slice_yield_tsc], -1 ; saturate
+.out:
     ret
 
 ; Preserve an event interrupted during delivery. Without this Classic-proven
@@ -8213,6 +8643,11 @@ hv_linux_exit_dispatch:
     mov edi,[rsp]
     mov esi,[rel hv_linux_gpr]
     call snapshot_driver_pio
+    test eax,eax
+    jnz .pio_snapshot_checked
+    mov edi,[rsp]
+    mov esi,[rel hv_linux_gpr]
+    call terminal_driver_pio
 .pio_snapshot_checked:
     pop  rcx
     test eax,eax
@@ -8746,8 +9181,13 @@ hv_linux_exit_dispatch:
 .hlt_normal:
     call hv_skip_instr                       ; ESSENCE E3 clears interrupt shadow
     cmp  dword [rel vcb_handoff_active], 0
-    je   .bsp_hlt
+    je   .bsp_power
     call vcl_hlt                            ; root-emulated AP idle, never physical HLT
+    jmp  .bsp_hlt
+.bsp_power:
+    call guestpower_hlt_exit                 ; C10b-1a: an armed clean halt only sets STOP
+    test eax, eax
+    jnz  .resume                             ; S5: nd_backend_stopped still retires
 .bsp_hlt:
     call hv_linux_host_slice                 ; host services stay co-resident
     jmp  .resume
@@ -8762,6 +9202,7 @@ hv_linux_exit_dispatch:
     call vtd_guest_dataplane_intr_window_exit
     jmp  .resume
 .resume:
+    call hv_vmx_host_turn_due                ; ROOT109896 (4): every resuming exit, any reason
     call hv_linux_reinject_vectoring         ; interrupted event owns this entry
     cmp  dword [rel vcb_handoff_active], 0
     jne  .ap_resume
@@ -8779,6 +9220,7 @@ hv_linux_exit_dispatch:
     call guestrestore_pump                   ; control handshake and one pending restore line
     call fsg_tick                            ; original F11 owner, bounded block/control turn
     call wfc_tick                            ; private READY/request/ACK, clean BSP exit only
+    call guestpower_pump                     ; C10b-1a: control handshake and the one shutdown line
     call vtd_guest_dataplane_prepare         ; retain RTL work without consuming ENTRY_INTR
     call hv_glapic_try_inject                ; RCQ-50 S4: a pending LAPIC vector goes first
     test eax, eax
@@ -8787,6 +9229,9 @@ hv_linux_exit_dispatch:
     test eax, eax
     jnz  .budget
     call guestwifi_irq                       ; private IRQ5 also in physical NIC mode
+    test eax,eax
+    jnz .budget
+    call guestpower_irq                      ; C10b-1a: private IRQ5 also in physical NIC mode
     test eax,eax
     jnz .budget
     cmp  byte [rel vtd_network_mode], 1
@@ -8862,7 +9307,9 @@ hv_linux_exit_dispatch:
     xor  eax, eax
     ret
 .within_budget:
-    ; Other exits resume the saved remaining timer, never renew the slice.
+    ; The timer is the time left to the host deadline, floor Q_min (ROOT109896 (4));
+    ; a failed write refuses below like any other VMCS write.
+    call hv_vmx_host_timer_arm
     cmp  dword [rel hv_vmwrite_fails], 0
     je   .resume_ready
     mov  byte [rel hv_linux_load_err], 7
@@ -9587,12 +10034,73 @@ hv_render_stat:
     call guestinput_render_stat              ; RCQ-23: event counters when input is live
     lea  rdi, [rel str_hv_stat_host]
     call hv_out_str
+    call hv_render_slice_diag                ; T2-4 D8: Intel S7 only, so never beside an AMD floor
     call hv_svm_stat_text                    ; RCQ-18 SVM: the floor's raw bits for serial-dark AMD
     test rax, rax                            ; metal; 0 on VMX. Last, so a clip never displaces a field
     jz   .no_svm_floor
     mov  rdi, rax
     call hv_out_str
 .no_svm_floor:
+    call guestdisplay_render_stage_stat      ; passive tail; never displaces existing status fields
+    ret
+
+; T2-4 D8 (VM 107717): Intel S7 two-vCPU live STAT only (hv_ops_active ==
+; hv_ops_vmx and vca_ready == 1), after host=alive. The AMD-only floor slot
+; follows it in hv_render_stat, but the gate excludes AMD, so on every STAT that
+; carries these keys they precede passive stage diagnostics; the AMD floor
+; also precedes those diagnostics. Existing fields retain their output priority.
+; The slice fields appear on no other STAT. Timer =
+; existing per-START reason-52 count; nonroot = existing BSP vob row 0
+; interval_tsc (entry-to-exit, includes boundary overhead); yield/gap from
+; hv_linux_host_slice. ms = TSC / tsc_khz, saturated u32. Clobbers caller-saved.
+hv_render_slice_diag:
+    lea  rax, [rel hv_ops_vmx]
+    cmp  [rel hv_ops_active], rax
+    jne  .out
+    cmp  qword [rel vca_ready], 1
+    jne  .out
+    lea  rdi, [rel str_hv_stat_slice_timer]
+    call hv_out_str
+    mov  rax, [rel hv_linux_exit_timer]
+    mov  ecx, 0xFFFFFFFF
+    cmp  rax, rcx
+    jbe  .timer
+    mov  rax, rcx
+.timer:
+    call hv_out_dec
+    lea  rdi, [rel str_hv_stat_slice_nonroot]
+    call hv_out_str
+    mov  rax, [rel vob_records + 40]
+    call hv_slice_tsc_ms
+    call hv_out_dec
+    lea  rdi, [rel str_hv_stat_slice_yield]
+    call hv_out_str
+    mov  rax, [rel hv_linux_slice_yield_tsc]
+    call hv_slice_tsc_ms
+    call hv_out_dec
+    lea  rdi, [rel str_hv_stat_slice_gap]
+    call hv_out_str
+    mov  rax, [rel hv_linux_slice_max_gap_tsc]
+    call hv_slice_tsc_ms
+    call hv_out_dec
+.out:
+    ret
+
+; RAX = TSC ticks -> EAX = ms, saturated at 0xFFFFFFFF. Uses tsc_khz, or the
+; 3 GHz fallback hv_linux_host_slice already uses. Clobbers RAX,RCX,RDX.
+hv_slice_tsc_ms:
+    mov  rcx, [rel tsc_khz]
+    test rcx, rcx
+    jnz  .rate
+    mov  ecx, 3000000
+.rate:
+    xor  edx, edx
+    div  rcx
+    mov  ecx, 0xFFFFFFFF
+    cmp  rax, rcx
+    jbe  .out
+    mov  rax, rcx
+.out:
     ret
 
 ; hv_out_dec(EAX = unsigned value) — append its decimal text via the out cursor.
@@ -9814,6 +10322,93 @@ hv_linux_exit_render:
     cmp  ebx, hv_linux_exit_evidence_end - hv_linux_exit_evidence
     jb   .field
     pop  rbx
+    ret
+
+; Same passive pre-STOP slot as AUDIOSTAT, now joined to EXITSTAT. All cells
+; are already retained at owner/closed-executor boundaries; no live VMCS/VMCB,
+; guest bytes, host pointers, scheduling, entry or mutation. SVM gen is separate:
+; stale records after a different backend or refused START are not current proof.
+hv_linux_startup_render:
+    lea  rdi, [rel str_hv_startup_start_gen]
+    call hv_out_str
+    mov  eax, [rel hv_linux_start_gen]
+    call hv_out_dec
+    lea  rdi, [rel str_hv_startup_consumed_gen]
+    call hv_out_str
+    mov  eax, [rel hv_linux_start_consumed]
+    call hv_out_dec
+    lea  rdi, [rel str_hv_startup_queued]
+    call hv_out_str
+    movzx eax, byte [rel hv_linux_run_req]
+    call hv_out_dec
+    lea  rdi, [rel str_hv_startup_admission]
+    call hv_out_str
+    mov  eax, [rel hv_linux_start_refusal]
+    call hv_out_dec
+    lea  rdi, [rel str_hv_startup_starting]
+    call hv_out_str
+    movzx eax, byte [rel hv_linux_start_active]
+    call hv_out_dec
+    lea  rdi, [rel str_hv_startup_load_err]
+    call hv_out_str
+    movzx eax, byte [rel hv_linux_load_err]
+    call hv_out_dec
+    lea  rdi, [rel str_hv_startup_running]
+    call hv_out_str
+    movzx eax, byte [rel hv_linux_running]
+    call hv_out_dec
+    lea  rdi, [rel str_hv_startup_kboot]
+    call hv_out_str
+    movzx eax, byte [rel hv_linux_kboot]
+    call hv_out_dec
+    lea  rdi, [rel str_hv_startup_con_match]
+    call hv_out_str
+    mov  eax, [rel hv_linux_match]
+    call hv_out_dec
+    lea  rdi, [rel str_hv_startup_con_len]
+    call hv_out_str
+    mov  eax, [rel hv_vcon_capture_len]
+    call hv_out_dec
+    lea  rdi, [rel str_hv_startup_con_dropped]
+    call hv_out_str
+    mov  eax, [rel hv_vcon_capture_overflow]
+    call hv_out_dec
+    lea  rdi, [rel str_hv_startup_svm_pair]
+    call hv_out_str
+    mov  rax, [rel vsr_enabled]
+    call hv_out_dec
+    lea  rdi, [rel str_hv_svm_gen]
+    call hv_out_str
+    mov  rax, [rel vsm_progress_gen]
+    call hv_linux_exit_hex
+    lea  rdi, [rel str_hv_svm_returns0]
+    call hv_out_str
+    mov  rax, [rel vsm_progress_returns0]
+    call hv_linux_exit_hex
+    lea  rdi, [rel str_hv_svm_first0]
+    call hv_out_str
+    mov  rax, [rel vsm_progress_first0]
+    call hv_linux_exit_hex
+    lea  rdi, [rel str_hv_svm_rip0]
+    call hv_out_str
+    mov  rax, [rel vsm_progress_rip0]
+    call hv_linux_exit_hex
+    lea  rdi, [rel str_hv_svm_exit0]
+    call hv_out_str
+    mov  rax, [rel vsm_progress_exit0]
+    call hv_linux_exit_hex
+    lea  rdi, [rel str_hv_svm_returns1]
+    call hv_out_str
+    mov  rax, [rel vsm_progress_returns1]
+    call hv_linux_exit_hex
+    lea  rdi, [rel str_hv_svm_rip1]
+    call hv_out_str
+    mov  rax, [rel vsm_progress_rip1]
+    call hv_linux_exit_hex
+    lea  rdi, [rel str_hv_svm_exit1]
+    call hv_out_str
+    mov  rax, [rel vsm_progress_exit1]
+    call hv_linux_exit_hex
     ret
 
 ; Fixed-width hexadecimal keeps full guest virtual addresses and u64 counts.
@@ -10197,6 +10792,11 @@ hv_guest_code:
 ; test_rc_zero_storage_bss_host.py pins).
 str_hv_stat_intr_exits: db " intr_exits=", 0
 str_hv_stat_host_slices: db " host_slices=", 0
+; T2-4 D8 Intel S7 slice diagnostic (VM 107717): read-only, same placement rule.
+str_hv_stat_slice_timer: db " slice_timer_exits=", 0
+str_hv_stat_slice_nonroot: db " slice_nonroot_ms=", 0
+str_hv_stat_slice_yield: db " slice_yield_ms=", 0
+str_hv_stat_slice_gap: db " slice_max_gap_ms=", 0
 
 %include "core/abi/wdata.inc" ; WDATA_DEFER; standalone assemblies expand blocks in place
 ; Writable state: deferred to the page-isolated WDATA region (core/abi/wdata.inc).
@@ -10339,7 +10939,12 @@ str_hv_svm_rip1: db " svm_rip1=0x", 0
 str_hv_svm_exit1: db " svm_exit1=0x", 0
 str_hv_boundary_args: db " GUESTVM BOUNDSTAT error=args", 0
 str_hv_exec_args: db " GUESTVM BOUNDEXEC error=args",0
+str_sub_ctxexec: db "CTXEXEC",0
+str_hv_ctx_args: db " GUESTVM CTXEXEC error=args",0
+str_sub_capcase: db "CAPCASE",0
+str_hv_cap_args: db " GUESTVM CAPCASE error=args",0
 str_sub_boundexec: db "BOUNDEXEC",0
+str_sub_boundcost: db "BOUNDCOST",0
 str_sub_boundstat: db "BOUNDSTAT", 0
 str_sub_boundstat_amd: db "AMD", 0
 str_sub_boundstat_intel: db "INTEL", 0
@@ -10373,6 +10978,18 @@ str_hv_f_ss:    db "ss", 0
 str_hv_f_rsp:   db "rsp", 0
 
 str_hv_stat_pre:      db " GUESTVM STAT vmx_root=1", 0
+str_hv_startup_start_gen: db " start_gen=", 0
+str_hv_startup_consumed_gen: db " consumed_gen=", 0
+str_hv_startup_queued: db " queued=", 0
+str_hv_startup_admission: db " admission=", 0
+str_hv_startup_starting: db " starting=", 0
+str_hv_startup_load_err: db " load_err=", 0
+str_hv_startup_running: db " running=", 0
+str_hv_startup_kboot: db " kboot=", 0
+str_hv_startup_con_match: db " con_match=", 0
+str_hv_startup_con_len: db " con_len=", 0
+str_hv_startup_con_dropped: db " con_dropped=", 0
+str_hv_startup_svm_pair: db " svm_pair=", 0
 str_hv_exit_pre: db " GUESTVM EXITSTAT rev=1 gen=", 0
 ; Eight-byte NUL-terminated labels in the same order as the retained values.
 hv_linux_exit_names:
@@ -10570,6 +11187,7 @@ hv_linux_initrd_gpa: resq 1                  ; RCQ-18: where the last START plac
 hv_linux_eptp:    resq 1
 hv_linux_deadline: resq 1
 hv_linux_run_start_tsc: resq 1
+hv_vmx_host_deadline: resq 1                 ; ROOT109896 (4): TSC by which the host is owed a turn
 hv_linux_load_tsc: resq 1                    ; TSC at the START loader's last host turn
 hv_guestcpu_run_tsc_accum: resq 1            ; boot-monotonic resident VMX time
 hv_guestcpu_last_progress_tsc: resq 1         ; latest completed common VM-exit
@@ -10666,6 +11284,17 @@ hv_linux_intr_exits: resd 1                  ; reason-1 exits during the last ST
 hv_linux_host_slices: resd 1                 ; host slices that yielded, same START
 %endmacro
 WDATA_BSS_DEFER WDATA_BSS_hv_vmx_m3
+
+; T2-4 D8 (VM 107717): passive host-slice timing for the last START, in its own
+; block so every pinned block keeps its layout. Zeroed with host_slices.
+%macro WDATA_BSS_hv_vmx_slicediag 0
+alignb 8
+hv_linux_slice_begin_tsc: resq 1             ; TSC at the current yield's start
+hv_linux_slice_end_tsc: resq 1               ; TSC at the last yield's end; 0 = none yet
+hv_linux_slice_yield_tsc: resq 1             ; sum of TSC spent inside sched_yield
+hv_linux_slice_max_gap_tsc: resq 1           ; max TSC from one yield's end to the next start
+%endmacro
+WDATA_BSS_DEFER WDATA_BSS_hv_vmx_slicediag
 
 ; HV-XCR0 (RCQ-24): guest/exit XCR0 and XSETBV refusal state, outside the pinned split blocks.
 %macro WDATA_BSS_hv_vmx_xcr0 0
@@ -10788,6 +11417,9 @@ WDATA_BSS_DEFER WDATA_BSS_hv_vmx_media_span
 %include "hv/boundary_owner.asm"   ; T1-5 S7 P4: AP-reachable, outside bsp_only vmx.asm
 %include "hv/boundary_observation.asm"
 %include "hv/boundary_execution.asm"
+%include "hv/capability_observation.asm"
+%include "hv/context_execution.asm" ; read-only actual context observations
+%include "hv/interpreter_execution.asm" ; actual native content-feed hardening
 
 %include "hv/warm_lifecycle.asm"
 

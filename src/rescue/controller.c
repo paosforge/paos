@@ -10,8 +10,14 @@
 #include "auth_wire.h"
 #include "update_verify.h"
 #include "update_effect.h"
+#include "settings_update.h"
+#ifdef PAOS_RESCUE_UPDATE_CHANNEL_HEADER
+#include "update_channel.h"
+#include "release_mapping.h"
+#endif
 #include "release_verify.h"
 #include "network_quiesce.h"
+#include "report_usb.h"
 #include <arpa/inet.h>
 #include <blkid/blkid.h>
 #include <ctype.h>
@@ -48,6 +54,12 @@
 #define STATE_CRC_OFF 508
 #define CONTRACT_VERSION 1
 #define DISCOVERY_PORT 9998
+/* R-5: nothing leaves on the LAN by itself unless the lab builder asks for it.
+ * The default is off, so a public build cannot get the announce by omission;
+ * the local console report and the signed :9996 service do not depend on it. */
+#ifndef PAOS_RESCUE_LAB_ANNOUNCE
+#define PAOS_RESCUE_LAB_ANNOUNCE 0
+#endif
 #ifndef PAOS_RESCUE_DMI_SERIAL_PATH
 #define PAOS_RESCUE_DMI_SERIAL_PATH "/sys/class/dmi/id/product_serial"
 #endif
@@ -218,7 +230,7 @@ static int send_beacon(const char *message);
  * a blocked later operation cannot hide the last reached boundary. UDP loss
  * remains possible; these packets carry no challenge or recovery authority. */
 static void beacon_progress(int enabled, const char *phase) {
-    if (!enabled) return;
+    if (!enabled || !PAOS_RESCUE_LAB_ANNOUNCE) return;
     int saved = errno;
     char message[160];
     int n = snprintf(message, sizeof(message),
@@ -389,6 +401,10 @@ static int maintenance_fingerprint(const char *key, char hex[65]) {
     return 0;
 }
 
+/* The short code the local view shows as text and as a QR: no hardware, no hash of the build. */
+static char maintenance_code[160];
+#define MAINTENANCE_PREVIEW_MAX 8192
+
 static int maintenance_failure_preview(const char *root, char *preview, size_t capacity,
                                        int *event_count) {
     uint8_t archive[128], crash[32];
@@ -419,6 +435,8 @@ static int maintenance_failure_preview(const char *root, char *preview, size_t c
                      (unsigned long long)le64(p + 8), (unsigned long long)le64(p + 16),
                      digest, fingerprint);
         if (n < 0 || n >= (int)sizeof(boot_event)) return 2;
+        snprintf(maintenance_code, sizeof(maintenance_code), "PAOSR1 boot P%u %s %s %s",
+                 p[32], gate, error, fingerprint);
     }
     if (!strcmp(cs, "valid")) {
         const uint8_t *p = crash;
@@ -440,8 +458,13 @@ static int maintenance_failure_preview(const char *root, char *preview, size_t c
                      "\"build_prefix\":\"%s\",\"boot\":%u,\"fingerprint\":\"%s\"}",
                      phase, p[8], le32(p + 12), offset, build, le32(p + 24), fingerprint);
         if (n < 0 || n >= (int)sizeof(crash_event)) return 2;
+        if (!boot_event[0])
+            snprintf(maintenance_code, sizeof(maintenance_code), "PAOSR1 crash %s V%u 0x%08x %s",
+                     phase, p[8], le32(p + 12), fingerprint);
     }
     if (event_count) *event_count = !!boot_event[0] + !!crash_event[0];
+    char hardware[2048];
+    if (prc_report_hardware(hardware, sizeof(hardware))) return 2;
     /* All strings above are fixed vocabulary or bounded hex/numbers. Caller
      * paths and unvalidated record bytes never enter this exact local preview.
      * No network, queue, receipt, consent, delete, EFI write or effect is called. */
@@ -450,7 +473,7 @@ static int maintenance_failure_preview(const char *root, char *preview, size_t c
            "\"delivery\":\"not_requested\",\"authority\":\"diagnostic_only\","
            "\"mutation\":\"disabled\",\"retention\":\"latest_per_source\","
            "\"ordering\":\"unknown\",\"sources\":{\"boot_archive\":\"%s\",\"crash\":\"%s\"},"
-           "\"events\":[%s%s%s]}\n", as, cs, boot_event,
+           "\"hardware\":%s,\"events\":[%s%s%s]}\n", as, cs, hardware, boot_event,
            boot_event[0] && crash_event[0] ? "," : "", crash_event);
     int bad = (strcmp(as, "valid") && strcmp(as, "missing")) ||
               (strcmp(cs, "valid") && strcmp(cs, "missing"));
@@ -458,7 +481,7 @@ static int maintenance_failure_preview(const char *root, char *preview, size_t c
 }
 
 static int maintenance_failure_report(const char *root) {
-    char preview[4096] = "";
+    char preview[MAINTENANCE_PREVIEW_MAX] = "";
     int result = maintenance_failure_preview(root, preview, sizeof(preview), NULL);
     if (fputs(preview, stdout) == EOF || fflush(stdout) || ferror(stdout)) return 2;
     return result;
@@ -474,7 +497,7 @@ static int maintenance_export_existing(int dir, const char *name,
     int fd = openat(dir, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) return -1;
     struct stat st;
-    char bytes[4096];
+    char bytes[MAINTENANCE_PREVIEW_MAX];
     size_t used = 0;
     unsigned interrupted = 0;
     int result = -1;
@@ -494,9 +517,10 @@ done:
     return result;
 }
 
+/* max_entries bounds a private export directory; 0 means no bound, for a person's own stick. */
 static int maintenance_failure_export(const char *root, const char *destination,
-                                      const char *consent) {
-    char preview[4096] = "", digest[65], name[80], temporary[80] = "";
+                                      const char *consent, unsigned max_entries) {
+    char preview[MAINTENANCE_PREVIEW_MAX] = "", digest[65], name[80], temporary[80] = "";
     int events = 0, dir = -1, fd = -1, result = 2;
     if (strlen(consent) != 64) return 2;
     for (unsigned i = 0; i < 64; ++i)
@@ -529,15 +553,16 @@ static int maintenance_failure_export(const char *root, const char *destination,
     errno = 0;
     while ((entry = readdir(scan))) {
         if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
-        if (++count >= 16) break;
+        if (max_entries && ++count >= max_entries) break;
     }
     int scan_error = errno;
-    if (closedir(scan) || scan_error || count >= 16) goto done;
-    uint8_t random[16];
-    if (getrandom(random, sizeof(random), GRND_NONBLOCK) != (ssize_t)sizeof(random)) goto done;
-    char hex[33];
-    for (unsigned i = 0; i < sizeof(random); ++i) snprintf(hex + i * 2, 3, "%02x", random[i]);
-    snprintf(temporary, sizeof(temporary), ".paos-export-%s.tmp", hex);
+    if (closedir(scan) || scan_error || (max_entries && count >= max_entries)) goto done;
+    /* Not the random pool, which may not be ready in Rescue. The name needs no secrecy: a
+     * private directory, under the lock above, created with O_EXCL. */
+    struct timespec clock_now;
+    if (clock_gettime(CLOCK_MONOTONIC, &clock_now)) goto done;
+    snprintf(temporary, sizeof(temporary), ".paos-export-%ld-%lld.tmp", (long)getpid(),
+             (long long)clock_now.tv_nsec + (long long)clock_now.tv_sec * 1000000000LL);
     fd = openat(dir, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
     if (fd < 0) { temporary[0] = 0; goto done; }
     /* A restrictive caller umask is allowed; the published artifact is exact 0600. */
@@ -553,10 +578,14 @@ static int maintenance_failure_export(const char *root, const char *destination,
     if (fsync(fd)) goto done;
     if (close(fd)) { fd = -1; goto done; }
     fd = -1;
-    if (linkat(dir, temporary, dir, name, 0)) goto done;
-    /* From here a failure means the exact artifact may already be present.
-     * Never retract that published name or overwrite it on retry. */
-    if (unlinkat(dir, temporary, 0)) goto done;
+    if (linkat(dir, temporary, dir, name, 0)) {
+        /* FAT has no hard links; same no-replacement rule by rename. */
+        if (errno != EPERM || renameat2(dir, temporary, dir, name, RENAME_NOREPLACE)) goto done;
+    } else if (unlinkat(dir, temporary, 0)) {
+        /* From here a failure means the exact artifact may already be present.
+         * Never retract that published name or overwrite it on retry. */
+        goto done;
+    }
     temporary[0] = 0;
     if (fsync(dir)) goto done;
     result = 0;
@@ -576,6 +605,41 @@ done:
     return fflush(stdout) || ferror(stdout) ? 2 : 0;
 }
 
+/* For the local view: line 1 the short code, line 2 the consent digest, then the exact
+ * preview. Status 3 means no failure is saved, so there is nothing to export. */
+static int maintenance_view(const char *root) {
+    char preview[MAINTENANCE_PREVIEW_MAX] = "", digest[65];
+    int events = 0;
+    if (maintenance_failure_preview(root, preview, sizeof(preview), &events) ||
+        maintenance_fingerprint(preview, digest)) return 2;
+    if (printf("%s\n%s\n%s", events ? maintenance_code : "PAOSR1 none", digest, preview) < 0 ||
+        fflush(stdout) || ferror(stdout)) return 2;
+    return events ? 0 : 3;
+}
+
+/* R-9: the person read this exact report and pressed save. One stick or none. */
+static int maintenance_usb_export(const char *root, const char *consent) {
+    char preview[MAINTENANCE_PREVIEW_MAX] = "", digest[65], sticks[PRC_REPORT_DISKS_MAX][64];
+    if (maintenance_failure_preview(root, preview, sizeof(preview), NULL) ||
+        maintenance_fingerprint(preview, digest)) return PRC_USB_FAILED;
+    if (strcmp(consent, digest)) return PRC_USB_REPORT_CHANGED;
+    int found = prc_usb_sticks(sticks, PRC_REPORT_DISKS_MAX);
+    if (found == 0) return PRC_USB_NO_STICK;
+    if (found > 1) return PRC_USB_MANY_STICKS;
+    if (mkdir(PAOS_RESCUE_REPORT_MOUNT, 0700) && errno != EEXIST) return PRC_USB_FAILED;
+    int mounted = prc_mount_stick(sticks[0]);
+    if (mounted) return mounted;
+    int result = maintenance_failure_export(root, PAOS_RESCUE_REPORT_MOUNT, consent, 0) ? PRC_USB_FAILED : PRC_USB_SAVED;
+    if (umount2(PAOS_RESCUE_REPORT_MOUNT, 0) && !result) result = PRC_USB_STILL_MOUNTED;
+    return result;
+}
+
+#if !PAOS_RESCUE_LAB_ANNOUNCE
+static int send_beacon(const char *message) {
+    (void)message;
+    return 0;
+}
+#else
 static int send_beacon(const char *message) {
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) return -1;
@@ -593,10 +657,18 @@ static int send_beacon(const char *message) {
     errno = saved;
     return -1;
 }
+#endif
 
 /* Same-call public certificate evidence only, never PRC1 stdout. A content
  * digest binds every byte and every helper result; lost/mixed chunks are not a
  * complete capture. Nonblocking UDP, one pass, at most 290 packets and 250ms total. */
+#if !PAOS_RESCUE_LAB_ANNOUNCE
+static void anchor_capture(void *context, const uint8_t *data, size_t size) {
+    (void)context;
+    (void)data;
+    (void)size;
+}
+#else
 static void anchor_capture(void *context, const uint8_t *data, size_t size) {
     (void)context;
     int saved = errno;
@@ -640,6 +712,7 @@ done:
     close(fd);
     errno = saved;
 }
+#endif
 
 /* BootCurrent, not the first FAT volume, selects the system ESP.  This is a
  * read-only identity observation; a signed Manager/owner proof is still
@@ -681,6 +754,47 @@ static int read_asset(const char *path, size_t limit,
     if (!exact) { free(data); return -1; }
     *out = data; *size = done;
     return 0;
+}
+
+int prc_settings_current_snapshot(const char *root,
+    const uint8_t expected_owner_key_id[32], struct prc_settings_current_snapshot *out) {
+    if (out) memset(out, 0, sizeof(*out));
+    if (!out || !root || !*root || !strcmp(root, "-") || !expected_owner_key_id) return -1;
+    struct state_view a, b;
+    read_state(root, "state0.bin", &a);
+    read_state(root, "state1.bin", &b);
+    const char *classification = NULL;
+    const struct state_view *selected = select_state(&a, &b, &classification);
+    if (!selected) return -1;
+    char current_path[512], owner_path[512];
+    if (snprintf(current_path, sizeof(current_path), "%s/EFI/PaOS/vault/manifest.bin", root)
+            >= (int)sizeof(current_path) ||
+        snprintf(owner_path, sizeof(owner_path), "%s/EFI/PaOS/vault/owner-public.pem", root)
+            >= (int)sizeof(owner_path)) return -1;
+    uint8_t *current = NULL, *owner = NULL, digest[32];
+    size_t current_size = 0, owner_size = 0;
+    struct prc_current_manifest verified = {0};
+    int result = -1;
+    if (read_asset(current_path, 1024, &current, &current_size) ||
+        read_asset(owner_path, 4096, &owner, &owner_size) ||
+        prc_verify_current_manifest(expected_owner_key_id, owner, owner_size,
+            current, current_size, selected->raw[16], &verified) ||
+        !SHA256(current, current_size, digest) ||
+        le64(selected->raw + 112) != verified.manifest_sequence ||
+        CRYPTO_memcmp(selected->raw + 120, digest, 32)) goto done;
+    out->active_entry = verified.active_entry;
+    out->selected_copy = selected == &a ? 0U : 1U;
+    out->state_generation = selected->generation;
+    out->manifest_sequence = verified.manifest_sequence;
+    out->active_payload_size = verified.active_payload_size;
+    memcpy(out->current_manifest_sha256, digest, 32);
+    memcpy(out->active_payload_sha256, verified.active_payload_sha256, 32);
+    memcpy(out->selected_state, selected->raw, sizeof(out->selected_state));
+    memcpy(out->current_manifest, current, sizeof(out->current_manifest));
+    result = 0;
+done:
+    free(current); free(owner);
+    return result;
 }
 
 static void guid_text(const uint8_t guid[16], char text[37]) {
@@ -729,10 +843,11 @@ static int route_device(const char *efivars, const char *sysblock,
     partuuid_out[0] = 0;
     if (manager_out) *manager_out = NULL;
     static const char global_guid[] = "8be4df61-93ca-11d2-aa0d-00e098032b8c";
-    char path[512], efi_path[PRC_BOOT_PATH_SIZE];
+    char path[512];
     uint8_t current[8], option[4097], secure[8], setup[8], guid[16];
     size_t current_size, option_size, secure_size, setup_size;
     uint16_t boot_number;
+    const char *route_manager = NULL;
     if (snprintf(path, sizeof(path), "%s/SecureBoot-%s", efivars, global_guid) >=
         (int)sizeof(path) ||
         read_bounded(path, secure, 7, &secure_size) || secure_size != 5 ||
@@ -754,11 +869,10 @@ static int route_device(const char *efivars, const char *sysblock,
     if (snprintf(path, sizeof(path), "%s/Boot%04X-%s", efivars,
                  le16(current + 4), global_guid) >= (int)sizeof(path) ||
         read_bounded(path, option, 4096, &option_size) ||
-        prc_parse_boot_route(current, current_size, option, option_size,
-                             &boot_number, guid, efi_path)) {
+        prc_parse_manager_route(current, current_size, option, option_size,
+                                &boot_number, guid, &route_manager) == -1) {
         fprintf(stderr, "PAOS_RESCUE_ROUTE_DIAG stage=bootoption\n"); return -1;
     }
-    const char *route_manager = prc_route_manager(efi_path);
     if (!route_manager) {
         fprintf(stderr, "PAOS_RESCUE_ROUTE_DIAG stage=shimpath\n"); return -1;
     }
@@ -1196,11 +1310,12 @@ static int signed_clear_diagnostic(const char *root, const uint8_t manifest_sha[
     return 0;
 }
 
-static int signed_update_bundle_diagnostic(
+static int signed_update_bundle_policy_at(
     const char *root, const uint8_t key_id[32],
     const uint8_t manifest_sha[32],
     const struct prc_update_request *request,
-    struct update_bundle *bundle, int recovery) {
+    struct update_bundle *bundle, int recovery, const char *scratch,
+    const uint8_t *offered) {
     struct state_view a, b;
     read_state(root, "state0.bin", &a);
     read_state(root, "state1.bin", &b);
@@ -1213,10 +1328,10 @@ static int signed_update_bundle_diagnostic(
         snprintf(owner_path, sizeof(owner_path),
                  "%s/EFI/PaOS/vault/owner-public.pem", root) >= (int)sizeof(owner_path) ||
         snprintf(next_path, sizeof(next_path),
-                 "%s/paos-rescue.successor", PAOS_RESCUE_SCRATCH_DIR) >=
+                 "%s/paos-rescue.successor", scratch) >=
             (int)sizeof(next_path) ||
         snprintf(candidate_path, sizeof(candidate_path),
-                 "%s/paos-rescue.candidate", PAOS_RESCUE_SCRATCH_DIR) >=
+                 "%s/paos-rescue.candidate", scratch) >=
             (int)sizeof(candidate_path)) return -1;
     uint8_t *current = NULL, *owner = NULL, *next = NULL;
     size_t current_size = 0, owner_size = 0, next_size = 0;
@@ -1247,8 +1362,24 @@ static int signed_update_bundle_diagnostic(
     if (valid) {
         const uint8_t *active = current + 128 + (plan.active_entry - 1U) * 128;
         const char *reason = NULL;
-        valid = !prc_release_installed_check_observed(payload_sha, request->candidate_size,
-                      active + 16, le32(active + 4), &release, &reason);
+        if (offered) {
+            /* A default/unprovisioned controller has no network release
+             * authority. Preserve standalone legacy controller composition. */
+            valid = 0;
+#ifdef PAOS_RESCUE_UPDATE_CHANNEL_HEADER
+            uint8_t record_sha[32];
+            valid = !recovery &&
+                !prc_update_channel_offer_check_at(root, plan.active_entry, active + 16,
+                    le32(active + 4), offered, &release) &&
+                release.payload_size == request->candidate_size &&
+                !CRYPTO_memcmp(release.payload_sha256, payload_sha, 32) &&
+                SHA256(offered + 256, 512, record_sha) &&
+                !CRYPTO_memcmp(release.record_sha256, record_sha, 32);
+#endif
+        } else {
+            valid = !prc_release_installed_check_observed(payload_sha, request->candidate_size,
+                          active + 16, le32(active + 4), &release, &reason);
+        }
         if (!valid && reason && refusal_request_valid)
             emit_update_refusal(reason, payload_sha, request->candidate_size,
                                 active + 16, le32(active + 4),
@@ -1299,6 +1430,23 @@ static int signed_update_bundle_diagnostic(
     puts(" owner_manifest=valid mutation=disabled authority=none "
          "[boot.v2.rescue.update-bundle-verified]");
     return 0;
+}
+
+static int signed_update_bundle_at(
+    const char *root, const uint8_t key_id[32], const uint8_t manifest_sha[32],
+    const struct prc_update_request *request, struct update_bundle *bundle,
+    int recovery, const char *scratch) {
+    /* Existing physical-VT and authenticated remote callers retain strict
+     * installed catalog membership; only Settings supplies an offered record. */
+    return signed_update_bundle_policy_at(root, key_id, manifest_sha, request,
+        bundle, recovery, scratch, NULL);
+}
+
+static int signed_update_bundle_diagnostic(
+    const char *root, const uint8_t key_id[32], const uint8_t manifest_sha[32],
+    const struct prc_update_request *request, struct update_bundle *bundle, int recovery) {
+    return signed_update_bundle_at(root, key_id, manifest_sha, request, bundle,
+                                   recovery, PAOS_RESCUE_SCRATCH_DIR);
 }
 
 /* This effect never infers authority from a mounted filesystem name.  The
@@ -1574,6 +1722,119 @@ static int effect_lock(void) {
     return 0;
 }
 
+struct settings_transaction_gate {
+    struct prc_settings_update_authority authority;
+    struct prc_settings_update_broker broker;
+};
+
+static int settings_transaction_current(void *context, const uint8_t original[40]) {
+    const struct settings_transaction_gate *gate = context;
+    return !memcmp(original, gate->authority.original, 40) &&
+        gate->authority.current(gate->authority.context, original) == 1 &&
+        gate->broker.custody_current(gate->broker.context, original, 0) == 1;
+}
+
+static int settings_transaction_readonly(const struct settings_transaction_gate *gate) {
+    return gate->authority.current(gate->authority.context, gate->authority.original) == 1 &&
+        gate->broker.custody_current(gate->broker.context, gate->authority.original, 1) == 1;
+}
+
+/* Internal product engine entry, not a CLI or guest request handler. The native
+ * adapter must authenticate the isolated service and fence the verified ESP
+ * before constructing this private job. Backend qualification/completion is
+ * separate from this engine and its private worker-side adapter. */
+int prc_settings_update_transaction(struct prc_settings_update_job *job) {
+    unsigned expected = PRC_SETTINGS_NEW;
+    if (!job || !atomic_compare_exchange_strong_explicit(&job->phase, &expected,
+            PRC_SETTINGS_RUNNING, memory_order_acq_rel, memory_order_acquire)) return -1;
+    memset(&job->observation, 0, sizeof(job->observation));
+    const struct settings_transaction_gate gate = {job->authority, job->broker};
+    uint8_t key[32], manifest[32], offered[1024];
+    memcpy(key, job->owner_key_id, sizeof(key));
+    memcpy(manifest, job->current_manifest_sha256, sizeof(manifest));
+    memcpy(offered, job->original_feed, sizeof(offered));
+    char root[512], scratch[512], candidate[512], successor[512];
+    int source = -1, locked = 0, imported = 0, rw_attempted = 0, result = -1;
+    unsigned stage = 0;
+    int ro = 0;
+    struct stat file;
+    struct prc_update_request request = {0};
+    struct update_bundle bundle = {0}, rechecked = {0};
+    const uint8_t *original = gate.authority.original;
+    const int seals = F_SEAL_SEAL | F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK;
+    if (!gate.authority.current || !gate.broker.custody_current || !gate.broker.set_readonly ||
+        !le64(original) || le32(original + 8) != 2 || le32(original + 12) != 1 ||
+        !le64(original + 16) || !le64(original + 24) || !le64(original + 32) ||
+        !job->esp_root || !job->scratch ||
+        strnlen(job->esp_root, sizeof(root)) == sizeof(root) ||
+        strnlen(job->scratch, sizeof(scratch)) == sizeof(scratch)) goto done;
+    strcpy(root, job->esp_root); strcpy(scratch, job->scratch);
+    if (snprintf(candidate, sizeof(candidate), "%s/paos-rescue.candidate", scratch) >= (int)sizeof(candidate) ||
+        snprintf(successor, sizeof(successor), "%s/paos-rescue.successor", scratch) >= (int)sizeof(successor) ||
+        (source = fcntl(job->bundle_fd, F_DUPFD_CLOEXEC, 3)) < 0 ||
+        fstat(source, &file) || !S_ISREG(file.st_mode) ||
+        file.st_size < 1536 || file.st_size > 67108864 + 1024) goto done;
+    int observed_seals = fcntl(source, F_GET_SEALS);
+    if (observed_seals < 0 || (observed_seals & seals) != seals ||
+        !settings_transaction_readonly(&gate) || effect_lock()) goto done;
+    locked = 1;
+    if (prc_stage_local_update(source, scratch, request.successor_sha256,
+            &request.candidate_size)) goto done;
+    imported = 1;
+    if (!settings_transaction_readonly(&gate) ||
+        signed_update_bundle_policy_at(root, key, manifest, &request, &bundle, 0, scratch, offered) ||
+        !settings_transaction_readonly(&gate) ||
+        signed_update_bundle_policy_at(root, key, manifest, &request, &rechecked, 0, scratch, offered) ||
+        memcmp(&bundle, &rechecked, sizeof(bundle)) ||
+        !settings_transaction_readonly(&gate)) goto done;
+    if (!SHA256(bundle.selected_state, sizeof(bundle.selected_state),
+                job->observation.selected_state_sha256) ||
+        !SHA256(bundle.successor, sizeof(bundle.successor),
+                job->observation.successor_manifest_sha256)) goto done;
+    memcpy(job->observation.payload_sha256, bundle.plan.candidate_sha256, 32);
+    job->observation.flags |= PRC_SETTINGS_OBS_VERIFIED;
+    /* Even a failed remount may have changed the mount: restoration is always
+     * attempted, including after native revocation. Custody is never released. */
+    rw_attempted = 1;
+    job->observation.flags |= PRC_SETTINGS_OBS_RW_ATTEMPTED;
+    if (gate.broker.set_readonly(gate.broker.context, 0) != 1) goto done;
+    struct prc_settings_update_authority current = gate.authority;
+    current.current = settings_transaction_current;
+    current.context = (void *)&gate;
+    result = prc_commit_settings_channel_update(root, candidate, bundle.current,
+        bundle.successor, bundle.selected_state, bundle.selected_copy, &bundle.plan,
+        offered, &bundle.release, &current, &stage);
+    if (!result) job->observation.flags |= PRC_SETTINGS_OBS_WRITER_OK;
+done:
+    if (rw_attempted) {
+        ro = gate.broker.set_readonly(gate.broker.context, 1) == 1 &&
+            gate.broker.custody_current(gate.broker.context, original, 1) == 1;
+        if (ro) {
+            job->observation.flags |= PRC_SETTINGS_OBS_RO_RESTORED;
+            if (gate.authority.current(gate.authority.context, original) == 1)
+                job->observation.flags |= PRC_SETTINGS_OBS_FINAL_CURRENT;
+            else result = -1;
+        } else result = -1;
+    }
+    if (source >= 0) close(source);
+    if (imported) { (void)unlink(candidate); (void)unlink(successor); }
+    int uncertain = result && (stage || (rw_attempted && !ro));
+    if (locked) {
+        if (uncertain) {
+            /* Retain even across normal worker exit. Neither this job nor a
+             * reconstructed NEW job may repeat an uncertain publication.
+             * Qualified native reconciliation, not atexit, owns recovery. */
+            effect_guard_owned = 0;
+        } else effect_unlock();
+    }
+    job->completed_stage = stage;
+    job->readonly_restored = ro;
+    atomic_store_explicit(&job->phase, !result ? PRC_SETTINGS_STAGED :
+        (uncertain ? PRC_SETTINGS_UNCERTAIN : PRC_SETTINGS_REFUSED),
+        memory_order_release);
+    return result;
+}
+
 struct os_boot_selection {
     uint16_t number;
     size_t order_size, option_size;
@@ -1695,6 +1956,69 @@ static int local_choice_effect(const char *choice, const char *selected,
     return 2; /* Never retry or choose an alternate if reboot returns. */
 }
 
+/* Explicit physical VT update. The removable disk is only a read-only carrier;
+ * authority is the live signed route, owner successor and installed release
+ * policy. No network request, PCAR bypass, reboot or BootNext mutation. */
+static int local_update_effect(const char *selected, const uint8_t key_id[32],
+    const uint8_t manifest_sha[32], uint16_t boot) {
+    char sticks[PRC_REPORT_DISKS_MAX][64];
+    char scratch[] = PAOS_RESCUE_SCRATCH_DIR "/paos-local-update.XXXXXX";
+    char image[512], successor[512], observed[128], uuid[37];
+    int mounted = 0, directory = -1, source = -1, result = 2, private_created = 0;
+    unsigned stage = 0; uint16_t observed_boot = 0;
+    struct prc_update_request request = {0}; struct update_bundle bundle = {0}, rechecked = {0};
+    if (!local_vt_admitted() || exact_esp_mount("/mnt/esp", selected, 1) ||
+        prc_usb_sticks(sticks, PRC_REPORT_DISKS_MAX) != 1 ||
+        (mkdir(PAOS_RESCUE_REPORT_MOUNT, 0700) && errno != EEXIST) ||
+        prc_mount_stick_mode(sticks[0], 1)) goto done;
+    mounted = 1;
+    /* Open every path component without following links. FAT has no links, but
+     * the same rule also prevents a substituted mount directory escaping it. */
+    directory = open(PAOS_RESCUE_REPORT_MOUNT "/PaOS",
+        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (directory < 0 || (source = openat(directory, "update.pbu",
+        O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)) < 0 || !mkdtemp(scratch)) goto done;
+    private_created = 1;
+    if (prc_stage_local_update(source, scratch, request.successor_sha256,
+                               &request.candidate_size)) goto done;
+    close(source); source = -1; close(directory); directory = -1;
+    if (umount2(PAOS_RESCUE_REPORT_MOUNT, 0)) goto done;
+    mounted = 0;
+    if (snprintf(image, sizeof(image), "%s/paos-rescue.candidate", scratch) >= (int)sizeof(image) ||
+        snprintf(successor, sizeof(successor), "%s/paos-rescue.successor", scratch) >= (int)sizeof(successor) ||
+        signed_update_bundle_at("/mnt/esp", key_id, manifest_sha, &request, &bundle, 0, scratch) ||
+        !local_vt_admitted() || route_device("/sys/firmware/efi/efivars", "/sys/class/block",
+            observed, uuid, &observed_boot, NULL) || strcmp(selected, observed) || boot != observed_boot ||
+        exact_esp_mount("/mnt/esp", selected, 1) ||
+        signed_update_bundle_at("/mnt/esp", key_id, manifest_sha, &request, &rechecked, 0, scratch) ||
+        memcmp(&bundle, &rechecked, sizeof(bundle))) goto done;
+    int rw = remount_esp(selected, 0) == 0;
+    int changed = rw ? prc_commit_local_released_update("/mnt/esp", image, bundle.current,
+        bundle.successor, bundle.selected_state, bundle.selected_copy, &bundle.plan,
+        &bundle.release, 0, &stage) : -1;
+    int ro = remount_esp(selected, 1) == 0;
+    if (changed || !ro) {
+        fprintf(stderr, "PAOS_RESCUE_LOCAL_UPDATE_REFUSED stage=%u ro=%d ambiguous=%d no-retry=1\n",
+                stage, ro, stage != 0);
+        goto done;
+    }
+    printf("PAOS_RESCUE_LOCAL_UPDATE_ARMED_V1 active=%u inactive=%u stage=%u "
+           "esp=ro reboot=none [boot.v2.rescue.local-update-armed]\n",
+           bundle.plan.active_entry, bundle.plan.inactive_entry, stage);
+    result = 0;
+done:
+    if (source >= 0) close(source);
+    if (directory >= 0) close(directory);
+    if (mounted && umount2(PAOS_RESCUE_REPORT_MOUNT, 0)) result = 2;
+    if (private_created) {
+        snprintf(image, sizeof(image), "%s/paos-rescue.candidate", scratch);
+        snprintf(successor, sizeof(successor), "%s/paos-rescue.successor", scratch);
+        unlink(image); unlink(successor); rmdir(scratch);
+    }
+    if (result) fprintf(stderr, "PAOS_RESCUE_LOCAL_UPDATE_REFUSED stage=%u no-retry=1 reboot=none\n", stage);
+    return result;
+}
+
 /* Only called after signed op1 verification and successful PCAR consume.
  * Preserve the existing return policy and all slot/failure evidence; just
  * acknowledge the power gesture so its forced Rescue selection cannot loop. */
@@ -1730,11 +2054,11 @@ int main(int argc, char **argv) {
                           "/sys/firmware/efi/efivars", "/sys/class/block", NULL };
     if (argc >= 2 && !strcmp(argv[1], "--local-choice")) {
         if (argc != 3 || (strcmp(argv[2], "windows") && strcmp(argv[2], "linux") &&
-                          strcmp(argv[2], "rollback")) || !local_vt_admitted()) {
+                          strcmp(argv[2], "rollback") && strcmp(argv[2], "update")) || !local_vt_admitted()) {
             fprintf(stderr, "PAOS_RESCUE_LOCAL_REFUSED physical VT choice required\n");
             return 2;
         }
-        if (strcmp(argv[2], "rollback"))
+        if (strcmp(argv[2], "rollback") && strcmp(argv[2], "update"))
             return local_os_choice_effect(argv[2]);
         local_choice = argv[2];
         argc = 5; argv = local_args;
@@ -1766,10 +2090,14 @@ int main(int argc, char **argv) {
     }
     if (argc >= 2 && !strcmp(argv[1], "--maintenance-export")) {
         if (argc != 5) return 2;
-        return maintenance_failure_export(argv[2], argv[3], argv[4]);
+        return maintenance_failure_export(argv[2], argv[3], argv[4], 16);
     }
     if (argc == 3 && !strcmp(argv[1], "--maintenance-report"))
         return maintenance_failure_report(argv[2]);
+    if (argc == 3 && !strcmp(argv[1], "--maintenance-view"))
+        return maintenance_view(argv[2]);
+    if (argc == 4 && !strcmp(argv[1], "--maintenance-usb-export"))
+        return maintenance_usb_export(argv[2], argv[3]);
     if (argc == 3 && !strcmp(argv[1], "--failure-record"))
         return failure_records_report(argv[2], 0);
     if (argc == 3 && !strcmp(argv[1], "--crash-record"))
@@ -1899,6 +2227,8 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "PAOS_RESCUE_CHALLENGE_REFUSED replay or bounded challenge unavailable\n");
                 return 2;
             }
+            if (local_choice && !strcmp(local_choice, "update"))
+                return local_update_effect(selected, key_id, manifest_sha, route_boot);
             if (local_choice)
                 return local_choice_effect(local_choice, selected, manifest_sha, route_boot);
             uint64_t accepted = 0, floor = 0;
@@ -2194,7 +2524,9 @@ int main(int argc, char **argv) {
     beacon_progress(beacon, "console-flush-start");
     fflush(stdout);
     beacon_progress(beacon, "console-flush-done");
-    if (beacon) {
+    if (beacon && !PAOS_RESCUE_LAB_ANNOUNCE) {
+        puts("[PRESCUE] LAN announce is off in this build [boot.v2.rescue.beacon.off]");
+    } else if (beacon) {
         if (send_beacon(report)) {
             fprintf(stderr, "rescue beacon failed: %s\n", strerror(errno));
             return 1;

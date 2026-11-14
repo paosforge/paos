@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #define PRC_RELEASE_RECORD_SIZE 512
+#define PRC_RELEASE_FEED_SIZE 1024
 #define PRC_RELEASE_MAX_RECORDS 32
 #define PRC_RELEASE_MAX_REVOKED 32
 /* Built into the authenticated Rescue, not taken from ESP, request or PE.
@@ -57,4 +58,34 @@ int prc_release_installed_check_observed(const uint8_t payload_sha256[32], uint6
     const uint8_t current_sha256[32], uint64_t current_size,
     struct prc_release_result *result, const char **reason);
 void prc_release_installed_identity(uint8_t out[32]);
+/* Authentic current mapping for version-only Check requests. Like check's
+ * current operand, this does not admit a revoked payload as a candidate. */
+int prc_release_installed_current(const uint8_t payload_sha256[32],
+    uint64_t payload_size, struct prc_release_result *result);
+/* Future offered PRL1 is not required in the installed candidate catalog.
+ * The SAME installed SPKI/purpose/signature/floors/revocations and authenticated
+ * current mapping apply. Existing catalog lookup/check remain strict. Caller
+ * must retain original record and bind result to actual PBMF/payload before
+ * each effect; a caller-created result is not release authority. */
+int prc_release_offered_check(const struct prc_release_policy *,
+    const uint8_t record[PRC_RELEASE_RECORD_SIZE], const uint8_t current_sha256[32],
+    uint64_t current_size, struct prc_release_result *result);
+int prc_release_installed_offered_check(const uint8_t record[PRC_RELEASE_RECORD_SIZE],
+    const uint8_t current_sha256[32], uint64_t current_size,
+    struct prc_release_result *result);
+/* Pure feed predicate; production caller supplies ONLY installed selected
+ * channel and exact full-asset URL through update_channel_offer_check. Same
+ * installed key, distinct paos-update-channel-v1 purpose, original PRL1 record.
+ * Neither host routing nor a plain PRL1 authenticates channel membership. */
+int prc_release_installed_feed_check(const uint8_t feed[PRC_RELEASE_FEED_SIZE],
+    const char *channel, const char *asset_url, const uint8_t current_sha256[32],
+    uint64_t current_size, struct prc_release_result *result);
+/* Internal retained-current membership. NULL keeps exact original catalog
+ * behavior. Original512 is reauthenticated under INSTALLED policy; neither
+ * record nor result proves that payload is currently active. */
+int prc_release_installed_current_record(const uint8_t *record,
+    const uint8_t sha[32], uint64_t size, struct prc_release_result *);
+int prc_release_installed_feed_check_current(const uint8_t *current_record,
+    const uint8_t feed[1024], const char *channel, const char *asset_url,
+    const uint8_t current_sha[32], uint64_t current_size, struct prc_release_result *);
 #endif

@@ -1,7 +1,7 @@
 ;; MODULE gui/wm_pointer
 %include "core/abi/build_profile.inc"
 ;; LAYER 6
-;; EXPORTS wm_pointer_event, wm_pointer_act_ok, wm_pointer_last_btn_inj, wm_pointer_gesture_origin, wm_pointer_init, wm_pointer_wheel, wm_pointer_wheels, wm_pointer_last_intent, wm_pointer_resize_edges
+;; EXPORTS wm_pointer_origin, wm_pointer_event, wm_pointer_act_ok, wm_pointer_last_btn_inj, wm_pointer_gesture_origin, wm_pointer_init, wm_pointer_wheel, wm_pointer_wheels, wm_pointer_last_intent, wm_pointer_resize_edges
 ;; IMPORTS gui/calendar, gui/guest_desktop, gui/window, gui/chat_app, gui/window_mgmt, gui/taskbar, gui/widget, gui/widget_scalar_inputs, gui/widget_listview, gui/input_route, gui/widget_tabstrip, gui/widget_console_grid, dev/input/ps2, gui/guardian_indicator
 ;; CAPS
 ;; OWNER saga:gui_foundation_ladder

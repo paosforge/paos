@@ -1,6 +1,6 @@
 {
   "schema": "paos.f11.guest-runtime.v1",
-  "description": "Source-pinned x86_64 Ubuntu24.04 Python3.12.3 stdlib plus actual supervisor/worker imported extension and ELF dependency closure, busybox-static, ntfs-3g2022.10.3. Excludes Python tests/GUI/site/development trees; no package or initrd built. Explicit future package --out only. FS engine/wire pinned to whole-feature donor38c904f23da256fddf8fac3ef35e8d944304d9a4 (FSC1v2).",
+  "description": "Source-pinned x86_64 Ubuntu24.04 Python3.12.3 stdlib plus actual supervisor/worker imported extension and ELF dependency closure, busybox-static, ntfs-3g2022.10.3. Excludes Python tests/GUI/site/development trees; no package or initrd built. Explicit future package --out only. FS engine/wire pinned to whole-feature donor38c904f23da256fddf8fac3ef35e8d944304d9a4 (FSC1v2). Format F3 adds existing drive workers, FSC1v3 bridge, four mkfs tools and blkid with local ELF closure. Socket/array are built into pinned Python. No built/loaded guest or runtime credit.",
   "runtime": [
     {
       "source": "/usr/bin/busybox",
@@ -3391,10 +3391,82 @@
       "destination": "/usr/lib/python3.12/zoneinfo/_zoneinfo.py",
       "sha256": "ebb9b679519a23252eb90541003a2fdbb3f2d7bc36713fd70672baa575dcdcb6",
       "mode": 420
+    },
+    {
+      "source": "/usr/sbin/mkfs.fat",
+      "destination": "/usr/sbin/mkfs.fat",
+      "sha256": "46e35f0cfe7ad5e63080dee3ed9a7e775950b1aca27246478b894704fef0065c",
+      "mode": 493
+    },
+    {
+      "source": "/usr/sbin/mkfs.exfat",
+      "destination": "/usr/sbin/mkfs.exfat",
+      "sha256": "e7d914063da45bad5e2c03b8638d205f40ae0092c1868ae9bd1d7a114639119a",
+      "mode": 493
+    },
+    {
+      "source": "/usr/sbin/mkntfs",
+      "destination": "/usr/sbin/mkfs.ntfs",
+      "sha256": "8aa3aba21d0101267a0efb83d53bf3d4be2875f04aaf4dc2a28032abae301096",
+      "mode": 493
+    },
+    {
+      "source": "/usr/sbin/mke2fs",
+      "destination": "/usr/sbin/mkfs.ext4",
+      "sha256": "07cd24ce58a410cc9cee93c55ae5ac95986df016c5907dc7a49b55389bd41ed2",
+      "mode": 493
+    },
+    {
+      "source": "/usr/lib/x86_64-linux-gnu/libext2fs.so.2.4",
+      "destination": "/lib/x86_64-linux-gnu/libext2fs.so.2",
+      "sha256": "4b03abd4f5ec8a5d7519d34931feaa39ca73b21e6946f90b328e67e0cf95ed72",
+      "mode": 420
+    },
+    {
+      "source": "/usr/lib/x86_64-linux-gnu/libcom_err.so.2.1",
+      "destination": "/lib/x86_64-linux-gnu/libcom_err.so.2",
+      "sha256": "022943b3b11c860b049bce41342f1c2594941b7b401d95dfdf235521099fee08",
+      "mode": 420
+    },
+    {
+      "source": "/usr/lib/x86_64-linux-gnu/libblkid.so.1.1.0",
+      "destination": "/lib/x86_64-linux-gnu/libblkid.so.1",
+      "sha256": "9c3860ffab5422410ff9e073d3e82267f00bc68ff1248cbb191640ee2ff045bc",
+      "mode": 420
+    },
+    {
+      "source": "/usr/lib/x86_64-linux-gnu/libuuid.so.1.3.0",
+      "destination": "/lib/x86_64-linux-gnu/libuuid.so.1",
+      "sha256": "78d7f4d6f27b7dffc1c84dfe2f83e84aefa6f6ceeffc6ac4bc41f9fbc61cb84e",
+      "mode": 420
+    },
+    {
+      "source": "/usr/lib/x86_64-linux-gnu/libe2p.so.2.3",
+      "destination": "/lib/x86_64-linux-gnu/libe2p.so.2",
+      "sha256": "471a02b06797769a6d0e11a59c138074985f56d1ec62dfcbe2feb00a31f37c28",
+      "mode": 420
+    },
+    {
+      "source": "/usr/sbin/blkid",
+      "destination": "/usr/sbin/blkid",
+      "sha256": "0d7e7a3e410b59848f0e36cacae29b94bcdb362f120dd9ab9ce4d51baf999a10",
+      "mode": 493
     }
   ],
   "services": {
     "guest_filesystem_copy.py": "0e8dfcdcda8b7402c5533655c746a4c547ac2491a369b7a4368302ea0bb64dc4",
-    "guest_filesystem_copy_wire.py": "d23e01f83c8a2e3c7ba3bd88fe3f3ce3524eb0af247de6e8bbae6d4a156b9988"
+    "guest_filesystem_copy_wire.py": "d23e01f83c8a2e3c7ba3bd88fe3f3ce3524eb0af247de6e8bbae6d4a156b9988",
+    "guest_filesystem_format_wire.py": "cff9b613f1c6155d9f321594b71405e24acb9db43c2c7acb34807d2ff6aa14d4",
+    "guest_drive_jobs.py": "822d252e64f87936b1d05cd1a9b4abaefdeb000d4c55dd2f4c5d0333c19570e1",
+    "guest_drive_cancel.py": "da255bff5aba2e04e30ce0cbb02394f081f0ec9180b3c947e096e59b34ae5a77",
+    "guest_drive_service.py": "7c53ff1e62312d370d845e88881a0c47f889ac92295854b47d42f7e90eefd2ee",
+    "guest_drive_health.py": "1b690daa07674dbbdbb8e7d4609868b0cc1e06a1acfa6b823b039c336e3879e2",
+    "guest_drive_check.py": "4ffef19e08381e0cbe1a5cec5582c117bac73ec3c9ce28c58095e56c41113f3c",
+    "guest_drive_space.py": "cbf259963ca0bdcca859e501c534c26b532e55b0b807424c8b1cfa9a3afa039b",
+    "guest_drive_probe.py": "3a9d309118a77fcb20b1be75e8ff993d82018db8aab8474bb8e6a401b61fcce7",
+    "guest_drive_layout.py": "e6ff5262e96c978ac566dceebb5e31dfd58f901eba9f4fdf28e41ad6b4a3fa0e",
+    "guest_drive_rename.py": "a570a3993a11bbe9d1c1e0fdbebabb0342484b681f5d06f9f479a5741add11d6",
+    "guest_drive_format.py": "c3cc42d34a7b97610a692cc570b3825f5f6f7f79eb53123791168f7a1e9b7bb6",
+    "guest_drive_format_dispatch.py": "56edd1db0c5588cdf7335d2de211dd8bd461ea59f075c0d81bef21a967e28be3"
   }
 }

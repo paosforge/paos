@@ -125,7 +125,7 @@ AX_TX_PAD_FLAG        equ 0x80008000    ; hdr dword1: chip pads when (len+8) % m
 ; populated), like cdc_ecm / hid. Degrade-never-wedge: no dongle -> skip marker.
 ; ============================================================================
 ax88179_selftest:
-    NATIVE_DRIVER_REFUSE 6, 0
+    NATIVE_DRIVER_REFUSE 10, 0
     push rbx
     push r12
     push r13
@@ -296,64 +296,130 @@ ax_read_config_desc:
     call rax
     ret
 
-; ax_walk_config(R12=len) -> RAX=1 if both bulk endpoints found; fills config +
-; in_ep/out_ep + the two endpoint-descriptor copies. AX88179 has ONE data
-; interface with a bulk IN + bulk OUT (+ an interrupt EP we ignore for v1).
+; ax_walk_config(R12=fresh actual count) -> RAX=1 for a complete supported
+; configuration. Validate the whole declared span before bind/rebind effects;
+; stale suffix bytes never authorize a field or a seven-byte endpoint copy.
+; Legacy AX uses one interface, default alternate zero. Other alternates may
+; be described but cannot contribute endpoints (we never SET_INTERFACE here).
 ax_walk_config:
     push rbx
+    push r13
     push r14
-    mov  byte [rel ax_in_ep], 0
-    mov  byte [rel ax_out_ep], 0
-    mov  byte [rel ax_in_ep_valid], 0
-    mov  byte [rel ax_out_ep_valid], 0
-    lea  rbx, [rel ax_cfgbuf]
-    movzx eax, byte [rbx + 5]                 ; bConfigurationValue
-    mov  [rel ax_config], al
-    lea  r14, [rbx + r12]
+    push r15
+    xor r13d,r13d                            ; 0=no interface,1=alt0,2=other alt
+    call .clear
+    cmp r12,9
+    jb .invalid
+    cmp r12,AX_CFGBUF_SZ
+    ja .invalid
+    lea rbx,[rel ax_cfgbuf]
+    cmp byte [rbx],9
+    jne .invalid
+    cmp byte [rbx+1],AX_DT_CONFIG
+    jne .invalid
+    cmp byte [rbx+4],1                        ; one supported interface
+    jne .invalid
+    cmp byte [rbx+5],0
+    je .invalid
+    movzx eax,word [rbx+2]
+    cmp eax,9
+    jb .invalid
+    cmp rax,r12
+    ja .invalid
+    lea r14,[rbx+rax]                        ; declared end, bounded by actual
+    add rbx,9
 .wl:
-    cmp  rbx, r14
-    jae  .done
-    movzx eax, byte [rbx]                      ; bLength
-    test eax, eax
-    jz   .done
-    movzx ecx, byte [rbx + 1]                  ; bDescriptorType
-    cmp  ecx, AX_DT_ENDPOINT
-    jne  .next
-    movzx edx, byte [rbx + 3]                  ; bmAttributes
-    and  edx, 0x03
-    cmp  edx, AX_XFER_BULK
-    jne  .next
-    movzx eax, byte [rbx + 2]                  ; bEndpointAddress
-    test al, AX_EP_IN
-    jz   .out
-    cmp  byte [rel ax_in_ep_valid], 1          ; first bulk IN wins
-    je   .next
-    mov  [rel ax_in_ep], al
-    mov  byte [rel ax_in_ep_valid], 1
-    lea  rdi, [rel ax_in_ep_desc]
+    cmp rbx,r14
+    je .done
+    mov rdx,r14
+    sub rdx,rbx
+    cmp rdx,2                               ; complete TLV header first
+    jb .invalid
+    movzx eax,byte [rbx]
+    cmp eax,2
+    jb .invalid
+    cmp rax,rdx                             ; complete record before type fields
+    ja .invalid
+    movzx ecx,byte [rbx+1]
+    cmp ecx,4                               ; INTERFACE
+    je .interface
+    cmp ecx,AX_DT_CONFIG                     ; no nested config/foreign tree
+    je .invalid
+    cmp ecx,AX_DT_ENDPOINT
+    jne .next
+    cmp eax,7                               ; all fields and copy are in record
+    jb .invalid
+    test r13d,r13d
+    jz .invalid
+    cmp r13d,1
+    jne .next                               ; no endpoints from other alternates
+    movzx edx,byte [rbx+3]
+    and edx,3
+    cmp edx,AX_XFER_BULK
+    jne .next
+    movzx eax,byte [rbx+2]
+    test al,AX_EP_IN
+    jz .out
+    cmp byte [rel ax_in_ep_valid],0
+    jne .invalid                            ; ambiguous duplicate bulk direction
+    mov [rel ax_in_ep],al
+    mov byte [rel ax_in_ep_valid],1
+    lea rdi,[rel ax_in_ep_desc]
     call ax_copy_ep
-    jmp  .next
+    jmp .next
 .out:
-    cmp  byte [rel ax_out_ep_valid], 1         ; first bulk OUT wins
-    je   .next
-    mov  [rel ax_out_ep], al
-    mov  byte [rel ax_out_ep_valid], 1
-    lea  rdi, [rel ax_out_ep_desc]
+    cmp byte [rel ax_out_ep_valid],0
+    jne .invalid
+    mov [rel ax_out_ep],al
+    mov byte [rel ax_out_ep_valid],1
+    lea rdi,[rel ax_out_ep_desc]
     call ax_copy_ep
+    jmp .next
+.interface:
+    cmp eax,9
+    jb .invalid
+    movzx edx,byte [rbx+2]
+    test r13d,r13d
+    jnz .alternate
+    cmp byte [rbx+3],0
+    jne .invalid
+    mov r15d,edx
+    mov r13d,1
+    jmp .next
+.alternate:
+    cmp edx,r15d
+    jne .invalid                            ; never pair different interfaces
+    cmp byte [rbx+3],0
+    je .invalid                             ; duplicate default interface
+    mov r13d,2
 .next:
-    movzx eax, byte [rbx]
-    add  rbx, rax
-    jmp  .wl
+    movzx eax,byte [rbx]
+    add rbx,rax
+    jmp .wl
 .done:
-    xor  eax, eax
-    cmp  byte [rel ax_in_ep_valid], 1
-    jne  .ret
-    cmp  byte [rel ax_out_ep_valid], 1
-    jne  .ret
-    mov  eax, 1
+    cmp byte [rel ax_in_ep_valid],1
+    jne .invalid
+    cmp byte [rel ax_out_ep_valid],1
+    jne .invalid
+    mov al,[rel ax_cfgbuf+5]
+    mov [rel ax_config],al
+    mov eax,1
+    jmp .ret
+.invalid:
+    call .clear
+    xor eax,eax
 .ret:
-    pop  r14
-    pop  rbx
+    pop r15
+    pop r14
+    pop r13
+    pop rbx
+    ret
+.clear:
+    mov byte [rel ax_config],0
+    mov byte [rel ax_in_ep],0
+    mov byte [rel ax_out_ep],0
+    mov byte [rel ax_in_ep_valid],0
+    mov byte [rel ax_out_ep_valid],0
     ret
 
 ax_copy_ep:
@@ -516,7 +582,7 @@ ax_read_phy_reg:
 ;  10 MEDIUM_MODE         11 PHY BMCR autoneg restart (ACCESS_PHY)
 ; ---------------------------------------------------------------------------
 ax_chip_init:
-    NATIVE_DRIVER_REFUSE 6
+    NATIVE_DRIVER_REFUSE 10
     push rbx
     mov  byte [rel ax_init_step], 0
     mov  byte [rel ax_init_fail], 0
@@ -765,7 +831,7 @@ ax88179_create:
     ret
 
 ax_init:
-    NATIVE_DRIVER_REFUSE 6
+    NATIVE_DRIVER_REFUSE 10
     xor  eax, eax
     ret
 ax_start:
@@ -1140,7 +1206,7 @@ ax_get_mac:
     AX_IO_WRAPPER ax_get_mac_owned,-1
 
 ax88179_lifecycle_poll:
-    NATIVE_DRIVER_REFUSE 6
+    NATIVE_DRIVER_REFUSE 10
     lock bts dword [rel ax_io_busy],0
     jc .out
     sub rsp,8

@@ -521,6 +521,337 @@ fb_blit_rgba_ref:
     pop  rax
     ret
 
+; fb_blit_rgba_over / fb_blit_rgba_over_ref (widgets-01 A5, ROOT 107385): the
+; fb_blit_rgba register contract, clipping and damage, composing straight
+; (non-premultiplied) canonical RGBA over the framebuffer. Per source pixel:
+; a=255 stores the repacked colour (no read); a=0 neither reads nor writes;
+; 0<a<255 reads that one destination pixel, inside the clipped rect, and
+; stores round((s*a + d*(255-a))/255) per channel with X=0. The elected path
+; divides by 255 as ((x+128)+((x+128)>>8))>>8, exact for x <= 65025; the
+; reference uses DIV. fb_blit_rgba keeps its opaque v1 semantics.
+fb_blit_rgba_over:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rdi
+    push rsi
+    push rbp
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+    mov  rbp, rdi
+    mov  ebx, esi
+    mov  r12d, r8d
+    mov  r13d, r9d
+    mov  r14d, r10d
+    mov  r15d, r11d
+    mov  rax, [rel fb_base]
+    test rax, rax
+    jz   .out
+    test r14d, r14d
+    jle  .out
+    test r15d, r15d
+    jle  .out
+    CADENCE_DRAW_CURRENT r8d, r9d, r10d, r11d
+    test r12d, r12d
+    jns  .clip_y
+    mov  eax, r12d
+    neg  eax
+    cmp  eax, r14d
+    jae  .out
+    lea  rbp, [rbp + rax*4]
+    sub  r14d, eax
+    xor  r12d, r12d
+.clip_y:
+    test r13d, r13d
+    jns  .clip_right
+    mov  eax, r13d
+    neg  eax
+    cmp  eax, r15d
+    jae  .out
+    mov  edx, ebx
+    imul rdx, rax                      ; clipped source rows retain the full pixel offset
+    lea  rbp, [rbp + rdx*4]
+    sub  r15d, eax
+    xor  r13d, r13d
+.clip_right:
+    mov  eax, [rel fb_width]
+    sub  eax, r12d
+    jle  .out
+    cmp  r14d, eax
+    cmova r14d, eax
+    mov  eax, [rel fb_height]
+    sub  eax, r13d
+    jle  .out
+    cmp  r15d, eax
+    cmova r15d, eax
+    xor  ecx, ecx
+.row:
+    cmp  ecx, r15d
+    jae  .damage
+    mov  eax, ecx
+    imul rax, rbx                      ; source stride is unsigned32; product is full64
+    lea  rsi, [rbp + rax*4]
+    mov  eax, r13d
+    add  rax, rcx
+    mov  edx, [rel fb_stride]
+    imul rax, rdx                      ; match the full64 presenter/cursor row addressing
+    add  rax, r12
+    mov  rdi, [rel fb_base]
+    lea  rdi, [rdi + rax*4]
+    push rcx                           ; ECX is channel scratch inside the row
+    mov  edx, r14d
+.pixel:
+    mov  r10d, [rsi]
+    cmp  r10d, 0xFF000000
+    jae  .store                        ; a=255: opaque, no framebuffer read
+    cmp  r10d, 0x01000000
+    jb   .skip                         ; a=0: no read, no write
+    mov  r8d, r10d
+    shr  r8d, 24                       ; a
+    mov  r9d, 255
+    sub  r9d, r8d                      ; 255-a
+    mov  r11d, [rdi]                   ; the one destination read, [B,G,R,X]
+%assign fb_over_sh 16                  ; B, G, R come from source bits 16, 8, 0
+%rep 3
+    movzx ecx, r11b                    ; destination channel in the low byte
+    imul ecx, r9d
+    mov  eax, r10d
+    shr  eax, fb_over_sh
+    movzx eax, al
+    imul eax, r8d
+    add  eax, ecx
+    add  eax, 128
+    mov  ecx, eax
+    shr  ecx, 8
+    add  eax, ecx
+    shr  eax, 8                        ; round(x/255)
+    mov  r11b, al
+    ror  r11d, 8                       ; next destination channel to the low byte
+%assign fb_over_sh fb_over_sh-8
+%endrep
+    ror  r11d, 8                       ; four rotations: channels back in place
+    and  r11d, 0x00FFFFFF
+    mov  [rdi], r11d
+    jmp  .skip
+.store:
+    mov  eax, r10d
+    and  eax, 0x00FFFFFF
+    bswap eax
+    shr  eax, 8
+    mov  [rdi], eax
+.skip:
+    add  rsi, 4
+    add  rdi, 4
+    dec  edx
+    jnz  .pixel
+    pop  rcx
+    inc  ecx
+    jmp  .row
+.out:
+    xor  r14d, r14d
+.damage:
+    mov  r8d, r12d
+    mov  r9d, r13d
+    mov  r10d, r14d
+    mov  r11d, r15d
+    call fb_damage_rect
+    pop  r15
+    pop  r14
+    pop  r13
+    pop  r12
+    pop  r11
+    pop  r10
+    pop  r9
+    pop  r8
+    pop  rbp
+    pop  rsi
+    pop  rdi
+    pop  rdx
+    pop  rcx
+    pop  rbx
+    pop  rax
+    ret
+
+fb_blit_rgba_over_ref:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rdi
+    push rsi
+    push rbp
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+    mov  rbp, rdi
+    mov  ebx, esi
+    mov  r12d, r8d
+    mov  r13d, r9d
+    mov  r14d, r10d
+    mov  r15d, r11d
+    mov  rax, [rel fb_base]
+    test rax, rax
+    jz   .out
+    test r14d, r14d
+    jle  .out
+    test r15d, r15d
+    jle  .out
+    test r12d, r12d
+    jns  .clip_y
+    mov  eax, r12d
+    neg  eax
+    cmp  eax, r14d
+    jae  .out
+    lea  rbp, [rbp + rax*4]
+    sub  r14d, eax
+    xor  r12d, r12d
+.clip_y:
+    test r13d, r13d
+    jns  .clip_right
+    mov  eax, r13d
+    neg  eax
+    cmp  eax, r15d
+    jae  .out
+    mov  edx, ebx
+    imul rdx, rax
+    lea  rbp, [rbp + rdx*4]
+    sub  r15d, eax
+    xor  r13d, r13d
+.clip_right:
+    mov  eax, [rel fb_width]
+    sub  eax, r12d
+    jle  .out
+    cmp  r14d, eax
+    cmova r14d, eax
+    mov  eax, [rel fb_height]
+    sub  eax, r13d
+    jle  .out
+    cmp  r15d, eax
+    cmova r15d, eax
+    xor  ecx, ecx
+.row:
+    cmp  ecx, r15d
+    jae  .damage
+    mov  eax, ecx
+    imul rax, rbx
+    lea  rsi, [rbp + rax*4]
+    mov  eax, r13d
+    add  rax, rcx
+    mov  edx, [rel fb_stride]
+    imul rax, rdx
+    add  rax, r12
+    mov  rdi, [rel fb_base]
+    lea  rdi, [rdi + rax*4]
+    push rcx
+    xor  r8d, r8d                      ; pixel index
+.pixel:
+    cmp  r8d, r14d
+    jae  .next
+    mov  r10d, [rsi + r8*4]
+    mov  r9d, r10d
+    shr  r9d, 24                       ; a
+    jz   .advance
+    cmp  r9d, 255
+    jne  .blend
+    mov  eax, r10d
+    and  eax, 0x00FFFFFF
+    bswap eax
+    shr  eax, 8
+    mov  [rdi + r8*4], eax
+    jmp  .advance
+.blend:
+    mov  r11d, [rdi + r8*4]
+%assign fb_over_ref_dst 0              ; destination byte 0, 1, 2 = B, G, R
+%rep 3
+    mov  eax, r10d
+    shr  eax, 16 - fb_over_ref_dst*8   ; source R/G/B byte for that channel
+    and  eax, 255
+    imul eax, r9d                      ; s*a
+    mov  edx, r11d
+    shr  edx, fb_over_ref_dst*8
+    and  edx, 255
+    mov  ecx, 255
+    sub  ecx, r9d
+    imul edx, ecx                      ; d*(255-a)
+    add  eax, edx
+    add  eax, 127
+    xor  edx, edx
+    mov  ecx, 255
+    div  ecx
+    mov  [rdi + r8*4 + fb_over_ref_dst], al
+%assign fb_over_ref_dst fb_over_ref_dst+1
+%endrep
+    mov  byte [rdi + r8*4 + 3], 0
+.advance:
+    inc  r8d
+    jmp  .pixel
+.next:
+    pop  rcx
+    inc  ecx
+    jmp  .row
+.out:
+    xor  r14d, r14d
+.damage:
+    mov  r8d, r12d
+    mov  r9d, r13d
+    mov  r10d, r14d
+    mov  r11d, r15d
+    call fb_damage_rect
+    pop  r15
+    pop  r14
+    pop  r13
+    pop  r12
+    pop  r11
+    pop  r10
+    pop  r9
+    pop  r8
+    pop  rbp
+    pop  rsi
+    pop  rdi
+    pop  rdx
+    pop  rcx
+    pop  rbx
+    pop  rax
+    ret
+
+; PERF fn=fb_blit_rgba_over (ROOT 107385 (3)): median cycles of RDI (an over
+; blit) on fb_blit_perf_med's 64x64 off-screen RAM raster, with every source
+; pixel on the blend path. XOR 0x7F on each alpha byte maps the declared opaque
+; raster (0xFF332211) to a=0x80 and back exactly, so the opaque PERF rows and the
+; boot KAT see unchanged bytes. -> EAX as fb_blit_perf_med.
+fb_blit_over_perf_med:
+    call .flip
+    call fb_blit_perf_med
+.flip:
+    push rcx
+    push rdx
+    mov  rdx, [rel fb_blit_scratch]
+    test rdx, rdx
+    jz   .flipped                        ; fb_blit_perf_med reports the absence
+    lea  rdx, [rdx + GEOMKAT_PIX*4*2 + 3]
+    mov  ecx, 64*64
+.flip_px:
+    xor  byte [rdx], 0x7F
+    add  rdx, 4
+    dec  ecx
+    jnz  .flip_px
+.flipped:
+    pop  rdx
+    pop  rcx
+    ret
+
 ; First use is check-then-kmalloc without a lock: safe while every caller runs in the one GUI
 ; context on the BSP (frame/app tick, never an interrupt handler). A caller on a second CPU or in
 ; interrupt context could see 0 concurrently and allocate twice (one block leaks, two users see

@@ -38,6 +38,8 @@ cmd_verb_axstat:
     jne .bad
     lea rdi,[rel axstat_snapshot]
     call ax88179_observation_snapshot
+    call usb_nic_bound_backend          ; ROOT109541 (a): which USB NIC backends are bound
+    mov [rel axstat_snapshot+84],eax    ; the snapshot's reserved dword
     call tcpdiag_out_reset
     lea rdi,[rel str_axstat_prefix]
     call tcpdiag_out_text
@@ -81,7 +83,10 @@ axstat_snapshot: times 88 db 0
 str_verb_axstat: db 'AXSTAT',0
 str_axstat_prefix: db ' AXSTAT rev=1 nonce=',0
 ; Fixed labels <=15 bytes plus NUL, each record exactly20 bytes. Worst case
-; all integers at their maximum is <560 bytes including prefix+nonce (640B rail).
+; all integers at their maximum is <590 bytes including prefix+nonce (640B rail).
+; present..port describe the legacy ax88179 only; usb_backends is the bound
+; USB NIC backend mask (bit5 ax88179, bit6 ax88179b, bit7 cdc_ecm, bit8 cdc_ncm,
+; the BINDUSB backend ids), so a bound newer AX reads present=0 usb_backends=64.
 %macro AXSTAT_FIELD 2
     dd %1
 %%label: db %2,0
@@ -107,5 +112,6 @@ axstat_fields:
     AXSTAT_FIELD 72, ' vidpid='
     AXSTAT_FIELD 76, ' bcd='
     AXSTAT_FIELD 80, ' port='
+    AXSTAT_FIELD 84, ' usb_backends='
     dd -1
 %unmacro AXSTAT_FIELD 2

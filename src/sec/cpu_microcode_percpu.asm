@@ -26,10 +26,18 @@ MCP_BEFORE equ 80                     ; independent full CSS
 MCP_AFTER equ 192                     ; fresh full CSS, never before copied
 MCP_IO equ 304                        ; bounded caller-owned CIO transcript
 MCP_APPLY equ 1376                    ; independent MCA completion flags
+; Additive private tail, original result/CSS/CIO/apply ABI remains fixed.
+MCP_COST_CPU equ 1408
+MCP_COST_PROFILE equ 1412
+MCP_COST_OP equ 1416                  ; 0 no branch,1 checked apply,2 current readback
+MCP_COST_VALID equ 1420               ; both local timestamps published
+MCP_COST_START equ 1424
+MCP_COST_END equ 1432
+MCP_COST_VERSION equ 1440
 MCP_SKIPPED equ 4                     ; Safe/Rescue: no CPUID/MSR/update I/O
 MCP_E_OWNER equ -21
 MCP_E_POST equ -22
-%if MCP_APPLY + MCA_SIZE > MCP_STRIDE
+%if MCP_APPLY + MCA_SIZE > MCP_COST_CPU || MCP_COST_VERSION + 4 > MCP_STRIDE
     %error "per CPU microcode record overflow"
 %endif
 
@@ -53,9 +61,15 @@ cpu_microcode_percpu_early:
     lock cmpxchg dword [rbx + MCP_READY],edx
     jne .existing
     mov [rbx + MCP_APIC],r14d
+    mov [rbx + MCP_COST_CPU],edi
+    movzx eax,byte [rel pbm_profile]
+    mov [rbx + MCP_COST_PROFILE],eax
+    mov dword [rbx + MCP_COST_VERSION],1
     mov dword [rbx + MCP_RESULT],MCP_SKIPPED
     cmp byte [rel pbm_profile],PBM_PROFILE_NORMAL
-    jne .publish                      ; Safe/Rescue do not even sample
+    jne .publish                      ; Safe/Rescue do not even sample/TSC
+    lea rdi,[rbx + MCP_COST_START]
+    call cpu_microcode_percpu_stamp
     lea rdi,[rbx + MCP_IO]
     mov esi,r14d
     call cpu_checked_io_init
@@ -146,6 +160,7 @@ cpu_microcode_percpu_early:
     lea rax,[rbx + MCP_AFTER]
     mov [rbx + MCP_APPLY + MCA_POST],rax
     lea r9,[rbx + MCP_APPLY]
+    mov dword [rbx + MCP_COST_OP],1
     call cpu_microcode_apply_checked
     mov [rbx + MCP_RESULT],eax
     mov eax,[rbx + MCP_APPLY + MCA_LOAD_MATCH]
@@ -154,6 +169,7 @@ cpu_microcode_percpu_early:
     mov [rbx + MCP_POST_VALID],eax
     jmp .unlock
 .current:
+    mov dword [rbx + MCP_COST_OP],2
     ; No newer selection still requires an independent checked local readback.
     ; No update trigger, raw fallback or copied firmware sample is permitted.
     mov dword [rbx + MCP_IO + CIO_PHASE],4
@@ -189,6 +205,12 @@ cpu_microcode_percpu_early:
 .unlock:
     mov dword [rel cpu_microcode_percpu_lock],0
 .publish:
+    cmp qword [rbx + MCP_COST_START],0
+    je .publish_ready
+    lea rdi,[rbx + MCP_COST_END]
+    call cpu_microcode_percpu_stamp
+    mov dword [rbx + MCP_COST_VALID],1
+.publish_ready:
     ; WB stores publish all observations before READY. Never rewritten this boot.
     mov dword [rbx + MCP_READY],1
     mov eax,[rbx + MCP_RESULT]
@@ -211,6 +233,24 @@ cpu_microcode_percpu_early:
     ret
 .bad:
     mov eax,MC_E_ARGS
+    ret
+
+; RDI private qword destination. Same-CPU elapsed TSC only; never converted
+; with BSP rate/origin. No CPUID/MSR, exception slot, IF or policy changes.
+; Preserve live RAX/EDX/flags across both original-path call sites.
+cpu_microcode_percpu_stamp:
+    pushfq
+    push rax
+    push rdx
+    lfence
+    rdtsc
+    lfence
+    shl rdx,32
+    or rax,rdx
+    mov [rdi],rax
+    pop rdx
+    pop rax
+    popfq
     ret
 
 ; EDI dense logical, ESI expected full APIC -> immutable MCP_STRIDE record or0.

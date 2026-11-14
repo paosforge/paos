@@ -1,0 +1,77 @@
+{
+  "schema": "paos.sdk-script-icon-output-pins.v1",
+  "development_only": true,
+  "author_key_id": "175aef62fd77714aecf6b62a72c5e531",
+  "files": {
+    "install48.pax": {
+      "bytes": 3006,
+      "sha256": "93c53170d15e2e064bb295087f92591c1b6faf9d1d11f8ed3ac9dfbbeb159a59",
+      "expected": "checked program/data; native authority required"
+    },
+    "install96.pax": {
+      "bytes": 3396,
+      "sha256": "4f8b5aa0371e0d434849b5eb6efc9a33854ee2ea3e6b5f88294cda6b3c1f9a95",
+      "expected": "checked program/data; native authority required"
+    },
+    "installnone.pax": {
+      "bytes": 2373,
+      "sha256": "3c4c16d4b0cda78cc1030238b1424fa7a1c8684fa2436e5a7f0b7c8fb9608e6e",
+      "expected": "checked program/data; native authority required"
+    },
+    "runtime48.pax": {
+      "bytes": 2462,
+      "sha256": "a82addd1e1984e30b39ebd4682ccfea1224b7ab2d4c3b8cca941d7193d6bab9a",
+      "expected": "checked program/data; native authority required"
+    },
+    "runtime96.pax": {
+      "bytes": 2852,
+      "sha256": "891e142a47155fdeb8acc5fc874e15cc23166dbc32a69777fc02cb9d6ef61673",
+      "expected": "checked program/data; native authority required"
+    },
+    "runtimenone.pax": {
+      "bytes": 1829,
+      "sha256": "99ad2562ca17f92cd95e1173252585c496ad358efa2bf9a6d243ec6a55370d0d",
+      "expected": "checked program/data; native authority required"
+    },
+    "wrong48.pax": {
+      "bytes": 2462,
+      "sha256": "9e76e1602b3873295aa3e4ba9d1dbd0eaf72f7a5e070a8ad87b2934aeb44d850",
+      "expected": "refuse content"
+    },
+    "missingcredits.pax": {
+      "bytes": 2462,
+      "sha256": "f2e47baa0137f2332c0072797b2661f3efad2026a26dcf8d73f9171f899063d3",
+      "expected": "refuse content"
+    }
+  },
+  "inputs": {
+    "dev-public.pem": {
+      "bytes": 451,
+      "sha256": "bb9ccf41f64dfaf835ce2e3dc43a691a630107721193b0715e0618a6310e931e"
+    },
+    "main.sh": {
+      "bytes": 776,
+      "sha256": "01b94568de75ed5c243cd4a27713b4839b363d324ee6856ef4fca824f7dc567a"
+    },
+    "main.frm": {
+      "bytes": 233,
+      "sha256": "548fb17f84ec377720e723e8611adda28a1f778829398cace76d7aa972a92047"
+    },
+    "grants": {
+      "bytes": 4,
+      "sha256": "d5e2d2ac07b741be58f6b9e50ede5fdcf16f3e8053ecef9350e7744b0d8bd90c"
+    },
+    "icon.png": {
+      "bytes": 238,
+      "sha256": "1ee256ad5bed3bbff380d327325f9c3ba5116031296edfd5547c549a4f2e415a"
+    },
+    "icon@2x.png": {
+      "bytes": 310,
+      "sha256": "82766b3c39638f1c7d545cc02768fcfa62f41bceff57f28ece37673d4018bc0b"
+    },
+    "NOTICES.json": {
+      "bytes": 235,
+      "sha256": "1f44f03b0a987fceee3beb92c9befebb2d617ca8cdbc86ac924c5df34194975d"
+    }
+  }
+}

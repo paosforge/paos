@@ -1,7 +1,7 @@
 ;; MODULE svc/ssh_client
 ;; LAYER 5
-;; EXPORTS ssh_cli_replace_host, ssh_cli_profile_snapshot, ssh_cli_trust_host, ssh_cli_known_hosts_clear, ssh_cli_identity_enroll, ssh_session_begin, ssh_session_use, ssh_session_end, ssh_sessions_poll, ssh_sess_active, ssh_client_connect_start, ssh_client_disconnect, ssh_cli_poll, ssh_cli_state, ssh_cli_error, ssh_cli_chan_ready, ssh_cli_chan_closed, ssh_cli_data_sink, ssh_cli_enqueue_input, ssh_cli_send_window_change, ssh_cli_target_ip, ssh_cli_term_cols, ssh_cli_term_rows, ssh_cli_txq_len, ssh_cli_identity_text, ssh_cli_exit_kind, ssh_cli_exit_status, ssh_cli_exit_core, ssh_cli_exit_signal_len, ssh_cli_exit_message_len, ssh_cli_exit_language_len, ssh_cli_exit_signal, ssh_cli_exit_message, ssh_cli_exit_language, ssh_cli_request_failures, ssh_cli_want_close, ssh_cli_exec_configure, ssh_cli_is_exec, ssh_cli_exec_pending, ssh_cli_exec_configure_stream, ssh_cli_exec_handle, ssh_cli_exec_stdin, ssh_cli_exec_close_stdin, ssh_cli_exec_signal, ssh_cli_exec_status, ssh_cli_exec_cancel
-;; IMPORTS svc/ssh, net/tcp, net/arp_cache, core/csprng, core/heap, core/time, core/lib/mem, core/lib/sha256, core/lib/hmac_sha256, core/lib/hkdf_sha256, core/lib/x25519, core/lib/ed25519, core/lib/aes256_gcm, sec/principal, fs/storage_access, boot/nvram_access, boot/boot_v2_health, boot/header, boot/serial
+;; EXPORTS ssh_session_bind_deadlines, ssh_cli_fault_owner, ssh_cli_fault_status, ssh_cli_fault_arm, ssh_cli_fault_retire, ssh_cli_replace_host, ssh_cli_profile_snapshot, ssh_cli_trust_host, ssh_cli_known_hosts_clear, ssh_cli_identity_enroll, ssh_session_begin, ssh_session_use, ssh_session_end, ssh_sessions_poll, ssh_sess_active, ssh_client_connect_start, ssh_client_disconnect, ssh_cli_poll, ssh_cli_state, ssh_cli_error, ssh_cli_chan_ready, ssh_cli_chan_closed, ssh_cli_data_sink, ssh_cli_enqueue_input, ssh_cli_send_window_change, ssh_cli_target_ip, ssh_cli_term_cols, ssh_cli_term_rows, ssh_cli_txq_len, ssh_cli_identity_text, ssh_cli_exit_kind, ssh_cli_exit_status, ssh_cli_exit_core, ssh_cli_exit_signal_len, ssh_cli_exit_message_len, ssh_cli_exit_language_len, ssh_cli_exit_signal, ssh_cli_exit_message, ssh_cli_exit_language, ssh_cli_request_failures, ssh_cli_want_close, ssh_cli_exec_configure, ssh_cli_is_exec, ssh_cli_exec_pending, ssh_cli_exec_configure_stream, ssh_cli_exec_handle, ssh_cli_exec_stdin, ssh_cli_exec_close_stdin, ssh_cli_exec_signal, ssh_cli_exec_status, ssh_cli_exec_cancel
+;; IMPORTS svc/command, svc/command_auth, svc/ssh, net/tcp, net/arp_cache, core/csprng, core/heap, core/time, core/lib/mem, core/lib/sha256, core/lib/hmac_sha256, core/lib/hkdf_sha256, core/lib/x25519, core/lib/ed25519, core/lib/ssh_crypto_work, core/lib/aes256_gcm, sec/principal, fs/storage_access, boot/nvram_access, boot/boot_v2_health, boot/header, boot/serial
 ;; CAPS PMCAP_NET
 ;; OWNER saga:ssh_client
 ; ============================================================================
@@ -187,6 +187,8 @@ SSH_CID_ST_BOOT         equ 4           ; no runtime services: identity unavaila
 
 ; "ssh-ed25519 " + base64(51-byte public key blob: 68 chars) + " paos-client"
 SSH_CLI_ID_TEXT_LEN     equ 12 + 68 + 12
+
+%include "svc/ssh_profile_fault_lifecycle.inc"
 
 ; The expected prefixes of an ssh-ed25519 public key blob (32-byte key) and
 ; signature blob (64-byte signature): string("ssh-ed25519") || uint32 length.
@@ -431,6 +433,9 @@ ssh_client_connect_start:
     lea  rcx, [rel ssh_sess_busy]
     cmp  byte [rcx + rax], 0
     jne  .nosess                        ; a sink cannot redial over its live plaintext
+    lea  rcx, [rel ssh_sess_work_busy]
+    cmp  byte [rcx + rax], 0
+    jne  .nosess                        ; work/cleanup hold cannot be bypassed
     call ssh_cli_kh_load                ; RCQ-07b: known_hosts, read once at the first ssh use
     call ssh_cli_drop_tcb               ; a redial ends this session's own old tuple only
     mov  byte [rel ssh_cli_retiring], 0
@@ -445,6 +450,11 @@ ssh_client_connect_start:
     call ssh_cli_flow_reset
     mov  byte [rel ssh_cli_state], SSH_CLI_ST_IDLE
     mov  byte [rel ssh_cli_error], 0
+    ; Public, per-dial evidence only. Never reused across a new connection.
+    lea  rdi, [rel ssh_cli_key_check]
+    xor  eax, eax
+    mov  ecx, 6
+    rep  stosq
     mov  byte [rel ssh_cli_tcp_seen], 0
     mov  byte [rel ssh_cli_banner_seen], 0
     mov  byte [rel ssh_cli_kexinit_seen], 0
@@ -502,6 +512,18 @@ ssh_client_connect_start:
     call ssh_cli_build_kexinit
     test eax, eax
     jnz  .entropy
+    mov edi, [rel ssh_sess_active]
+    call ssh_cli_work_binding
+    mov r13, rax
+    call tcp_client_cookie_alloc
+    test rax, rax
+    jz .entropy
+    mov [r13 + 32], rax
+    mov qword [r13 + 16], 0
+    mov qword [r13 + 24], 0
+    mov qword [r13 + 40], 0
+    mov qword [r13 + 48], 0
+    mov qword [r13 + 56], 0
     mov  byte [rel ssh_cli_state], SSH_CLI_ST_TCP
     call ssh_cli_pick_port
     test eax, eax
@@ -512,7 +534,8 @@ ssh_client_connect_start:
     movzx esi, word [rel ssh_cli_target_port]
     lea  rcx, [rel ssh_cli_on_connected]
     lea  r8, [rel ssh_cli_on_receive]
-    call tcp_client_open
+    lea  r9, [r13 + 16]                  ; tracked pair published before callbacks
+    call tcp_client_open_tracked
     test rax, rax
     jz   .route
     mov  [rel ssh_cli_tcb], rax
@@ -588,9 +611,13 @@ ssh_client_disconnect:
     mov  eax, [rel ssh_sess_active]
     cmp  eax, SSH_SESS_MAX
     jae  .normal
+    lea  rcx, [rel ssh_sess_work_busy]
+    cmp  byte [rcx + rax], 0
+    jne  .work_deferred
     lea  rcx, [rel ssh_sess_busy]
     cmp  byte [rcx + rax], 0
     je   .normal
+.work_deferred:
     ; A sink may detach while still reading PLAIN. Neither seal into that
     ; buffer nor abort its callback-owned TCP tuple until it returns.
     cmp  byte [rel ssh_cli_close_sent], 1
@@ -661,6 +688,9 @@ ssh_cli_retire:
     mov  byte [rel ssh_cli_state], SSH_CLI_ST_FAILED
     mov  byte [rel ssh_cli_error], 21
 .revoke:
+    sub rsp, 8
+    call ssh_cli_work_cancel
+    add rsp, 8
     mov  byte [rel ssh_cli_retiring], 1
     mov  byte [rel ssh_cli_scrub_shared_pending], 1
     mov  byte [rel ssh_cli_owner_armed], 0
@@ -700,6 +730,9 @@ ssh_cli_retire_apply:
     lea  rax, [rel ssh_sess_busy]
     cmp  byte [rax + r12], 0
     jne  .out                           ; caller still owns heap/region plaintext
+    lea  rax, [rel ssh_sess_work_busy]
+    cmp  byte [rax + r12], 0
+    jne  .out                           ; private work still owns this heap/region
     cmp  byte [rel ssh_cli_retire_abort], 1
     jne  .slot
     mov  byte [rel ssh_cli_retire_abort], 0
@@ -782,6 +815,9 @@ ssh_cli_retire_apply:
 .consumer:
     cmp  byte [rax + rcx], 0
     jne  .out                           ; shared scratch may belong to another sink
+    lea  rdx, [rel ssh_sess_work_busy]
+    cmp  byte [rdx + rcx], 0
+    jne  .out
     inc  ecx
     cmp  ecx, SSH_SESS_MAX
     jb   .consumer
@@ -923,10 +959,30 @@ ssh_session_begin:
     jae  .full
     lea  rax, [rel ssh_sess_used]
     cmp  byte [rax + rbx], 0
-    je   .take
+    jne .occupied
+    lea rax, [rel ssh_sess_work_busy]
+    cmp byte [rax + rbx], 0
+    je .take
+.occupied:
     inc  ebx
     jmp  .find
 .take:
+    call tcp_client_cookie_alloc
+    test rax, rax
+    jz .full
+    push rax
+    mov edi, ebx
+    call ssh_cli_work_binding
+    mov rdi, rax
+    xor esi, esi
+    mov edx, 64
+    call memset
+    mov edi, ebx
+    call ssh_cli_work_binding
+    pop rdx
+    mov [rax], rbx
+    mov [rax + 8], rdx
+    lea rax, [rel ssh_sess_used]
     mov  byte [rax + rbx], 1
     call ssh_sess_park                  ; the region now belongs to the new session
     mov  ecx, ebx
@@ -1022,9 +1078,13 @@ ssh_cli_drop_tcb:
     mov  eax, [rel ssh_sess_active]
     cmp  eax, SSH_SESS_MAX
     jae  .abort
+    lea  rcx, [rel ssh_sess_work_busy]
+    cmp  byte [rcx + rax], 0
+    jne  .defer
     lea  rcx, [rel ssh_sess_busy]
     cmp  byte [rcx + rax], 0
     je   .abort
+.defer:
     mov  byte [rel ssh_cli_retire_abort], 1
     jmp  ssh_cli_retire
 .abort:
@@ -1139,6 +1199,9 @@ ssh_sessions_poll:
     lea  rax, [rel ssh_sess_busy]
     cmp  byte [rax + rbx], 0
     jne  .next                          ; a reentrant sink cannot free its live bytes
+    lea  rax, [rel ssh_sess_work_busy]
+    cmp  byte [rax + rbx], 0
+    jne  .next                          ; deferred compute has not actually returned
     lea  rax, [rel ssh_sess_used]
     movzx eax, byte [rax + rbx]
     test eax, eax
@@ -2102,6 +2165,25 @@ ssh_cli_gcm_send:
     call aes256_gcm_seal
     test eax, eax
     jnz  .bad
+    cmp byte [rel ssh_cli_work_busy], 1
+    jne .legacy_tuple
+    mov eax, [rel ssh_sess_active]
+    cmp eax, [rel ssh_cli_work_slot]
+    jne .legacy_tuple
+    ; USERAUTH's private work owns this original slot through GCM admission.
+    ; Recheck original D/service bound/authority after sealing; TCP validates
+    ; incarnation atomically with enqueue before a provisional result is sent.
+    call ssh_cli_work_current
+    test eax, eax
+    jnz .dead
+    mov rdi, [rel ssh_cli_work_snapshot + 16]
+    mov rsi, [rel ssh_cli_work_snapshot + 24]
+    lea rdx, [rbx + SSH_C_OUT]
+    lea ecx, [r13d + r14d + 21]
+    mov r8d, 1
+    call tcp_client_epoch_io
+    jmp .tuple_result
+.legacy_tuple:
     call ssh_cli_tcb_owned              ; hub tcp_client_send: -1 is backpressure OR a dead tuple
     test rdi, rdi
     jz   .dead
@@ -2110,6 +2192,7 @@ ssh_cli_gcm_send:
     lea  edx, [r13d + r14d + 21]
     lea  rsi, [rbx + SSH_C_OUT]
     call tcp_client_send
+.tuple_result:
     ; tcp_send keeps exactly one segment in flight: on backpressure (-1) NOTHING
     ; was queued, so DON'T burn the GCM nonce — the caller re-seals + retries.
     test rax, rax
@@ -2256,11 +2339,23 @@ ssh_cli_send_service_request:
 ; A refused identity (not an owner session, not verified) fails the session
 ; with its typed error (16, 17) instead of retrying.
 ssh_cli_send_userauth:
+    ; Count entry attempts, including guard refusals. Saturation cannot wrap to
+    ; zero; zero proves this dial never entered USERAUTH, not just never sent it.
+    cmp  qword [rel ssh_cli_userauth_calls], -1
+    je   .entry_observed
+    inc  qword [rel ssh_cli_userauth_calls]
+.entry_observed:
     push rbx
     push r12
     push r13
     push r14
+    push r15
     mov  rbx, rdi
+    mov  r15d, [rel ssh_sess_active]
+    mov  edi, r15d
+    call ssh_cli_work_begin
+    test eax, eax
+    jnz  .work_busy
     call ssh_cli_kh_admission_current
     test eax, eax
     jnz  .trust_refused
@@ -2343,20 +2438,10 @@ ssh_cli_send_userauth:
     lea  rsi, [rel ssh_cli_authcore]
     mov  edx, r14d
     call memcpy
-    call ssh_cli_identity_seed                    ; RAX = the signing seed, or a refusal (< 0)
-    test rax, rax
-    js   .id_refused
-    mov  rdi, rax                                 ; ed25519_sign(seed,32, signbuf, r14+36, sig64,64)
-    mov  esi, 32
-    lea  rdx, [rel ssh_cli_signbuf]
-    lea  ecx, [r14d + 36]
-    lea  r8, [rel ssh_cli_sig64]
-    mov  r9d, 64
-    call ed25519_sign
-    mov  r14d, eax
-    call ssh_cli_identity_seed_done               ; a derived seed never outlives its signature
-    test r14d, r14d
-    jnz  .err
+    lea  esi, [r14d + 36]
+    call ssh_cli_work_sign
+    test eax, eax
+    jnz  .work_refused
     ; --- signature blob: string("ssh-ed25519") || string(sig64) -> ssh_cli_sigblob (83) ---
     lea  rdi, [rel ssh_cli_sigblob]
     mov  esi, 11
@@ -2385,9 +2470,13 @@ ssh_cli_send_userauth:
     mov  rax, r12
     lea  rcx, [rel ssh_cli_authcore]
     sub  rax, rcx                                 ; total request payload length
+    push rax
+    call ssh_cli_work_current            ; final live authority before packet use
+    test eax, eax
+    pop rdx
+    jnz .work_refused
     mov  rdi, rbx
     lea  rsi, [rel ssh_cli_authcore]
-    mov  edx, eax
     call ssh_cli_gcm_send
     test eax, eax
     jnz  .out
@@ -2418,16 +2507,452 @@ ssh_cli_send_userauth:
 .id_serial:
     lea  rdi, [rel str_sshcli_cid_owner_only_serial]
     call serial_string
+    jmp .err
+.work_refused:
+    mov byte [rel ssh_cli_state], SSH_CLI_ST_FAILED
+    mov byte [rel ssh_cli_error], 5
 .err:
     mov  eax, -1
 .out:
     push rax
     call ssh_cli_cid_cleanup              ; no transient identity material outlives request
+    call ssh_cli_work_end
     pop  rax
+    pop  r15
     pop  r14
     pop  r13
     pop  r12
     pop  rbx
+    ret
+
+.work_busy:
+    mov eax, 1                           ; reentrant owner keeps actual custody
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; GAP05: slot-owned generations and original deadlines never travel through
+; the loaded/parked region. The crypto result is provisional until this caller
+; revalidates its original owner, key, tuple, trust epoch and unchanged D.
+; EDI=slot -> RAX=64-byte binding. Caller validates slot first.
+ssh_cli_work_binding:
+    mov eax, edi
+    shl rax, 6
+    lea rcx, [rel ssh_sess_bindings]
+    add rax, rcx
+    ret
+
+; Bind exactly once after Terminal has applied its existing hostname ceiling.
+; EDI=slot, RSI=original effective TCP D, RDX=original channel D, RCX=origin.
+; No clock sample, renewal or inferred/default budget. EAX0 /-1.
+ssh_session_bind_deadlines:
+    cmp edi, SSH_SESS_MAX
+    jae .bad
+    lea rax, [rel ssh_sess_used]
+    cmp byte [rax + rdi], 1
+    jne .bad
+    test rcx, rcx
+    jz .bad
+    cmp rsi, rcx
+    jbe .bad
+    cmp rdx, rsi
+    jb .bad
+    push rbx
+    mov rbx, rcx
+    call ssh_cli_work_binding
+    cmp qword [rax + 8], 0
+    je .reject
+    cmp qword [rax + 16], 0
+    je .reject
+    cmp qword [rax + 24], 0
+    je .reject
+    cmp qword [rax + 32], 0
+    je .reject
+    cmp qword [rax + 56], 0
+    jne .reject
+    mov [rax + 48], rsi
+    mov [rax + 56], rdx
+    lea rax, [rel ssh_sess_clock]
+    mov [rax + rdi*8], rbx
+    xor eax, eax
+    pop rbx
+    ret
+.reject:
+    pop rbx
+.bad:
+    mov eax, -1
+    ret
+
+; EDI=original selected live slot. Exclusive shared USERAUTH builder ownership
+; and a separate slot hold last until normal crypto return + caller cleanup.
+ssh_cli_work_begin:
+    cmp edi, SSH_SESS_MAX
+    jae .bad
+    cmp byte [rel ssh_cli_work_busy], 0
+    jne .bad
+    lea rax, [rel ssh_sess_used]
+    cmp byte [rax + rdi], 1
+    jne .bad
+    lea rax, [rel ssh_sess_work_busy]
+    cmp byte [rax + rdi], 0
+    jne .bad
+    push rbx
+    mov ebx, edi
+    call tcp_client_cookie_alloc
+    test rax, rax
+    jz .failed
+    mov r8, rax
+    mov edi, ebx
+    call ssh_cli_work_binding
+    mov [rax + 40], r8
+    lea rcx, [rel ssh_sess_cancel]
+    mov edx, ebx
+    shl edx, 4
+    mov [rcx + rdx], r8
+    mov qword [rcx + rdx + 8], 0
+    lea rcx, [rel ssh_sess_work_busy]
+    mov byte [rcx + rbx], 1
+    mov [rel ssh_cli_work_slot], ebx
+    mov byte [rel ssh_cli_work_busy], 1
+    xor eax, eax
+    pop rbx
+    ret
+.failed:
+    pop rbx
+.bad:
+    mov eax, -1
+    ret
+
+; Revoke only this generation; never ACK cancellation or clear live custody.
+ssh_cli_work_cancel:
+    mov edi, [rel ssh_sess_active]
+    cmp edi, SSH_SESS_MAX
+    jae .out
+    call ssh_cli_work_binding
+    mov rdx, [rax + 40]
+    mov ecx, edi
+    shl ecx, 4
+    lea rax, [rel ssh_sess_cancel]
+    mov [rax + rcx], rdx
+    mov qword [rax + rcx + 8], 1
+.out:
+    ret
+
+; Forward known monotonic samples only. RAX=current /0 unknown or backward.
+ssh_cli_work_clock:
+    sub rsp, 8
+    call time_monotonic_now_us
+    add rsp, 8
+    test rax, rax
+    jz .bad
+    mov ecx, [rel ssh_cli_work_slot]
+    lea rdx, [rel ssh_sess_clock]
+    cmp rax, [rdx + rcx*8]
+    jb .bad
+    mov [rdx + rcx*8], rax
+    ret
+.bad:
+    xor eax, eax
+    ret
+
+; Exact current original work authority. Independent of the compute component.
+; Only bounded read-only TCP observation; no raw TCB pointer dereference here.
+ssh_cli_work_current:
+    push rbx
+    mov ebx, [rel ssh_cli_work_slot]
+    cmp ebx, SSH_SESS_MAX
+    jae .bad
+    cmp ebx, [rel ssh_sess_active]
+    jne .bad
+    lea rax, [rel ssh_sess_used]
+    cmp byte [rax + rbx], 1
+    jne .bad
+    cmp byte [rel ssh_cli_retiring], 0
+    jne .bad
+    cmp byte [rel ssh_cli_owner_armed], 1
+    jne .bad
+    call principal_current
+    test rax, rax
+    jz .owner
+    cmp rax, PRIN_OWNER
+    jne .bad
+.owner:
+    cmp byte [rel ssh_cli_cid_state], SSH_CID_ST_ENROLLED
+    jne .bad
+    mov eax, [rel ssh_cli_cid_gen]
+    cmp rax, [rel ssh_cli_work_cid_gen]
+    jne .bad
+    lea rdi, [rel ssh_cli_cid_pub]
+    lea rsi, [rel ssh_cli_work_public]
+    mov edx, 32
+    call memcmp
+    test eax, eax
+    jnz .bad
+    mov rax, [rel ssh_cli_ctx_ptr]
+    cmp rax, [rel ssh_cli_work_ctx]
+    jne .bad
+    mov rax, [rel ssh_cli_kh_epoch]
+    cmp rax, [rel ssh_cli_work_kh_epoch]
+    jne .bad
+    call ssh_cli_kh_admission_current
+    test eax, eax
+    jnz .bad
+    mov edi, ebx
+    call ssh_cli_work_binding
+    mov rdi, rax
+    lea rsi, [rel ssh_cli_work_snapshot]
+    mov edx, 64
+    call memcmp
+    test eax, eax
+    jnz .bad
+    mov ecx, ebx
+    shl ecx, 4
+    lea rax, [rel ssh_sess_cancel]
+    mov rdx, [rel ssh_cli_work_snapshot + 40]
+    cmp rdx, [rax + rcx]
+    jne .cancel_ok                     ; another generation cannot cancel us
+    cmp qword [rax + rcx + 8], 0
+    jne .bad
+.cancel_ok:
+    mov rdi, [rel ssh_cli_work_snapshot + 16]
+    cmp rdi, [rel ssh_cli_tcb]
+    jne .bad
+    mov rsi, [rel ssh_cli_work_snapshot + 24]
+    lea rdx, [rel ssh_cli_work_tcp]
+    call tcp_client_epoch_snapshot
+    test rax, rax
+    jnz .bad
+    cmp qword [rel ssh_cli_work_tcp], TCP_ESTABLISHED
+    jne .bad
+    mov eax, [rel ssh_cli_lport]
+    cmp rax, [rel ssh_cli_work_tcp + 56]
+    jne .bad
+    mov eax, [rel ssh_cli_target_ip]
+    cmp rax, [rel ssh_cli_work_tcp + 48]
+    jne .bad
+    movzx eax, word [rel ssh_cli_target_port]
+    cmp rax, [rel ssh_cli_work_tcp + 64]
+    jne .bad
+    call ssh_cli_work_clock
+    test rax, rax
+    jz .bad
+    cmp rax, [rel ssh_cli_work_snapshot + 56]
+    jae .bad
+    ; Pre-accounting checks have no earned lease yet. Once earned, keep the
+    ; same S/B through result use, final USERAUTH and post-seal publication.
+    ; Forward time before D is necessary but does not renew this work's B.
+    cmp qword [rel ssh_cli_work_earned_lease_ms], 0
+    je .current
+    mov rdx, [rel ssh_cli_work_service_bound_us]
+    test rdx, rdx
+    jz .bad
+    sub rax, [rel ssh_cli_work_start_us]
+    jc .bad
+    cmp rax, rdx
+    ja .bad                            ; equality remains eligible
+.current:
+    xor eax, eax
+    pop rbx
+    ret
+.bad:
+    mov eax, -1
+    pop rbx
+    ret
+
+; Derived caller accounting, not a new deadline. The two core operands
+; are ROOT105740's selected measured-twin policy, not a new caller default.
+; They are not a proven metal IRQ/whole-cleanup bound. Zero validity refuses.
+; RAX=earned lease ms /0 unavailable; RDX=independently finite service bound us.
+ssh_cli_work_account:
+    sub rsp, 8
+    cmp qword [rel ssh_cli_core_facts_valid], 1
+    jne .bad
+    call ssh_cli_work_clock
+    test rax, rax
+    jz .bad
+    mov [rel ssh_cli_work_start_us], rax
+    mov rdx, [rel ssh_cli_core_interrupt_us]
+    add rdx, [rel ssh_cli_core_cleanup_us]
+    jc .bad
+    test rdx, rdx
+    jz .bad                         ; new full-fit entry requires a real reserve
+    mov [rel ssh_cli_work_reserve_us], rdx
+    mov rcx, [rel ssh_cli_work_snapshot + 56]
+    sub rcx, rax
+    jbe .bad
+    sub rcx, rdx
+    jc .bad
+    ; ROOT105682/SEC105677: one work earns the existing 100ms ABI ceiling
+    ; only when the entire service fits. Never shrink it, renew D or add grace.
+    cmp rcx, 100000
+    jb .bad
+    mov eax, 100
+    mov [rel ssh_cli_work_earned_lease_ms], rax
+    add rdx, 100000
+    jc .bad
+    mov [rel ssh_cli_work_service_bound_us], rdx
+    add rsp, 8
+    ret
+.bad:
+    xor eax, eax
+    xor edx, edx
+    add rsp, 8
+    ret
+
+; ESI=actual signed message length. Only this caller acquires SYSTEM seed
+; material. Public derivation/enrolled comparison/sign all occur in SEC's
+; exclusive sensitive fence; no legacy/unfenced fallback.
+ssh_cli_work_sign:
+    push rbx
+    push r12
+    push r13
+    mov r12d, esi
+    cmp r12d, 36
+    jb .bad
+    cmp r12d, 256
+    ja .bad
+    mov edi, [rel ssh_cli_work_slot]
+    call ssh_cli_work_binding
+    mov rsi, rax
+    lea rdi, [rel ssh_cli_work_snapshot]
+    mov edx, 64
+    call memcpy
+    mov eax, [rel ssh_cli_cid_gen]
+    mov [rel ssh_cli_work_cid_gen], rax
+    mov rax, [rel ssh_cli_ctx_ptr]
+    mov [rel ssh_cli_work_ctx], rax
+    mov rax, [rel ssh_cli_kh_epoch]
+    mov [rel ssh_cli_work_kh_epoch], rax
+    lea rdi, [rel ssh_cli_work_public]
+    lea rsi, [rel ssh_cli_cid_pub]
+    mov edx, 32
+    call memcpy
+    call ssh_cli_work_current
+    test eax, eax
+    jnz .bad
+    lea rdi, [rel ssh_cli_work_capsule]
+    lea rsi, [rel ssh_cli_work_snapshot]
+    mov edx, 64
+    call memcpy
+    mov rax, [rel ssh_cli_work_cid_gen]
+    mov [rel ssh_cli_work_capsule + SW_CID_GEN], rax
+    mov [rel ssh_cli_work_capsule + SW_MSG_LEN], r12
+    lea rdi, [rel ssh_cli_work_capsule + SW_EXPECTED]
+    lea rsi, [rel ssh_cli_work_public]
+    mov edx, 32
+    call memcpy
+    lea rdi, [rel ssh_cli_work_capsule + SW_MESSAGE]
+    lea rsi, [rel ssh_cli_signbuf]
+    mov edx, r12d
+    call memcpy
+    ; Keep the exact public request independently of reentrant shared builders.
+    lea rdi, [rel ssh_cli_work_request]
+    lea rsi, [rel ssh_cli_signbuf + 36]
+    lea edx, [r12d - 36]
+    call memcpy
+    mov edi, [rel ssh_cli_cid_gen]
+    call ssh_cli_cid_derive_seed
+    mov ebx, eax
+    ; A provider/interrupt may select another session. Restore before touching
+    ; its loaded fields; the separate hold prohibits cleanup/reuse meanwhile.
+    mov edi, [rel ssh_cli_work_slot]
+    call ssh_session_use
+    test ebx, ebx
+    jnz .bad
+    lea rdi, [rel ssh_cli_work_capsule + SW_SEED]
+    lea rsi, [rel ssh_cli_cid_seed]
+    mov edx, 32
+    call memcpy
+    call ssh_cli_identity_seed_done       ; source seed wiped BEFORE private compute
+    call ssh_cli_work_current
+    test eax, eax
+    jnz .bad
+    call ssh_cli_work_account
+    test rax, rax
+    jz .bad
+    mov r9, rax
+    mov edi, [rel ssh_cli_work_slot]
+    call ssh_cli_work_binding
+    mov rdx, rax
+    mov ecx, [rel ssh_cli_work_slot]
+    shl ecx, 4
+    lea rax, [rel ssh_sess_cancel]
+    add rcx, rax
+    lea rdi, [rel ssh_cli_work_capsule]
+    mov esi, SW_BYTES
+    lea r8, [rel ssh_cli_work_result]
+    ; SEC's additive ABI: unchanged six arguments plus the exact earned
+    ; post-cutoff reserve as seventh SysV argument. Keep call-site alignment.
+    sub rsp, 16
+    mov rax, [rel ssh_cli_work_reserve_us]
+    mov [rsp], rax
+    call ssh_crypto_work_fullfit
+    add rsp, 16
+    mov ebx, eax
+    mov r13, rdx
+    mov edi, [rel ssh_cli_work_slot]
+    call ssh_session_use
+    test ebx, ebx
+    jnz .bad
+    cmp r13, 1                       ; strict delivery observation is necessary,
+    jne .bad                         ; never sufficient for the numeric facts
+    call ssh_cli_work_current
+    test eax, eax
+    jnz .bad
+    lea rdi, [rel ssh_cli_work_result]
+    lea rsi, [rel ssh_cli_work_snapshot]
+    mov edx, 64
+    call memcmp
+    test eax, eax
+    jnz .bad
+    lea rdi, [rel ssh_cli_work_result + 64]
+    lea rsi, [rel ssh_cli_work_public]
+    mov edx, 32
+    call memcmp
+    test eax, eax
+    jnz .bad
+    lea rdi, [rel ssh_cli_sig64]
+    lea rsi, [rel ssh_cli_work_result + 96]
+    mov edx, 64
+    call memcpy
+    lea rdi, [rel ssh_cli_authcore]
+    lea rsi, [rel ssh_cli_work_request]
+    lea edx, [r12d - 36]
+    call memcpy
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+.out:
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; Actual normal return and full caller cleanup precede slot-hold release.
+; No peer busy state, persistent identity, pin or shared crypto arena is reset.
+ssh_cli_work_end:
+    push rbx
+    mov ebx, [rel ssh_cli_work_slot]
+    mov edi, ebx
+    call ssh_session_use
+    call ssh_cli_identity_seed_done
+    lea rdi, [rel ssh_cli_work_private_begin]
+    xor esi, esi
+    mov edx, ssh_cli_work_private_end - ssh_cli_work_private_begin
+    call memset
+    lea rdi, [rel ssh_cli_sigblob]
+    xor esi, esi
+    mov edx, ssh_cli_hk_digest - ssh_cli_sigblob
+    call memset
+    lea rax, [rel ssh_sess_work_busy]
+    mov byte [rax + rbx], 0
+    mov byte [rel ssh_cli_work_busy], 0
+    call ssh_cli_retire_apply
+    pop rbx
     ret
 
 ; ===================== Task3494 interactive channel layer (RFC4254) =====================
@@ -3999,8 +4524,8 @@ ssh_cli_identity_text:
 ; 1 already enrolled/authenticated reload, -1 proved no-write refusal,
 ; -2 issued write with uncertain outcome (new identity admission revoked).
 ; Owner policy is unchanged. New generations advance only authenticated/local
-; attempted high-water and refuse wrap. No persistent monotonic floor exists:
-; observed absence after reboot can still restart at1; no rollback claim.
+; attempted high-water and refuse wrap. Authenticated public history survives
+; restart; joint loss of both records is undetectable. No rollback protection.
 ssh_cli_identity_enroll:
     push rbx
     push r12
@@ -4182,6 +4707,27 @@ ssh_cli_hostkey_check:
     mov  ecx, 32
     cld
     repe cmpsb
+    ; Observe this actual signed initial KEX key versus its selected endpoint.
+    ; Preserve comparison flags and registers so the trust decision is exact.
+    ; Rekey does not call this initial host-key function.
+    pushfq
+    push rax
+    push rcx
+    push rsi
+    push rdi
+    setne al
+    movzx eax, al
+    inc  eax                           ; 1 exact, 2 changed
+    mov  [rel ssh_cli_key_check], rax
+    lea  rsi, [rel ssh_cli_hk_digest]
+    lea  rdi, [rel ssh_cli_checked_digest]
+    mov  ecx, 4
+    rep  movsq
+    pop  rdi
+    pop  rsi
+    pop  rcx
+    pop  rax
+    popfq
     jne  .changed
     xor  eax, eax
     jmp  .out
@@ -4190,6 +4736,14 @@ ssh_cli_hostkey_check:
     inc  r12d
     jmp  .scan
 .new:
+    ; Public witness of this actual signed initial key, not owner trust.
+    mov  qword [rel ssh_cli_key_check], 3 ; unknown endpoint, provisioning required
+    lea  rsi, [rel ssh_cli_hk_digest]
+    lea  rdi, [rel ssh_cli_checked_digest]
+    mov  ecx, 4
+    cld
+    rep  movsq
+    ; Capacity refusal still observes the signed key without changing any pin.
     test r13, r13
     jz   .full
     ; Seeing a signed host key proves possession, never owner trust. Unknown
@@ -4199,6 +4753,8 @@ ssh_cli_hostkey_check:
     mov  eax, -3                       ; explicit provisioning required
     jmp  .out
 .full:
+    ; First contact still exposes the actual signed key to the owner at capacity.
+    call ssh_cli_show_fingerprint
     lea  rdi, [rel str_sshcli_pins_full]
     mov  esi, str_sshcli_pins_full.len
     call ssh_cli_deliver_data
@@ -4389,6 +4945,9 @@ ssh_cli_kh_load:
     call ssh_cli_kh_derive
     test eax, eax
     jnz  .nokey
+    call ssh_cli_kh_history_load
+    test eax, eax
+    js   .poison
     call ssh_cli_kh_getvar
     cmp  eax, 1
     je   .empty
@@ -4405,6 +4964,10 @@ ssh_cli_kh_load:
     mov  byte [rel ssh_cli_kh_state], SSH_KH_ST_NVRAM
     jmp  .done
 .empty:
+    ; Authenticated durable history or a local attempted write makes missing
+    ; trust an existing-store loss; history never restores/adopts its pins.
+    cmp  dword [rel ssh_cli_kh_floor], 0
+    jne  .poison
     mov  dword [rel ssh_cli_kh_gen], 0
     mov  byte [rel ssh_cli_kh_state], SSH_KH_ST_NVRAM
     jmp  .done
@@ -4908,11 +5471,15 @@ ssh_cli_kh_setvar:
     test rax, rax
     jnz  .bad
     test r15, r15
-    jz   .issue
-    mov  edi, [r14 + SSH_KH_REC_GEN]
-    call ssh_cli_kh_note_floor
-.issue:
+    jz   .issue_delete
+    mov  rdi, r14
+    call ssh_cli_kh_history_prepare    ; revokes once before durable attempt
+    test eax, eax
+    jnz  .out                         ; preserve no-write/uncertain distinction
+    jmp  .issue
+.issue_delete:
     call ssh_cli_kh_revoke             ; issued mutation covers the complete trust table
+.issue:
     lea  rcx, [rel ssh_cli_kh_var_name]
     lea  rdx, [rel ssh_cli_kh_var_guid]
     mov  r8d, AUTH_EFI_ATTRS
@@ -4973,6 +5540,9 @@ ssh_cli_kh_setvar:
     call ssh_cli_kh_getvar
     cmp  eax, 1
     jne  .uncertain
+    call ssh_cli_kh_history_retire     ; only after verified primary absence
+    test eax, eax
+    jnz  .uncertain                   ; primary was already issued: never -1
 .ok:
     xor  eax, eax
     jmp  .out
@@ -5148,9 +5718,197 @@ ssh_cli_kh_cleanup:
     call memset
     lea  rdi, [rel ssh_cli_kh_verify]
     xor  esi, esi
-    mov  edx, SSH_KH_REC_SIZE
+    mov  edx, ssh_cli_kh_history_verify + SSH_KH_REC_SIZE - ssh_cli_kh_verify
     call memset
     add  rsp, 8
+    ret
+
+; Public known_hosts history records attempted saves, never pin authority.
+; Caller holds the derived known_hosts MAC key. EAX0 authenticated/floor only,
+; 1 absent,-1 invalid/unreadable. No read performs a hidden write or restore.
+ssh_cli_kh_history_load:
+    push rbx
+    lea  rdi, [rel ssh_cli_kh_history]
+    call ssh_cli_kh_history_get
+    test eax, eax
+    jnz  .out
+    lea  rdi, [rel ssh_cli_kh_history]
+    call ssh_cli_kh_valid
+    test eax, eax
+    jz   .bad
+    mov  edi, [rel ssh_cli_kh_history + SSH_KH_REC_GEN]
+    call ssh_cli_kh_note_floor
+    xor  eax, eax
+    jmp  .out
+.bad:
+    mov  eax, -1
+.out:
+    pop  rbx
+    ret
+
+; RDI=owned fixed-size output. Exact attributes/size;0 read,1 absent,-1 other.
+; Lab primary-store fault selection does not select this separate variable.
+ssh_cli_kh_history_get:
+    push rbx
+    push r12
+    push r13
+    mov  r13, rsp
+    mov  rbx, rdi
+    mov  r12, [rel runtime_services]
+    test r12, r12
+    jz   .bad
+    cmp  qword [r12 + 0x48], 0
+    je   .bad
+    mov  qword [rel ssh_cli_kh_size], SSH_KH_REC_SIZE
+    mov  dword [rel ssh_cli_kh_attrs], 0
+    lea  rcx, [rel ssh_cli_kh_history_name]
+    lea  rdx, [rel ssh_cli_kh_var_guid]
+    lea  r8, [rel ssh_cli_kh_attrs]
+    lea  r9, [rel ssh_cli_kh_size]
+    and  rsp, -16
+    sub  rsp, 48
+    mov  [rsp + 32], rbx
+    call [r12 + 0x48]
+    mov  rsp, r13
+    test rax, rax
+    jz   .read
+    mov  rdx, SSH_KH_EFI_NOT_FOUND
+    cmp  rax, rdx
+    jne  .bad
+    mov  eax, 1
+    jmp  .out
+.read:
+    cmp  dword [rel ssh_cli_kh_attrs], AUTH_EFI_ATTRS
+    jne  .bad
+    cmp  qword [rel ssh_cli_kh_size], SSH_KH_REC_SIZE
+    jne  .bad
+    xor  eax, eax
+    jmp  .out
+.bad:
+    mov  eax, -1
+.out:
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+
+; RDI=authenticated complete candidate. Existing history must authenticate,
+; and the candidate must exceed its floor. Independently gate history, then
+; revoke all future admission once before its first possibly durable write.
+; EAX0 exact history,-1 no write,-2 issued history uncertainty.
+ssh_cli_kh_history_prepare:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov  r13, rsp
+    mov  r14, rdi
+    mov  r12, [rel runtime_services]      ; caller checked both function pointers
+    call ssh_cli_kh_history_load
+    test eax, eax
+    js   .bad
+    mov  eax, [r14 + SSH_KH_REC_GEN]
+    cmp  eax, [rel ssh_cli_kh_floor]
+    jbe  .bad
+    call storage_access_request_intent
+    mov  edx, eax
+    lea  rdi, [rel ssh_cli_kh_var_guid]
+    lea  rsi, [rel ssh_cli_kh_history_name]
+    lea  rcx, [rel str_sshcli_kh_nvg_tag]
+    call storage_access_nvram_require
+    test rax, rax
+    jnz  .bad
+    mov  edi, [r14 + SSH_KH_REC_GEN]
+    call ssh_cli_kh_note_floor
+    call ssh_cli_kh_revoke
+    lea  rcx, [rel ssh_cli_kh_history_name]
+    lea  rdx, [rel ssh_cli_kh_var_guid]
+    mov  r8d, AUTH_EFI_ATTRS
+    mov  r9d, SSH_KH_REC_SIZE
+    and  rsp, -16
+    sub  rsp, 48
+    mov  [rsp + 32], r14
+    call [r12 + 0x58]
+    mov  rsp, r13
+    test rax, rax
+    jnz  .uncertain
+    lea  rdi, [rel ssh_cli_kh_history_verify]
+    call ssh_cli_kh_history_get
+    test eax, eax
+    jnz  .uncertain
+    mov  rdi, r14
+    lea  rsi, [rel ssh_cli_kh_history_verify]
+    mov  edx, SSH_KH_REC_SIZE
+    call memcmp
+    test eax, eax
+    jnz  .uncertain
+    lea  rdi, [rel ssh_cli_kh_history_verify]
+    call ssh_cli_kh_valid
+    test eax, eax
+    jz   .uncertain
+    xor  eax, eax
+    jmp  .out
+.uncertain:
+    mov  eax, -2
+    jmp  .out
+.bad:
+    mov  eax, -1
+.out:
+    mov  rsp, r13
+    pop  r15
+    pop  r14
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+
+; Owner CLEAR has already revoked admission and verified primary absence.
+; Retire history last, through its own storage gate and exact absence check.
+; Malformed history can be deliberately cleared; it never supplies authority.
+; EAX0 verified absent,-1 otherwise. Caller maps all failure to issued -2.
+ssh_cli_kh_history_retire:
+    push rbx
+    push r12
+    push r13
+    mov  r13, rsp
+    mov  r12, [rel runtime_services]
+    call storage_access_request_intent
+    mov  edx, eax
+    lea  rdi, [rel ssh_cli_kh_var_guid]
+    lea  rsi, [rel ssh_cli_kh_history_name]
+    lea  rcx, [rel str_sshcli_kh_nvg_tag]
+    call storage_access_nvram_require
+    test rax, rax
+    jnz  .bad
+    lea  rcx, [rel ssh_cli_kh_history_name]
+    lea  rdx, [rel ssh_cli_kh_var_guid]
+    mov  r8d, AUTH_EFI_ATTRS
+    xor  r9d, r9d
+    and  rsp, -16
+    sub  rsp, 48
+    mov  qword [rsp + 32], 0
+    call [r12 + 0x58]
+    mov  rsp, r13
+    test rax, rax
+    jz   .verify
+    mov  rdx, SSH_KH_EFI_NOT_FOUND
+    cmp  rax, rdx
+    jne  .bad
+.verify:
+    lea  rdi, [rel ssh_cli_kh_history_verify]
+    call ssh_cli_kh_history_get
+    cmp  eax, 1
+    jne  .bad
+    xor  eax, eax
+    jmp  .out
+.bad:
+    mov  eax, -1
+.out:
+    mov  rsp, r13
+    pop  r13
+    pop  r12
+    pop  rbx
     ret
 
 ; ---------------------------------------------------------------------------
@@ -5175,6 +5933,9 @@ ssh_cli_cid_load:
 .bound_ok:
     cmp  byte [rel pbm_runtime_code_mapped], 1
     jne  .boot
+    call ssh_cli_cid_history_load
+    test eax, eax
+    js   .unverified
     call ssh_cli_cid_read_valid
     cmp  eax, 1
     je   .none
@@ -5183,6 +5944,10 @@ ssh_cli_cid_load:
     call ssh_cli_cid_publish
     jmp  .ok
 .none:
+    ; Authenticated durable history or a local attempted write makes absence
+    ; an existing-store loss, never first-run enrollment.
+    cmp  dword [rel ssh_cli_cid_floor], 0
+    jne  .unverified
     mov  byte [rel ssh_cli_cid_state], SSH_CID_ST_NONE
     jmp  .ok
 .boot:
@@ -5216,6 +5981,9 @@ ssh_cli_cid_reload:
 .owner:
     cmp  byte [rel pbm_runtime_code_mapped], 1
     jne  .refused
+    call ssh_cli_cid_history_load
+    test eax, eax
+    js   .invalid
     call ssh_cli_cid_read_valid
     test eax, eax
     jnz  .invalid
@@ -5262,9 +6030,9 @@ ssh_cli_cid_read_valid:
     pop  rbx
     ret
 
-; Volatile high-water mark from authenticated records and our own MACed write
-; attempts. It prevents in-boot attempt reuse; it is not persistent rollback
-; protection and must never be seeded from unvalidated firmware bytes.
+; High-water mark from authenticated primary/history records and our own MACed
+; write attempts. Durable history carries attempts across restart, without
+; rollback protection. Unvalidated firmware bytes never supply this floor.
 ssh_cli_cid_note_floor:
     cmp  edi, [rel ssh_cli_cid_floor]
     jbe  .out
@@ -5312,7 +6080,7 @@ ssh_cli_cid_cleanup:
     call memset
     lea  rdi, [rel ssh_cli_cid_check]
     xor  esi, esi
-    mov  edx, ssh_cli_cid_verify + SSH_CID_REC_SIZE - ssh_cli_cid_check
+    mov  edx, ssh_cli_cid_history_verify + SSH_CID_REC_SIZE - ssh_cli_cid_check
     call memset
     add  rsp, 8
     ret
@@ -5523,6 +6291,10 @@ ssh_cli_cid_setvar:
     call storage_access_nvram_require
     test rax, rax
     jnz  .bad
+    mov  rdi, r14
+    call ssh_cli_cid_history_prepare     ; durable attempt before primary write
+    test eax, eax
+    jnz  .out                           ; preserve no-write/uncertain distinction
     mov  edi, [r14 + SSH_CID_REC_GEN]
     call ssh_cli_cid_note_floor
     call ssh_cli_cid_revoke              ; possible write: no cached signing authority
@@ -5570,6 +6342,157 @@ ssh_cli_cid_setvar:
     test eax, eax
     jnz  .uncertain
     lea  rdi, [rel ssh_cli_cid_verify]
+    call ssh_cli_cid_valid
+    test eax, eax
+    jz   .uncertain
+    xor  eax, eax
+    jmp  .out
+.uncertain:
+    mov  eax, -2
+    jmp  .out
+.bad:
+    mov  eax, -1
+.out:
+    mov  rsp, r13
+    pop  r15
+    pop  r14
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+
+; Public attempted-generation history uses the same authenticated record format,
+; a distinct PaOS variable, and no signing authority. Reads never write it.
+; EAX0 valid and floor hydrated,1 absent,-1 unreadable/inauthentic.
+ssh_cli_cid_history_load:
+    push rbx
+    lea  rdi, [rel ssh_cli_cid_history]
+    call ssh_cli_cid_history_get
+    test eax, eax
+    jnz  .out
+    lea  rdi, [rel ssh_cli_cid_history]
+    call ssh_cli_cid_valid
+    test eax, eax
+    jz   .bad
+    mov  edi, [rel ssh_cli_cid_history + SSH_CID_REC_GEN]
+    lea  rsi, [rel ssh_cli_cid_check]
+    call ssh_cli_cid_derive_pub
+    test eax, eax
+    jnz  .bad
+    lea  rdi, [rel ssh_cli_cid_check]
+    lea  rsi, [rel ssh_cli_cid_history + SSH_CID_REC_PUB]
+    mov  edx, 32
+    call memcmp
+    test eax, eax
+    jnz  .bad
+    mov  edi, [rel ssh_cli_cid_history + SSH_CID_REC_GEN]
+    call ssh_cli_cid_note_floor
+    xor  eax, eax
+    jmp  .out
+.bad:
+    mov  eax, -1
+.out:
+    pop  rbx
+    ret
+
+; RDI=80-byte output. Exact NV|BS|RT/size; 0 read,1 absent,-1 otherwise.
+; The lab primary-record fault selector does not select this separate variable.
+ssh_cli_cid_history_get:
+    push rbx
+    push r12
+    push r13
+    mov  r13, rsp
+    mov  rbx, rdi
+    mov  r12, [rel runtime_services]
+    test r12, r12
+    jz   .bad
+    cmp  qword [r12 + 0x48], 0
+    je   .bad
+    mov  qword [rel ssh_cli_cid_size], SSH_CID_REC_SIZE
+    mov  dword [rel ssh_cli_cid_attrs], 0
+    lea  rcx, [rel ssh_cli_cid_history_name]
+    lea  rdx, [rel ssh_cli_kh_var_guid]
+    lea  r8, [rel ssh_cli_cid_attrs]
+    lea  r9, [rel ssh_cli_cid_size]
+    and  rsp, -16
+    sub  rsp, 48
+    mov  [rsp + 32], rbx
+    call [r12 + 0x48]
+    mov  rsp, r13
+    test rax, rax
+    jz   .read
+    mov  rdx, SSH_KH_EFI_NOT_FOUND
+    cmp  rax, rdx
+    jne  .bad
+    mov  eax, 1
+    jmp  .out
+.read:
+    cmp  dword [rel ssh_cli_cid_attrs], AUTH_EFI_ATTRS
+    jne  .bad
+    cmp  qword [rel ssh_cli_cid_size], SSH_CID_REC_SIZE
+    jne  .bad
+    xor  eax, eax
+    jmp  .out
+.bad:
+    mov  eax, -1
+.out:
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+
+; RDI=already authenticated/derived candidate from cid_setvar. Authenticate the
+; current history before replacing it; candidate must exceed its floor too.
+; EAX0 exact durable attempt,-1 no write,-2 issued history write uncertain.
+; A verified history never publishes identity, including after a primary fault.
+ssh_cli_cid_history_prepare:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov  r13, rsp
+    mov  r14, rdi
+    mov  r12, [rel runtime_services]       ; caller verified Get/Set availability
+    call ssh_cli_cid_history_load
+    test eax, eax
+    js   .bad
+    mov  eax, [r14 + SSH_CID_REC_GEN]
+    cmp  eax, [rel ssh_cli_cid_floor]
+    jbe  .bad
+    call storage_access_request_intent
+    mov  edx, eax
+    lea  rdi, [rel ssh_cli_kh_var_guid]
+    lea  rsi, [rel ssh_cli_cid_history_name]
+    lea  rcx, [rel str_sshcli_cid_nvg_tag]
+    call storage_access_nvram_require
+    test rax, rax
+    jnz  .bad
+    mov  edi, [r14 + SSH_CID_REC_GEN]
+    call ssh_cli_cid_note_floor
+    call ssh_cli_cid_revoke               ; before first potentially durable write
+    lea  rcx, [rel ssh_cli_cid_history_name]
+    lea  rdx, [rel ssh_cli_kh_var_guid]
+    mov  r8d, AUTH_EFI_ATTRS
+    mov  r9d, SSH_CID_REC_SIZE
+    and  rsp, -16
+    sub  rsp, 48
+    mov  [rsp + 32], r14
+    call [r12 + 0x58]
+    mov  rsp, r13
+    test rax, rax
+    jnz  .uncertain
+    lea  rdi, [rel ssh_cli_cid_history_verify]
+    call ssh_cli_cid_history_get
+    test eax, eax
+    jnz  .uncertain
+    mov  rdi, r14
+    lea  rsi, [rel ssh_cli_cid_history_verify]
+    mov  edx, SSH_CID_REC_SIZE
+    call memcmp
+    test eax, eax
+    jnz  .uncertain
+    lea  rdi, [rel ssh_cli_cid_history_verify]
     call ssh_cli_cid_valid
     test eax, eax
     jz   .uncertain
@@ -5645,9 +6568,13 @@ ssh_cli_kh_var_guid:
     db 0x9f,0x8d,0x1b,0x73,0xe9,0xac,0x21,0x42
 ssh_cli_kh_var_name:
     dw 'P','a','O','S','S','s','h','K','n','o','w','n','H','o','s','t','s',0
+ssh_cli_kh_history_name:
+    dw 'P','a','O','S','S','s','h','K','n','o','w','n','H','o','s','t','s','H','i','s','t','o','r','y',0
 ssh_cli_cid_var_name:                   ; RCQ-08: same vendor GUID (ssh_cli_kh_var_guid)
     dw 'P','a','O','S','S','s','h','C','l','i','e','n','t','I','d',0
-str_sshcli_pins_full: db "ssh: REFUSED: no free host-key pin slot for this new host until restart (pinned hosts still work)", 13, 10
+ssh_cli_cid_history_name:
+    dw 'P','a','O','S','S','s','h','C','l','i','e','n','t','I','d','H','i','s','t','o','r','y',0
+str_sshcli_pins_full: db "ssh: REFUSED: no free host-key pin slot; existing pins are retained across restart; review owner-managed trust before adding a host (pinned hosts still work)", 13, 10
 .len equ $ - str_sshcli_pins_full
 str_sshcli_heap_fail: db "[PAOS64] ssh.cli: no heap for the ssh sessions [ssh.cli.heap]",13,10,0
 str_sshcli_hostkey_changed: db "[PAOS64] ssh.cli: REFUSED: the host key conflicts with the owner-provisioned/saved pin [ssh.cli.hostkey_changed]",13,10,0
@@ -5747,6 +6674,12 @@ ssh_cli_exit_signal:  times SSH_EXIT_SIGNAL_CAP db 0
 ssh_cli_exit_message: times SSH_EXIT_MESSAGE_CAP db 0
 ssh_cli_exit_language: times SSH_EXIT_LANGUAGE_CAP db 0
 ssh_cli_exit_end:
+; Public initial-key witness, parked with the actual session. No credential,
+; private scalar or store bytes are exported. Cleared on every new dial.
+align 8, db 0
+ssh_cli_key_check:     dq 0            ; 0 no comparison, 1 exact, 2 changed, 3 unknown
+ssh_cli_userauth_calls: dq 0           ; saturating entry count, including refusals
+ssh_cli_checked_digest: times 32 db 0
 ssh_cli_ephemeral:    times 32 db 0    ; client x25519 private scalar (KEX)
 ssh_cli_vs:           times 256 db 0   ; V_S, the server's version line
 ssh_cli_user:         times 64 db 0
@@ -5768,6 +6701,39 @@ ssh_sess_busy:        times SSH_SESS_MAX db 0   ; active receive/sink consumer, 
 ssh_cli_scrub_shared_pending: db 0
 ssh_cli_id_ready:     db 0
 align 8, db 0
+; GAP05 caller-only custody. ROOT105740 explicitly selects I2119/C369 us
+; from TARGET105735 for the next candidate, no margin/silent widening. Actual
+; twin maxima were 2119.285/369.463 us; this exact integer policy is retained.
+; The measured core C excludes its final XOR/RET and SEC/AV return tails.
+; Metal fence/service coverage is UNOBSERVED; an overrun is FAIL, not a new D.
+align 16, db 0
+ssh_sess_bindings: times SSH_SESS_MAX*8 dq 0
+ssh_sess_cancel: times SSH_SESS_MAX*2 dq 0
+ssh_sess_clock: times SSH_SESS_MAX dq 0
+ssh_sess_work_busy: times SSH_SESS_MAX db 0
+ssh_cli_work_busy: db 0
+align 8, db 0
+ssh_cli_work_slot: dd 0
+align 8, db 0
+ssh_cli_core_interrupt_us: dq 2119
+ssh_cli_core_cleanup_us: dq 369
+ssh_cli_core_facts_valid: dq 1
+align 16, db 0
+ssh_cli_work_private_begin:
+ssh_cli_work_capsule: times SW_BYTES db 0
+ssh_cli_work_result: times SW_RESULT_BYTES db 0
+ssh_cli_work_snapshot: times 64 db 0
+ssh_cli_work_public: times 32 db 0
+ssh_cli_work_request: times 256 db 0
+ssh_cli_work_tcp: times 72 db 0
+ssh_cli_work_cid_gen: dq 0
+ssh_cli_work_ctx: dq 0
+ssh_cli_work_kh_epoch: dq 0
+ssh_cli_work_start_us: dq 0
+ssh_cli_work_earned_lease_ms: dq 0
+ssh_cli_work_reserve_us: dq 0
+ssh_cli_work_service_bound_us: dq 0
+ssh_cli_work_private_end:
 ; shared scratch: every user finishes within one serialized call
 ssh_cli_ks_len:       dd 0
 ssh_cli_sig_len:      dd 0
@@ -5796,6 +6762,8 @@ ssh_cli_kh_key:       times 32 db 0
 ssh_cli_kh_mac_out:   times 32 db 0
 ssh_cli_kh_stage:     times SSH_KH_REC_SIZE db 0
 ssh_cli_kh_verify:    times SSH_KH_REC_SIZE db 0
+ssh_cli_kh_history:   times SSH_KH_REC_SIZE db 0
+ssh_cli_kh_history_verify: times SSH_KH_REC_SIZE db 0
 ; this boot's client identity (never in the image, never persisted)
 ssh_cli_id_seed:      times 32 db 0
 ssh_cli_id_pub:       times 32 db 0
@@ -5804,7 +6772,7 @@ ssh_cli_id_blob:      times 64 db 0
 ssh_cli_cid_size:     dq 0
 ssh_cli_cid_attrs:    dd 0
 ssh_cli_cid_gen:      dd 0              ; last authenticated published generation
-ssh_cli_cid_floor:    dd 0              ; volatile authenticated/attempted high-water only
+ssh_cli_cid_floor:    dd 0              ; authenticated primary/history and local attempts
 ssh_cli_cid_state:    db 0
 align 4, db 0
 ssh_cli_cid_seed:     times 32 db 0     ; a derived seed: wiped right after its use
@@ -5815,6 +6783,8 @@ ssh_cli_cid_check:    times 32 db 0     ; a derived public key under comparison
 ssh_cli_cid_info:     times 32 db 0     ; the seed's HKDF info
 ssh_cli_cid_stage:    times SSH_CID_REC_SIZE db 0
 ssh_cli_cid_verify:   times SSH_CID_REC_SIZE db 0
+ssh_cli_cid_history:  times SSH_CID_REC_SIZE db 0
+ssh_cli_cid_history_verify: times SSH_CID_REC_SIZE db 0
 %endmacro
 WDATA_DEFER WDATA_svc_ssh_client_0
 SSH_CLI_REGION_SIZE   equ ssh_cli_region_end - ssh_cli_region_begin

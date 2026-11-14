@@ -285,6 +285,11 @@ fs_service_copy_path:
     mov rdx,[rsp]
     mov rsi,[rsp+8]
     mov rdi,[rsp+16]
+    cmp byte [rel fs_cp_cross],0
+    je .selected
+    call fs_mut_path_copy.bound         ; the source is read-only; .cross rules on the destination
+    jmp .out
+.selected:
     call fs_mut_path_copy
     jmp .out
 .refused:

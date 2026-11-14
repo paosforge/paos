@@ -1493,10 +1493,77 @@ hw_r_mcalog:
     call hw_put_hex
     lea rdi,[rel str_hw_mcalog_scope]
     call hw_puts
+    ; Separate one-attempt stable CPU samples; a busy/uninitialized CPU is
+    ; excluded by other_ready, never represented as a qualified zero.
+    sub rsp,64                         ; private copy32, aggregate24, alignment8
+    xor eax,eax
+    mov [rsp+32],rax
+    mov [rsp+40],rax
+    mov [rsp+48],rax
+    mov r15d,r13d                       ; original corrected-array scope
+    xor r13d,r13d
+    xor r14d,r14d
+.other_cpu:
+    bt r15d,r14d
+    jnc .other_next
+    mov edi,r14d
+    mov rsi,rsp
+    call mca_poll_observed_copy
+    test eax,eax
+    jnz .other_next
+    bts r13d,r14d
+    xor ebx,ebx
+.other_sum:
+    mov rax,[rsp+rbx*8]
+    add rax,[rsp+rbx*8+32]
+    jnc .other_store
+    mov rax,-1
+.other_store:
+    mov [rsp+rbx*8+32],rax
+    inc ebx
+    cmp ebx,3
+    jb .other_sum
+.other_next:
+    inc r14d
+    cmp r14d,32
+    jb .other_cpu
+    lea rdi,[rel str_hw_mcalog_other_ready]
+    call hw_puts
+    mov edi,r13d
+    mov esi,8
+    call hw_put_hex
+    xor r14d,r14d
+    lea r12,[rel hw_mcalog_other_names]
+.other_field:
+    movsxd rdi,dword [r12]
+    add rdi,r12
+    call hw_puts
+    mov rbx,[rsp+r14*8+32]
+    mov rdi,rbx
+    shr rdi,32
+    mov esi,8
+    call hw_put_hex
+    mov edi,ebx
+    mov esi,8
+    call hw_put_hex
+    add r12,4
+    inc r14d
+    cmp r14d,3
+    jb .other_field
+    add rsp,64
     jmp hw_mca_controls_done
 str_hw_mcalog_head: db " slots=32 observations=",0
 str_hw_mcalog_unknown: db "----------------",0
 str_hw_mcalog_scope: db " snapshot=per-cpu-retained counts=sampled-software physical=unknown",0
+
+hw_mcalog_other_names:
+    dd str_hw_mcalog_other_seen-$
+    dd str_hw_mcalog_other_logged-$
+    dd str_hw_mcalog_other_dropped-$
+str_hw_mcalog_other_ready: db ' other_ready=',0
+str_hw_mcalog_other_seen: db ' other_seen=',0
+str_hw_mcalog_other_logged: db ' other_logged=',0
+str_hw_mcalog_other_dropped: db ' other_dropped=',0
 
 ; Read-only route evidence from per-CPU native readbacks. No CMCI write here.
 hw_r_mcarte:
@@ -1740,8 +1807,13 @@ hw_r_nic:
     call hw_puts
     xor  ebx, ebx
     cmp  byte [rel ax_present], 0
-    je   .ecm
+    je   .axb
     lea  rdi, [rel str_hw_ax88179]
+    call hw_put_item
+.axb:
+    cmp  byte [rel axb_registered], 1       ; newer AX (0200) bound and registered (ROOT109541 (a))
+    jne  .ecm
+    lea  rdi, [rel str_hw_ax88179b]
     call hw_put_item
 .ecm:
     cmp  byte [rel cdc_ecm_present], 0
@@ -2768,6 +2840,7 @@ str_hw_g_gop:      db "gop:", 0
 str_hw_n_usb:      db " usb_nic=", 0
 str_hw_n_if:       db " if=", 0
 str_hw_ax88179:    db "ax88179", 0
+str_hw_ax88179b:   db "ax88179b", 0
 str_hw_cdc_ecm:    db "cdc_ecm", 0
 str_hw_cdc_ncm:    db "cdc_ncm", 0
 str_hw_st_usb:     db " usb_storage=", 0

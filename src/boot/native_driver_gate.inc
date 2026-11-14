@@ -18,4 +18,21 @@
 %%admit:
 %endif
 %endmacro
+
+; A's private complete reservation set excludes NEW PCI NIC binds, including
+; when common bytes are stale or POISON. This is not the class6 policy gate:
+; existing native TX/link/recovery never calls it. A's query touches only RAX.
+; Fixtures without the production A capability have no A custody to enforce.
+%macro PCIA_NATIVE_COLD_REFUSE 0-1 -1
+%ifdef PAOS_PCIA_GRP_AUTHORITY
+    push rax
+    call pcia_grp_any_held
+    test eax, eax
+    pop rax
+    jz %%admit
+    mov rax, %1
+    ret
+%%admit:
+%endif
+%endmacro
 %endif

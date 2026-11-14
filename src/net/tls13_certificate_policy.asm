@@ -1,7 +1,7 @@
 ;; MODULE net/tls13_certificate_policy
 ;; LAYER 4
 ;; PURPOSE Bounded ordinary TLS certificate policy after existing cryptographic anchoring.
-;; EXPORTS tls13_cert_policy
+;; EXPORTS tls13_cert_policy, tlscp_der
 ;; IMPORTS
 ;; CAPS
 ;; OWNER saga:net

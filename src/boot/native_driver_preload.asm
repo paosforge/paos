@@ -5,14 +5,17 @@
 ;; CAPS
 ;; OWNER saga:boot
 ; Read-only, PRE-EBS selector on the firmware-selected LoadedImage.DeviceHandle.
-; Exact ASCII normal/boot_only in \EFI\PaOS\native-drivers.cfg, no terminator.
-; The full-domain image defaults to boot_only, including absent configuration
-; and discovery failures. An explicit normal file retains the recovery policy.
-; Standalone/legacy builds default to ordinary policy. Invalid selection/read/
+; Exact ASCII normal/boot_only/network_guest in the engineering-only selector,
+; \EFI\PaOS\native-drivers.cfg, no terminator.
+; The compiled default is normal: retain existing native driver authorization.
+; Devices not claimed natively keep the existing isolated driver-domain path.
+; PAOS_NATIVE_DRIVER_DEFAULT=1 selects the optional boot_only proof profile;
+; it is not a public-release prerequisite (Peter 11/04, spec 0.80).
+; DEFAULT=2 reserves PCI NICs for the trusted network guest; ordinary non-NIC
+; devices and exact USB NICs remain eligible. Assignment/reset are separate.
+; Engineering builds retain the exact read-only selector. Invalid selection/read/
 ; close errors refuse (-1); failed controller discovery never grants storage.
-; An explicit normal widens native reach over the full-domain default; boot_only
-; only suppresses. Ordinary policy retains all existing driver authorization. The
-; selector conveys no storage grant or hardware assignment authority.
+; The selector conveys no storage grant or hardware assignment authority.
 ; A selected boot_only also captures the PCI controller on that exact volume's
 ; device path, using the same firmware protocol rail as rescue0_snp. Unknown or
 ; nonzero-segment location stays -1, never a wildcard. BDF alone does not select
@@ -20,9 +23,16 @@
 ; No LocateHandle enumeration, writes, firmware variables, heap or allocation.
 ; Publication into the boot probe graph belongs to the complete policy unit.
 ; A public build never opens a file: policy is fixed at build and the file name
-; is not in the image (Root 89714, SEC 89709). Normal widens native reach, and
-; the ESP is writable by any other OS. PAOS_PUBLIC_BUILD=0 is an engineering
+; is not in the image: the ESP is writable by any other OS. The retired
+; boot_only release default is not restored by this exclusion.
+; PAOS_PUBLIC_BUILD=0 is an engineering
 ; build, so defined alone is not public.
+%ifndef PAOS_NATIVE_DRIVER_DEFAULT
+%define PAOS_NATIVE_DRIVER_DEFAULT 0
+%endif
+%if PAOS_NATIVE_DRIVER_DEFAULT != 0 && PAOS_NATIVE_DRIVER_DEFAULT != 1 && PAOS_NATIVE_DRIVER_DEFAULT != 2
+%error "PAOS_NATIVE_DRIVER_DEFAULT must be 0, 1 or 2"
+%endif
 %define NDP_FILE_SELECTOR 1
 %ifdef PAOS_PUBLIC_BUILD
 %if PAOS_PUBLIC_BUILD != 0
@@ -41,16 +51,16 @@ native_driver_preload:
     push r12
     and rsp, -16
     sub rsp, 80
-%ifdef PAOS_DRIVER_DOMAIN_EVERYBOOT
-    mov qword [rel native_driver_selected_policy], 1
-%else
-    mov qword [rel native_driver_selected_policy], 0
-%endif
+    mov qword [rel native_driver_selected_policy], PAOS_NATIVE_DRIVER_DEFAULT
     mov qword [rel native_driver_boot_bdf], -1
     mov qword [rsp + 40], 0          ; root
     mov qword [rsp + 48], 0          ; config file
     mov qword [rsp + 56], 0          ; read position
     mov qword [rsp + 72], -1         ; provisional parsed value
+%if NDP_FILE_SELECTOR == 0 && PAOS_NATIVE_DRIVER_DEFAULT != 1
+    ; Fixed normal/network_guest need no volume/controller or ESP policy.
+    jmp .out
+%endif
     mov rbx, [rel boot_services]
     test rbx, rbx
     jz .out
@@ -153,7 +163,7 @@ native_driver_preload:
     call [rcx + 16]
     test rax, rax
     jnz .close_absent_failed
-%ifdef PAOS_DRIVER_DOMAIN_EVERYBOOT
+%if PAOS_NATIVE_DRIVER_DEFAULT == 1
     mov rdi,r12
     call ndp_capture_controller
 %endif

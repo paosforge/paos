@@ -1,0 +1,38 @@
+{
+  "id": "org.example.icon96",
+  "entry": "main.sh",
+  "icon": "icon.png",
+  "data_dir": "data",
+  "members": [
+    {
+      "kind": "script",
+      "path": "main.sh",
+      "source": "main.sh"
+    },
+    {
+      "kind": "form",
+      "path": "main.frm",
+      "source": "main.frm"
+    },
+    {
+      "kind": "grants",
+      "path": "grants",
+      "source": "grants"
+    },
+    {
+      "kind": "icon",
+      "path": "icon.png",
+      "source": "icon.png"
+    },
+    {
+      "kind": "notices",
+      "path": "NOTICES.json",
+      "source": "NOTICES.json"
+    },
+    {
+      "kind": "icon2x",
+      "path": "icon@2x.png",
+      "source": "icon@2x.png"
+    }
+  ]
+}

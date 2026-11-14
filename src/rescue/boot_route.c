@@ -42,13 +42,15 @@ const char *prc_route_manager(const char *efi_path) {
      * Do not borrow the preserved sb/ Manager for the relocated chain. */
     if (ascii_path_equal(efi_path, "\\EFI\\PAOS\\PAOS64.EFI"))
         return "EFI/PaOS/grubx64.efi";
+    if (ascii_path_equal(efi_path, "\\EFI\\PAOSCHAIN\\SHIMX64.EFI"))
+        return "EFI/PAOSCHAIN/grubx64.efi";
     return NULL;
 }
 
-int prc_parse_boot_route(const uint8_t *current, size_t current_size,
+static int parse_boot_route(const uint8_t *current, size_t current_size,
                          const uint8_t *option, size_t option_size,
                          uint16_t *boot_number, uint8_t part_guid[16],
-                         char efi_path[PRC_BOOT_PATH_SIZE]) {
+                         char efi_path[PRC_BOOT_PATH_SIZE], int common_usb) {
     if (boot_number) *boot_number = 0;
     if (part_guid) memset(part_guid, 0, 16);
     if (efi_path) memset(efi_path, 0, PRC_BOOT_PATH_SIZE);
@@ -74,7 +76,7 @@ int prc_parse_boot_route(const uint8_t *current, size_t current_size,
      * Lenovo's real signed-shim and Ubuntu options both carry it. Ignore it
      * strictly as opaque non-authoritative bytes, never as a route node. */
     size_t end = cursor + path_bytes;
-    int found_hd = 0, found_file = 0, ended = 0;
+    int found_hd = 0, found_file = 0, found_usb = 0, ended = 0;
     uint8_t guid[16] = {0};
     char path[PRC_BOOT_PATH_SIZE] = {0};
     while (cursor < end) {
@@ -89,9 +91,11 @@ int prc_parse_boot_route(const uint8_t *current, size_t current_size,
                 !rd64(node + 8) || !rd64(node + 16) ||
                 !any_nonzero(node + 24, 16) ||
                 node[40] != 2 || node[41] != 2) return -1;
+            if (common_usb && (!found_usb || rd32(node + 4) != 1)) return -1;
             memcpy(guid, node + 24, 16);
             found_hd = 1;
         } else if (type == 4 && subtype == 4) {
+            if (common_usb) return -1;
             if (found_file || length < 8 || (length & 1)) return -1;
             size_t letters = (length - 4) / 2;
             if (letters < 2 || letters >= PRC_BOOT_PATH_SIZE ||
@@ -106,17 +110,71 @@ int prc_parse_boot_route(const uint8_t *current, size_t current_size,
             }
             found_file = 1;
         } else if (type == 0x7f) {
-            if (subtype != 0xff || length != 4 || cursor != end)
-                return -1;
+            if (subtype != 0xff || length != 4) return -1;
+            if (cursor != end) {
+                /* Saved MSI firmware appends this exact vendor annotation
+                 * and another End after the USB HD path's End. It has no
+                 * route authority. Accept only these retained bytes, not a
+                 * second disk, FilePath or arbitrary extra instance. */
+                static const uint8_t suffix[28] = {
+                    1,4,24,0,0xef,0x47,0x64,0x2d,0xc9,0x3b,0xa0,0x41,
+                    0xac,0x19,0x4d,0x51,0xd0,0x1b,0x4c,0xe6,9,4,0,0,
+                    0x7f,0xff,4,0,
+                };
+                if (!common_usb || end - cursor != sizeof(suffix) ||
+                    memcmp(option + cursor, suffix, sizeof(suffix))) return -1;
+                cursor = end;
+            }
             ended = 1;
+        } else if (common_usb) {
+            /* Only the saved hardware-prefix/USB/HD shape. In particular an
+             * internal HD, URI, vendor node or a second instance cannot be
+             * reinterpreted as a removable COMMON chain. */
+            if (found_hd || found_usb) return -1;
+            if (type == 3 && subtype == 5 && length == 6) found_usb = 1;
+            else if (!((type == 2 && subtype == 1 && length == 12) ||
+                       (type == 1 && subtype == 1 && length == 6))) return -1;
         }
         if (ended) break;
     }
-    if (!ended || !found_hd || !found_file || cursor != end) return -1;
+    if (!ended || !found_hd || cursor != end ||
+        (common_usb ? (!found_usb || found_file) : !found_file)) return -1;
     *boot_number = number;
     memcpy(part_guid, guid, 16);
     memcpy(efi_path, path, PRC_BOOT_PATH_SIZE);
     return 0;
+}
+
+int prc_parse_boot_route(const uint8_t *current, size_t current_size,
+                         const uint8_t *option, size_t option_size,
+                         uint16_t *boot_number, uint8_t part_guid[16],
+                         char efi_path[PRC_BOOT_PATH_SIZE]) {
+    return parse_boot_route(current, current_size, option, option_size,
+                            boot_number, part_guid, efi_path, 0);
+}
+
+int prc_parse_manager_route(const uint8_t *current, size_t current_size,
+                            const uint8_t *option, size_t option_size,
+                            uint16_t *boot_number, uint8_t part_guid[16],
+                            const char **manager) {
+    if (manager) *manager = NULL;
+    if (!manager) return -1;
+    char path[PRC_BOOT_PATH_SIZE];
+    if (!parse_boot_route(current, current_size, option, option_size,
+                          boot_number, part_guid, path, 0)) {
+        *manager = prc_route_manager(path);
+        if (*manager) return 0;
+        if (boot_number) *boot_number = 0;
+        if (part_guid) memset(part_guid, 0, 16);
+        return -2; /* Well-formed explicit path outside supported PaOS routes. */
+    } else if (!parse_boot_route(current, current_size, option, option_size,
+                                 boot_number, part_guid, path, 1)) {
+        *manager = "EFI/PAOSCHAIN/grubx64.efi";
+        return 0;
+    }
+    if (boot_number) *boot_number = 0;
+    if (part_guid) memset(part_guid, 0, 16);
+    return -1;
 }
 
 int prc_partuuid_matches(const uint8_t part_guid[16],

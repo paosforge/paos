@@ -1,10 +1,11 @@
 ;; MODULE dev/net/rtl8126
 ;; LAYER 3
-;; EXPORTS e5000b_hw_bringup, e5000b_recover, e5000b_dev, e5000b_mac, e5000b_devid, e5000b_hw_ok, e5000b_mac_ok, e5000b_rings_ok, e5000b_iso_ok, e5000b_link_up, e5000b_link_speed, e5000b_rx_frames, e5000b_tx_frames, e5000b_matches, rtl8126_frame_stats, rtl8126_attach_snapshot
-;; IMPORTS boot/native_driver_gate, net/netdev, bus/pci, bus/hal, core/dma, core/time, boot/serial, dev/net/e1000e, bus/pci_claim
+;; EXPORTS rtl8126_link_rearm_counts, rtl8126_witness, e5000b_hw_bringup, e5000b_recover, e5000b_dev, e5000b_mac, e5000b_devid, e5000b_hw_ok, e5000b_mac_ok, e5000b_rings_ok, e5000b_iso_ok, e5000b_link_up, e5000b_link_speed, e5000b_rx_frames, e5000b_tx_frames, e5000b_matches, rtl8126_frame_stats, rtl8126_attach_snapshot, rtl8126_carrier_ready, rtl8126_carrier_read, rtl8126_carrier_write, rtl8126_carrier_link, rtl8126_terminal_quiesce
+;; IMPORTS boot/native_driver_gate, net/netdev, bus/pci, bus/hal, core/dma, core/time, boot/serial, dev/net/e1000e, bus/pci_claim, hv/nic_assignment, hv/pci_assign
 ;; CAPS mmio dma
 ;; OWNER saga:net
 %include "boot/native_driver_gate.inc"
+%include "dev/net/realtek_link_rearm.inc"
 ; ============================================================================
 ; dev/net/rtl8126.asm — Realtek RTL8126 / Killer E5000B (5 GbE)
 ; native backend behind the netdev_ops class seam.
@@ -42,6 +43,33 @@
 
 %include "core/abi/pci_claim.inc"
 %include "core/abi/rtl8126_attach.inc"
+
+; All externally reachable hardware producers use one nonblocking admission.
+; Terminal owns it forever after latching; ordinary returns release only theirs.
+%macro R26_TERMINAL_PRODUCER 1
+    cmp byte [rel rtl8126_terminal_latched], 0
+    jne %%bad
+    mov al, 1
+    xchg al, [rel rtl8126_terminal_gate]
+    test al, al
+    jnz %%bad
+    lea rsp, [rsp-8]                ; preserve active return flags/CF
+    call %1
+    lea rsp, [rsp+8]
+    mov byte [rel rtl8126_terminal_gate], 0
+    ret
+%%bad:
+    mov rax, -1
+    ret
+%endmacro
+%macro R26_TERMINAL_CLOSED 0
+    cmp byte [rel rtl8126_terminal_latched], 0
+    je %%open
+    mov rax, -1
+    ret
+%%open:
+%endmacro
+
 
 ; --- Killer E5000B / RTL8126 PCI identity ---------------------------------------
 E5B_VENDOR        equ 0x10EC          ; Realtek
@@ -122,13 +150,11 @@ E5B_LINK_WAIT_MS  equ 4000            ; bounded autoneg wait (ms), bring-up and 
 ; e5b_rd(RSI=BAR2 offset) -> EAX. clobbers RAX,RDI.
 e5b_rd:
     lea  rdi, [rel e5000b_region]
-    call hal_mmio_read32
-    ret
+    jmp hal_mmio_read32              ; tail call preserves SysV entry and HAL CF
 ; e5b_wr(RSI=BAR2 offset, EDX=value). clobbers RAX,R9,RDI.
 e5b_wr:
     lea  rdi, [rel e5000b_region]
-    call hal_mmio_write32
-    ret
+    jmp hal_mmio_write32             ; tail call preserves SysV entry and HAL CF
 ; e5b_or(RSI=offset, EDX=bits): dword read-modify-write OR. clobbers RAX,RDI,R9,RDX.
 e5b_or:
     push rsi
@@ -226,7 +252,9 @@ e5000b_dma_range_ok:
     jc   .bad
     shr  rax, 32
     jnz  .bad
+    push rsi                        ; align nested lookup and retain byte length
     call dma_iommu_lookup
+    pop  rsi
     cmp  rax, rsi
     jb   .bad
     mov  eax, 1
@@ -284,13 +312,16 @@ e5000b_create:
     ret
 
 e5000b_init:
+    R26_TERMINAL_CLOSED
     NATIVE_DRIVER_REFUSE 6
     xor  eax, eax
     ret
 e5000b_start:
+    R26_TERMINAL_CLOSED
     xor  eax, eax
     ret
 e5000b_stop:
+    R26_TERMINAL_CLOSED
     xor  eax, eax
     ret
 
@@ -323,6 +354,8 @@ rtl8126_frame_stats:
 ; completion wait. A second producer refuses at once; admission is released
 ; on every later path, while a timed-out descriptor keeps OWN and its bytes.
 e5000b_tx:
+    R26_TERMINAL_PRODUCER e5000b_tx_active
+e5000b_tx_active:
     push rbx
     push r12
     push r13
@@ -333,6 +366,9 @@ e5000b_tx:
     jnz  .busy
     cmp  byte [rel e5000b_rings_ok], 1
     jne  .degrade
+    call r26_lr_tick
+    test eax, eax
+    jnz .degrade
     mov  r13, [rel e5000b_tx_buffer]
     test r13, r13
     jz   .degrade
@@ -341,6 +377,18 @@ e5000b_tx:
     jb   .degrade
     cmp  r14, E5B_FRAME_MAX
     ja   .degrade
+    ; A powered-down PHY must not receive a new chip-owned descriptor. A
+    ; timeout retains OWN; it is not a queue that software may overwrite.
+    ; Fresh checked status, not the last link observation. Preserve frame RSI.
+    mov  r12, rsi
+    mov  esi, 0x6c
+    call e5b_rd
+    mov  rsi, r12
+    jc   .degrade
+    cmp  eax, -1
+    je   .degrade
+    test eax, 2
+    jz   .degrade
     mov  ebx, [rel e5000b_tx_head]
     cmp  ebx, E5B_NUM_TX
     jae  .owner_bad
@@ -392,6 +440,7 @@ e5000b_tx:
 ;   receive status (e5000b_isr_ack) and count overflow observations. Poll mode:
 ;   nothing else consumes the status.
 e5000b_rx_ack_status:
+    R26_TERMINAL_CLOSED
     cmp  byte [rel e5000b_hw_ok], 1
     jne  .out
     cmp  byte [rel e5000b_rings_ok], 1
@@ -404,6 +453,8 @@ e5000b_rx_ack_status:
     ret
 
 e5000b_rx_poll:
+    R26_TERMINAL_PRODUCER e5000b_rx_poll_active
+e5000b_rx_poll_active:
     push rbx
     push r12
     push r13
@@ -413,6 +464,10 @@ e5000b_rx_poll:
     jne  .rx_none
     cmp  qword [rel e5000b_rx_ring], 0
     je   .rx_none
+    call r26_lr_tick
+    test eax, eax
+    jnz .rx_none
+    inc qword [rel e5000b_rx_poll_calls]
     mov  ebx, [rel e5000b_rx_cursor]
     cmp  ebx, E5B_NUM_RX
     jae  .rx_owner_bad
@@ -512,6 +567,11 @@ e5000b_link_refresh:
 
 ; link_status(self) -> RAX bit0=up | speed<<8, from a live PHY status read.
 e5000b_link_status:
+    R26_TERMINAL_PRODUCER e5000b_link_status_active
+e5000b_link_status_active:
+    call r26_lr_tick
+    test eax, eax
+    jnz .unavailable
     call e5000b_link_refresh
     xor  eax, eax
     cmp  byte [rel e5000b_link_up], 1
@@ -520,6 +580,10 @@ e5000b_link_status:
     shl  eax, 8
     or   eax, 1
 .down:
+    ret
+
+.unavailable:
+    mov rax, -1
     ret
 
 ; get_mac(self, RSI=out6) -> RAX 0. The live station address read at bring-up.
@@ -563,6 +627,7 @@ e5000b_discover_cb:
 ; ==== CLEANROOM ROUTINE e5000b_soft_reset (RCQ-31 clean-room rewrite): contract in CLEANROOM_RTL8126_SPEC.md section R1 ====
 ; e5000b_soft_reset -> EAX 0 reset completed / -1 bounded timeout.
 e5000b_soft_reset:
+    R26_TERMINAL_CLOSED
     push rbx
     mov  esi, R26_RXCFG
     mov  edx, R26_RX_ACCEPT
@@ -678,6 +743,218 @@ e5b_clear_checked:
 
 ; ESI=even PHY-OCP register, EDX=data for write. Bit31 has opposite completion
 ; polarity for read/write (OB:3636-3668); never treat an uncompleted read as data.
+
+; Trusted BSP observation: RDI exact selected handle, RSI 20-qword output.
+; EAX=0 complete, -1 unavailable (output may be partial; caller keeps validity
+; separate). Existing terminal/policy admission; no waits, PHY/OCP transactions,
+; MMIO writes, interrupt clears, DMA ownership writes or readiness decisions.
+; Schema: family, software TX cursor, tail(-1 unavailable), active TX slots,
+; OWN bitmap, RX cursor, current RX status, live PHY, ISR, IMR, TX/RX frames,
+; RX/TX status-ACK class counts (poll mode, NOT delivered IRQs), command,
+; service-derived new ISR bits, ACK ISR OR, TX timeouts, owner mismatches, RX polls.
+rtl8126_witness:
+    R26_TERMINAL_PRODUCER rtl8126_witness_active
+rtl8126_witness_active:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r13, rsi
+    call rtl8126_carrier_ready
+    cmp eax, 1
+    jne .bad
+    mov r12, [rel e5000b_tx_ring]
+    test r12, r12
+    jz .bad
+    mov r14, [rel e5000b_rx_ring]
+    test r14, r14
+    jz .bad
+    mov eax, [rel e5000b_tx_head]
+    cmp eax, 32
+    jae .bad
+    mov [r13 + 8], rax
+    mov eax, [rel e5000b_rx_cursor]
+    cmp eax, E5B_NUM_RX
+    jae .bad
+    mov [r13 + 40], rax
+    shl rax, 5
+    add r14, rax
+    clflush [r14]
+    mfence
+    mov eax, [r14 + 28]
+    mov [r13 + 48], rax
+    xor r15d, r15d
+    xor ecx, ecx
+.own:
+    clflush [r12]
+    mfence
+    mov eax, [r12]
+    test eax, 0x80000000
+    jz .next
+    bts r15, rcx
+.next:
+    add r12, 32
+    inc ecx
+    cmp ecx, 32
+    jb .own
+    mov [r13 + 32], r15
+    mov qword [r13 + 16], -1
+    mov qword [r13 + 24], 32
+    mov esi, 108
+    call e5b_rd
+    jc .bad
+    and eax, 0xffff
+    mov [r13 + 56], rax
+    mov esi, 60
+    call e5b_rd
+    jc .bad
+    mov [r13 + 64], rax
+    mov esi, 56
+    call e5b_rd
+    jc .bad
+    mov [r13 + 72], rax
+    mov esi, 52
+    call e5b_rd
+    jc .bad
+    shr eax, 24
+    mov [r13 + 112], rax
+    mov rax, [rel e5000b_tx_frames]
+    mov [r13 + 80], rax
+    mov rax, [rel e5000b_rx_frames]
+    mov [r13 + 88], rax
+    mov rax, [rel e5000b_rx_status_acks]
+    mov [r13 + 96], rax
+    mov rax, [rel e5000b_tx_status_acks]
+    mov [r13 + 104], rax
+    mov qword [r13 + 120], -1          ; service derives 8168 new ISR bits
+    mov rax, [rel e5000b_isr_seen]
+    mov [r13 + 128], rax
+    mov rax, [rel e5000b_tx_timeouts]
+    mov [r13 + 136], rax
+    mov rax, [rel e5000b_owner_mismatches]
+    mov [r13 + 144], rax
+    mov rax, [rel e5000b_rx_poll_calls]
+    mov [r13 + 152], rax
+    mov qword [r13], 8126
+    xor eax, eax
+    jmp .out
+.bad:
+    mov rax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; BEGIN CARRIER_DRILL_LEAVES
+; Trusted exact-handle leaves. Fixed BMCR via checked HAL-gated OCP; unlike
+; the legacy generic helpers, any issue/poll refusal is propagated, not data.
+rtl8126_carrier_ready:
+    cmp byte [rel rtl8126_terminal_latched], 0
+    jne .bad
+    NATIVE_DRIVER_REFUSE 6
+    lea rax, [rel e5000b_dev]
+    cmp rdi, rax
+    jne .bad
+    cmp byte [rel e5000b_hw_ok], 1
+    jne .bad
+    cmp byte [rel e5000b_mac_ok], 1
+    jne .bad
+    cmp byte [rel e5000b_rings_ok], 1
+    jne .bad
+    cmp byte [rel e5000b_recover_busy], 0
+    jne .bad
+    cmp qword [rel e5000b_region + HAL_R_BAR_BASE], 0
+    je .bad
+    mov eax, 1
+    ret
+.bad:
+    xor eax, eax
+    ret
+rtl8126_carrier_read:
+    R26_TERMINAL_PRODUCER rtl8126_carrier_read_active
+rtl8126_carrier_read_active:
+    call rtl8126_carrier_ready
+    cmp eax, 1
+    jne rtl8126_carrier_bad
+    mov edx, (0xa400 << 15)
+    xor eax, eax
+    jmp rtl8126_carrier_ocp
+rtl8126_carrier_write:
+    R26_TERMINAL_PRODUCER rtl8126_carrier_write_active
+rtl8126_carrier_write_active:
+    call rtl8126_carrier_ready
+    cmp eax, 1
+    jne rtl8126_carrier_bad
+    test esi, 0xffff0000
+    jnz rtl8126_carrier_bad
+    mov edx, esi
+    or edx, (0xa400 << 15) | 0x80000000
+    mov eax, 1
+rtl8126_carrier_ocp:
+    push r12
+    push r13
+    mov r12d, eax
+    mov esi, 0xb8
+    call e5b_wr
+    jc .bad
+    mov r13d, 20000
+.poll:
+    mov edi, 1
+    call tsc_delay_us
+    mov esi, 0xb8
+    call e5b_rd
+    jc .bad
+    cmp eax, -1
+    je .bad
+    test eax, 0x80000000
+    jz .clear
+    test r12d, r12d
+    jz .read
+    jmp .wait
+.clear:
+    test r12d, r12d
+    jnz .write
+.wait:
+    dec r13d
+    jnz .poll
+.bad:
+    mov rax, -1
+    jmp .out
+.read:
+    and eax, 0xffff
+    jmp .out
+.write:
+    xor eax, eax
+.out:
+    pop r13
+    pop r12
+    ret
+rtl8126_carrier_link:
+    R26_TERMINAL_PRODUCER rtl8126_carrier_link_active
+rtl8126_carrier_link_active:
+    call rtl8126_carrier_ready
+    cmp eax, 1
+    jne .bad
+    mov esi, 0x6c
+    call e5b_rd
+    jc .bad
+    cmp eax, -1
+    je .bad
+    mov edx, eax
+    shr eax, 1
+    and eax, 1
+    ret
+.bad:
+    mov rdx, -1
+rtl8126_carrier_bad:
+    mov rax, -1
+    ret
+; END CARRIER_DRILL_LEAVES
+
 e5b_phy_read:
     push rbx
     shl  esi, 15
@@ -873,6 +1150,7 @@ e5000b_read_mac:
 ; ==== CLEANROOM ROUTINE e5000b_arm_rings (RCQ-31 clean-room rewrite): contract in CLEANROOM_RTL8126_SPEC.md section R3 ====
 ; e5000b_arm_rings -> EAX 0 armed (TX and RX live) / -1 refused.
 e5000b_arm_rings:
+    R26_TERMINAL_CLOSED
     push rbx
     mov  esi, R26_IMR
     xor  edx, edx
@@ -947,6 +1225,7 @@ e5000b_arm_rings:
 ; ==== CLEANROOM ROUTINE e5000b_tx_frame (RCQ-31 clean-room rewrite): contract in CLEANROOM_RTL8126_SPEC.md section R4 ====
 ; e5000b_tx_frame(EBX=slot, RSI=frame, R13=bounce buffer, R14=len) -> EAX E5B_TX_*.
 e5000b_tx_frame:
+    R26_TERMINAL_CLOSED
     push r12
     push r15
     imul r12, rbx, E5B_DESC_SIZE
@@ -1027,6 +1306,7 @@ e5000b_rx_desc:
 ; ==== CLEANROOM ROUTINE e5000b_rx_repost (RCQ-31 clean-room rewrite): contract in CLEANROOM_RTL8126_SPEC.md section R6 ====
 ; e5000b_rx_repost(EBX=slot): hand the slot's 2 KiB buffer back to the chip.
 e5000b_rx_repost:
+    R26_TERMINAL_CLOSED
     imul r8, rbx, E5B_DESC_SIZE
     add  r8, [rel e5000b_rx_ring]
     imul rax, rbx, E5B_RX_BUF
@@ -1048,11 +1328,21 @@ e5000b_rx_repost:
 ; ==== CLEANROOM ROUTINE e5000b_isr_ack (RCQ-31 clean-room rewrite): contract in CLEANROOM_RTL8126_SPEC.md section R7 ====
 ; e5000b_isr_ack -> EAX 1 when a receive-overflow class status was acknowledged, else 0.
 e5000b_isr_ack:
+    R26_TERMINAL_CLOSED
     mov  esi, R26_ISR
     call e5b_rd
     mov  r8d, eax
+    or [rel e5000b_isr_seen], rax
     test eax, eax
     jz   .result
+    test eax, 3
+    jz .no_rx_count
+    inc qword [rel e5000b_rx_status_acks]
+.no_rx_count:
+    test eax, 12
+    jz .no_tx_count
+    inc qword [rel e5000b_tx_status_acks]
+.no_tx_count:
     mov  edx, eax
     call e5b_wr                         ; W1C: exactly the single observation
 .result:
@@ -1102,6 +1392,8 @@ e5000b_phy_status:
 ;   re-arm both rings and the chip, then a LIVE link read. The proof of recovery is a
 ;   post-reset challenged reply observed by the GPU, never this return value alone.
 e5000b_recover:
+    R26_TERMINAL_PRODUCER e5000b_recover_active
+e5000b_recover_active:
     NATIVE_DRIVER_REFUSE 6
     push rbx
     cmp  byte [rel e5000b_recover_busy], 0
@@ -1143,6 +1435,7 @@ e5000b_recover:
     dec  ebx
     jnz  .link_wait
 .link_back:
+    mov qword [rel rtl8126_link_rearm_state], 0 ; retain counts, fresh edge after explicit recovery
     lock inc qword [rel e5000b_recover_successes]
     mov  byte [rel e5000b_recover_busy], 0
     xor  eax, eax
@@ -1192,7 +1485,10 @@ r26_record_claim:
 ;   everywhere; an absent RTL8126 degrades cleanly (no marker, no register, no hang).
 ; ============================================================================
 e5000b_hw_bringup:
+    R26_TERMINAL_PRODUCER e5000b_hw_bringup_active
+e5000b_hw_bringup_active:
     NATIVE_DRIVER_REFUSE 6
+    PCIA_NATIVE_COLD_REFUSE                        ; before instance clearing or discovery
     push rbx
     push r12
     push r13
@@ -1447,6 +1743,9 @@ e5000b_hw_bringup:
     pop  rbx
     ret
 
+rtl8126_terminal_quiesce:
+%include "dev/net/rtl8126_terminal.inc"
+
 ; --- e5000b data (in-image writable) --------------------------------------------
 e5000b_dev:        times dev_size db 0
 e5000b_ops:        times netdev_ops_size db 0
@@ -1465,6 +1764,10 @@ e5000b_tx_ring:    dq 0
 e5000b_rx_ring:    dq 0
 e5000b_tx_buffer:  dq 0
 e5000b_rx_buffers: dq 0
+e5000b_isr_seen: dq 0                  ; OR of actual existing ACK observations
+e5000b_rx_poll_calls: dq 0
+e5000b_rx_status_acks: dq 0             ; latched ISR classes observed at existing W1C
+e5000b_tx_status_acks: dq 0             ; not hardware delivered interrupt counts
 e5000b_tx_frames:  dq 0
 e5000b_rx_frames:  dq 0
 e5000b_tx_drops:   dq 0
@@ -1517,3 +1820,71 @@ str_e5000b_diag_mac:   db " mac0_3=", 0
 str_e5000b_diag_st:    db " [macok rings iso link speed]=", 0
 
 %include "dev/net/rtl8126_bsd_facts.inc"
+
+; Boot-local terminal state is never cleared by attach/recovery.
+rtl8126_terminal_gate: db 0
+rtl8126_terminal_latched: db 0
+
+; All calls are inside R26_TERMINAL_PRODUCER; never reacquire that gate.
+r26_lr_tick:
+    NATIVE_DRIVER_REFUSE 6
+    lea rax, [rel rtl8126_link_rearm_state]
+    REALTEK_LINK_REARM_BODY r26
+r26_lr_sample:
+    cmp byte [rel e5000b_rings_ok], 1
+    jne .bad
+    cmp qword [rel e5000b_tx_ring], 0
+    je .bad
+    mov esi, R26_PHYSTAT
+    call e5b_rd
+    jc .bad
+    movzx eax, ax
+    cmp eax, 0xffff
+    je .bad
+    shr eax, 1
+    and eax, 1
+    ret
+.bad:
+    mov rax, -1
+    ret
+r26_lr_own:
+    mov r8, [rel e5000b_tx_ring]
+    xor eax, eax
+    xor ecx, ecx
+.loop:
+    clflush [r8]
+    mfence
+    test dword [r8], R26_OWN
+    jz .next
+    bts eax, ecx
+.next:
+    add r8, E5B_DESC_SIZE
+    inc ecx
+    cmp ecx, E5B_NUM_TX
+    jb .loop
+    ret
+r26_lr_wake:
+    jmp e5000b_phy_wake
+r26_lr_phy_read:
+    mov esi, edi
+    jmp e5b_phy_read
+r26_lr_ready:
+    REALTEK_PHY_READY_BODY r26
+r26_lr_reset:
+    jmp e5000b_recover_active
+r26_lr_close:
+    mov byte [rel e5000b_rings_ok], 0
+    mov byte [rel e5000b_link_up], 0
+    ret
+rtl8126_link_rearm_counts:
+    lea r8, [rel rtl8126_link_rearm_state+16]
+    xor ecx, ecx
+.copy:
+    mov rax, [r8+rcx*8]
+    mov [rdi+rcx*8], rax
+    inc ecx
+    cmp ecx, 5
+    jb .copy
+    ret
+align 8
+rtl8126_link_rearm_state: times REALTEK_LR_SIZE db 0

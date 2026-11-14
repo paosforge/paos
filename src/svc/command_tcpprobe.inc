@@ -1,6 +1,7 @@
 ; Owner-only finite TCP exerciser, using the common stack and exact incarnations.
 ; TCPPROBE nonce16 o remoteIPv4wire8 remoteHostPort4 localHostPort4
-; TCPPROBE nonce16 p|c|r. r returns compact actual common-free observation.
+; TCPPROBE nonce16 p|c|r|s|l|k. s sends the sixteen-byte request nonce once,
+; through the common epoch-owned send path; r reads actual completed free.
 ; All hex lowercase; only one owned connection at a time.
 ; result: 0 observed,1 retired,2 busy,3 ownership/live refusal,4 open failed,
 ; 5 canceled. No implicit retry, timer/budget change, or automatic displacement.
@@ -69,6 +70,12 @@ cmd_verb_tcpprobe:
     je   .parse_short
     cmp  r13d, 'r'
     je   .parse_short
+    cmp  r13d, 'l'
+    je   .parse_short
+    cmp  r13d, 'k'
+    je   .parse_short
+    cmp  r13d, 's'
+    je   .parse_short
     cmp  r13d, 'c'
     jne  .bad
 .parse_short:
@@ -126,10 +133,16 @@ cmd_verb_tcpprobe:
     mov  rax, [r12 + 8]
     cmp  [rel tcpprobe_nonce + 8], rax
     jne  .render
+    cmp  r13d, 'k'
+    je   .link_show
+    cmp  r13d, 'l'
+    je   .link_arm
     cmp  r13d, 'r'
     je   .read_reap
     cmp  r13d, 'c'
     je   .cancel
+    cmp  r13d, 's'
+    je   .send
     call tcpprobe_observe
     jmp  .render
 .open:
@@ -152,6 +165,7 @@ cmd_verb_tcpprobe:
     jmp  .render
 .start:
     call tcpprobe_retirement_clear
+    mov  byte [rel tcpprobe_sent], 0
     mov  rax, [r12]
     mov  [rel tcpprobe_nonce], rax
     mov  rax, [r12 + 8]
@@ -173,6 +187,34 @@ cmd_verb_tcpprobe:
     mov  r14d, 4
     test rax, rax
     jz   .render
+    call tcpprobe_observe
+    jmp  .render
+.link_arm:
+    call tcpprobe_link_arm
+    jmp  .render
+.link_show:
+    call tcpprobe_link_render
+    jmp  .publish
+.send:
+    ; A single fixed public nonce is sufficient to exercise established data
+    ; retransmission. Never copy arbitrary memory or bypass the epoch guard.
+    ; Consume before attempting admission: an uncertain/busy send is not
+    ; silently replayed by a repeated owner request.
+    cmp  byte [rel tcpprobe_sent], 0
+    jne  .render
+    mov  byte [rel tcpprobe_sent], 1
+    mov  rdi, [rel tcpprobe_pair]
+    mov  rsi, [rel tcpprobe_pair + 8]
+    mov  rdx, r12
+    mov  ecx, 16
+    mov  r8d, 1
+    call tcp_client_epoch_io
+    mov  r14d, 2
+    cmp  rax, -1
+    je   .render
+    mov  r14d, 1
+    test rax, rax
+    jnz  .render
     call tcpprobe_observe
     jmp  .render
 .cancel:
@@ -338,6 +380,7 @@ tcpprobe_retirement_clear:
     ret
 
 %include "svc/command_tcpprobe_reap.inc"
+%include "svc/command_tcpprobe_link.inc"
 
 align 8
 tcpprobe_pair: times 2 dq 0
@@ -348,6 +391,7 @@ tcpprobe_sample: times 9 dq 0
 tcpprobe_reap_sample: times 5 dq 0
 tcpprobe_nonce: times 17 db 0
 tcpprobe_lock: db 0
+tcpprobe_sent: db 0
 str_verb_tcpprobe: db 'TCPPROBE',0
 str_tcpprobe_prefix: db ' TCPPROBE rev=2 nonce=',0
 str_tcpprobe_action: db ' action=',0

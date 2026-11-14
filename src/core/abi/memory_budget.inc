@@ -42,6 +42,8 @@ MB_REC_WARM_STATE equ 104
 MB_REC_CAPTURE equ 112
 MB_REC_CAPTURE_SERIAL equ 120
 MB_REC_SIZE equ 128
+; Read-only exact-key prefix: owner/gen/token/kind/base/bytes/resident.
+MB_ALLOCATION_BYTES equ 56
 MB_WARM_ACTIVE equ 1
 MB_WARM_RETIRING equ 2
 MB_SUM_SCHEMA equ 0

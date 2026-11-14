@@ -831,11 +831,19 @@ hv_boundary_enter:
     mov qword [rbx + HVB_REQUEST + 24], 0 ; no implemented guest-control interface
     mov qword [rbx + HVB_REQUEST + 32], 0
     mov qword [rbx + HVB_REQUEST + 40], 0
+    mov rdi, rbx
+    mov esi, 0
+    xor edx, edx
+    call hv_boundary_cost_stamp
     lea rdi, [rbx + HVB_REQUEST]
     mov esi, 48
     lea rdx, [rbx + HVB_RECEIPT]
     mov ecx, 96
     call cpu_boundary_context_enter
+    mov rdi, rbx
+    mov esi, 0
+    mov edx, 1
+    call hv_boundary_cost_stamp
     test rax, rax
     jnz cpu_boundary_fail_stop
     cmp qword [rbx + HVB_RECEIPT], 0
@@ -889,11 +897,19 @@ hv_boundary_exit:
     mov rax, [rbx + HVB_RECEIPT + 40]
     mov [rbx + HVB_REQUEST + 32], rax
     mov qword [rbx + HVB_REQUEST + 40], 0
+    mov rdi, rbx
+    mov esi, 1
+    xor edx, edx
+    call hv_boundary_cost_stamp
     lea rdi, [rbx + HVB_REQUEST]
     mov esi, 48
     lea rdx, [rbx + HVB_RECEIPT]
     mov ecx, 96
     call cpu_boundary_context_exit
+    mov rdi, rbx
+    mov esi, 1
+    mov edx, 1
+    call hv_boundary_cost_stamp
     test rax, rax
     jnz cpu_boundary_fail_stop
     cmp qword [rbx + HVB_RECEIPT], 0

@@ -5,6 +5,9 @@
 ; ip_wire,port,session,first_ready,last_tick,local_port,sequence. All times us.
 TERM_OBS_SIZE equ 128
 TERM_OBS_SEQ equ 120
+; Extension qword 6: actual clock of the last service pass that tested this
+; dial's applicable caller ceiling and found it not yet reached (0 = none yet).
+TERM_OBS_EXT_PREV equ 48
 
 ; R12 exact live instance pointer -> RAX record or zero. No TI dereference until
 ; membership/alignment is checked. Clobbers RAX/RCX/RDX only.
@@ -40,6 +43,11 @@ term_ssh_observation_begin:
     jz   .out
     mov  rbx, rax
     inc  qword [rbx + TERM_OBS_SEQ]
+    call term_ssh_key_observation_ptr
+    mov  rdi, rax
+    xor  eax, eax
+    mov  ecx, 8
+    rep  stosq
     mov  rdi, rbx
     xor  eax, eax
     mov  ecx, 15
@@ -96,6 +104,13 @@ term_ssh_observation_tick:
     cmp  qword [rbx + 40], 0
     jne  .out
     inc  qword [rbx + TERM_OBS_SEQ]
+%ifdef PAOS_TERMINAL_SSH
+    call term_ssh_key_observation_ptr
+    mov  rdi, rax
+    lea  rsi, [rel ssh_cli_key_check]
+    mov  ecx, 6
+    rep  movsq
+%endif
     movzx eax, byte [rel ssh_cli_state]
     mov  [rbx + 56], rax
     movzx eax, byte [rel ssh_cli_error]
@@ -127,6 +142,30 @@ term_ssh_observation_reason:
     mov  [rax + 48], rdi
     inc  qword [rax + TERM_OBS_SEQ]
 .out:
+    ret
+
+; RDI actual clock of one service pass whose ceiling test found the applicable
+; caller ceiling not yet reached. Frozen at detach like every other field. No
+; clock read, session switch or deadline change. Clobbers RAX/RCX/RDX only.
+term_ssh_observation_pass:
+    push rbx
+    push rdi
+    call term_ssh_observation_ptr
+    test rax, rax
+    jz   .out
+    mov  rbx, rax
+    cmp  qword [rbx], 0
+    je   .out
+    cmp  qword [rbx + 40], 0
+    jne  .out
+    inc  qword [rbx + TERM_OBS_SEQ]
+    call term_ssh_key_observation_ptr
+    mov  rdi, [rsp]
+    mov  [rax + TERM_OBS_EXT_PREV], rdi
+    inc  qword [rbx + TERM_OBS_SEQ]
+.out:
+    pop  rdi
+    pop  rbx
     ret
 
 ; Only after actual session_end and TI detach. This is caller detachment, NOT
@@ -161,6 +200,7 @@ term_ssh_observation_forget:
     mov  qword [rax], 0
     inc  qword [rax + TERM_OBS_SEQ]
 .out:
+    call term_ssh_start_observation_forget
     ret
 
 ; R12 current instance, RDI distinct writable out128 -> 0 stable record,
@@ -219,6 +259,135 @@ term_ssh_observation_copy:
     pop  rbx
     ret
 
+; RBX validated legacy record -> RAX its separate 64-byte public extension.
+; Both records share the original sequence; legacy 128-byte copy ABI is unchanged.
+term_ssh_key_observation_ptr:
+    mov  rax, rbx
+    lea  rcx, [rel term_ssh_observations]
+    sub  rax, rcx
+    shr  rax, 1
+    lea  rcx, [rel term_ssh_key_observations]
+    add  rax, rcx
+    ret
+
+; RDI distinct writable out192. Copy legacy then extension under its original
+; sequence. No lifecycle work, session switch, timer or network call.
+term_ssh_key_observation_copy:
+    push rbx
+    push rdi
+    push rsi
+    test rdi, rdi
+    jz   .null
+    mov  r8, rdi
+    xor  eax, eax
+    mov  ecx, 24
+    rep  stosq
+    mov  rdi, r8
+    call term_ssh_observation_copy
+    test eax, eax
+    jnz  .out
+    call term_ssh_observation_ptr
+    test rax, rax
+    jz   .busy
+    mov  rbx, rax
+    mov  r9, [r8 + TERM_OBS_SEQ]
+    cmp  r9, [rbx + TERM_OBS_SEQ]
+    jne  .busy
+    call term_ssh_key_observation_ptr
+    mov  rsi, rax
+    lea  rdi, [r8 + TERM_OBS_SIZE]
+    mov  ecx, 8
+    rep  movsq
+    cmp  r9, [rbx + TERM_OBS_SEQ]
+    jne  .busy
+    mov  rax, [r8]
+    cmp  rax, [rbx]
+    jne  .busy
+    xor  eax, eax
+    jmp  .out
+.busy:
+    mov  rdi, r8
+    xor  eax, eax
+    mov  ecx, 24
+    rep  stosq
+    mov  eax, -2
+    jmp  .out
+.null:
+    mov  eax, -1
+.out:
+    pop  rsi
+    pop  rdi
+    pop  rbx
+    ret
+
+; Exact @SSHKEYOBS public projection. STATUS1/2 has an all-zero tail.
+term_ssh_key_observation_feed:
+    push rbx
+    push r13
+    cmp  byte [rdi], 0
+    jne  .bad
+    sub  rsp, 192
+    mov  rdi, rsp
+    call term_ssh_key_observation_copy
+    mov  ebx, eax
+    xor  edi, edi
+    call grid_out_dec
+    lea  rdi, [rel term_ssh_key_observation_header]
+    call grid_out_str
+    neg  ebx
+    mov  edi, ebx
+    call grid_out_dec
+    xor  r13d, r13d
+.fields:
+    lea  rax, [rel term_ssh_observation_names]
+    mov  rdi, [rax + r13*8]
+    add  rdi, rax                       ; table-relative offset -> live image pointer
+    call grid_out_str
+    mov  rdi, [rsp + r13*8]
+    call grid_out_dec
+    inc  r13d
+    cmp  r13d, 15
+    jb   .fields
+    lea  rdi, [rel term_ssh_key_observation_check]
+    call grid_out_str
+    mov  rdi, [rsp + 128]
+    call grid_out_dec
+    lea  rdi, [rel term_ssh_key_observation_auth]
+    call grid_out_str
+    mov  rdi, [rsp + 136]
+    call grid_out_dec
+    lea  rdi, [rel term_ssh_key_observation_fp]
+    call grid_out_str
+    xor  r13d, r13d
+.hex:
+    movzx eax, byte [rsp + r13 + 144]
+    shr  eax, 4
+    lea  rbx, [rel term_ssh_key_observation_hex]
+    movzx edi, byte [rbx + rax]
+    call grid_out_char
+    movzx eax, byte [rsp + r13 + 144]
+    and  eax, 15
+    movzx edi, byte [rbx + rax]
+    call grid_out_char
+    inc  r13d
+    cmp  r13d, 32
+    jb   .hex
+    add  rsp, 192
+    xor  eax, eax
+    jmp  .out
+.bad:
+    mov  eax, 4
+.out:
+    pop  r13
+    pop  rbx
+    ret
+
+term_ssh_key_observation_header: db ' SSHKEYOBS=1 STATUS=',0
+term_ssh_key_observation_check: db ' CHECK=',0
+term_ssh_key_observation_auth: db ' AUTH_CALLS=',0
+term_ssh_key_observation_fp: db ' FP=',0
+term_ssh_key_observation_hex: db '0123456789abcdef'
+
 ; Existing owner TERMFEED @SSHOBS projection of a stable copy. RDI is text after
 ; keyword (existing term_prefix may consume one separating space); EAX4 malformed,
 ; 0 valid (including explicit missing/busy STATUS).
@@ -243,6 +412,7 @@ term_ssh_observation_feed:
 .fields:
     lea  rax, [rel term_ssh_observation_names]
     mov  rdi, [rax + r13*8]
+    add  rdi, rax                       ; table-relative offset -> live image pointer
     call grid_out_str
     mov  rdi, [rsp + r13*8]
     call grid_out_dec
@@ -259,9 +429,57 @@ term_ssh_observation_feed:
     pop  rbx
     ret
 
+; Exact @SSHDUE projection from the same sequence-checked copy as @SSHKEYOBS:
+; ID, DONE_US and the last not-yet-due ceiling pass. STATUS1/2 is all zero.
+term_ssh_due_observation_feed:
+    push rbx
+    push r13
+    cmp  byte [rdi], 0
+    jne  .bad
+    sub  rsp, 192
+    mov  rdi, rsp
+    call term_ssh_key_observation_copy
+    mov  ebx, eax
+    xor  edi, edi
+    call grid_out_dec
+    lea  rdi, [rel term_ssh_due_observation_header]
+    call grid_out_str
+    neg  ebx
+    mov  edi, ebx
+    call grid_out_dec
+    lea  rdi, [rel term_ssh_observation_names.id]
+    call grid_out_str
+    mov  rdi, [rsp]
+    call grid_out_dec
+    lea  rdi, [rel term_ssh_observation_names.done]
+    call grid_out_str
+    mov  rdi, [rsp + 40]
+    call grid_out_dec
+    lea  rdi, [rel term_ssh_due_observation_prev]
+    call grid_out_str
+    mov  rdi, [rsp + TERM_OBS_SIZE + TERM_OBS_EXT_PREV]
+    call grid_out_dec
+    add  rsp, 192
+    xor  eax, eax
+    jmp  .out
+.bad:
+    mov  eax, 4
+.out:
+    pop  r13
+    pop  rbx
+    ret
+
+term_ssh_due_observation_header: db ' SSHDUE=1 STATUS=',0
+term_ssh_due_observation_prev: db ' PREV_US=',0
+
 term_ssh_observation_header: db ' SSHOBS=1 STATUS=',0
+; Immutable relative offsets: flat org0 images have no ELF data relocation.
 term_ssh_observation_names:
-    dq .id,.win,.start,.tcp,.channel,.done,.reason,.state,.error,.ip,.port,.session,.ready,.tick,.lport
+    dq .id-term_ssh_observation_names,.win-term_ssh_observation_names,.start-term_ssh_observation_names
+    dq .tcp-term_ssh_observation_names,.channel-term_ssh_observation_names,.done-term_ssh_observation_names
+    dq .reason-term_ssh_observation_names,.state-term_ssh_observation_names,.error-term_ssh_observation_names
+    dq .ip-term_ssh_observation_names,.port-term_ssh_observation_names,.session-term_ssh_observation_names
+    dq .ready-term_ssh_observation_names,.tick-term_ssh_observation_names,.lport-term_ssh_observation_names
 .id: db ' ID=',0
 .win: db ' WIN=',0
 .start: db ' START_US=',0
@@ -278,10 +496,13 @@ term_ssh_observation_names:
 .tick: db ' TICK_US=',0
 .lport: db ' LPORT=',0
 
+%include "gui/terminal_ssh_start_observation.inc"
+
 %include "core/abi/wdata.inc"
 %macro WDATA_gui_terminal_ssh_observation_0 0
 align 8
 term_ssh_observation_id: dq 0
 term_ssh_observations: times TERM_MAX * TERM_OBS_SIZE db 0
+term_ssh_key_observations: times TERM_MAX * 64 db 0
 %endmacro
 WDATA_DEFER WDATA_gui_terminal_ssh_observation_0

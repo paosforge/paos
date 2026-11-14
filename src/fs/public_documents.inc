@@ -1,0 +1,20 @@
+; Native ordinary public documents, stored separately from private DATA records.
+%ifndef PAOS_PUBLIC_DOCUMENTS_INC
+%define PAOS_PUBLIC_DOCUMENTS_INC 1
+PUD_MAGIC equ 0x31434f44534f4150       ; PAOSDOC1
+PUD_ROWS equ 8
+PUD_HEADER equ 128
+PUD_ROW equ 512
+PUD_BYTES equ PUD_HEADER+PUD_ROWS*PUD_ROW
+PUD_NAME equ 64
+PUD_PAYLOAD equ 384
+PUD_R_ID equ 64
+PUD_R_GEN equ 72
+PUD_R_SIZE equ 80
+PUD_R_DATA equ 96
+PUD_R_HASH equ 480
+PUD_OWNER equ 16
+PUD_NEXT equ 24
+PUD_KEY equ 32
+PUD_MAC equ 96
+%endif

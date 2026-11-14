@@ -1,7 +1,7 @@
 ;; MODULE sec/app_install_grants
 ;; LAYER 6
 ;; PURPOSE Remember exact owner-selected install policy without reusing VM authority.
-;; EXPORTS app_install_grants_preebs, app_install_grants_save, app_install_grants_restore, app_install_grants_revoke_durable, app_install_grants_init, app_install_grants_remember, app_install_grants_lookup, app_install_grants_revoke, app_install_grants_runtime, app_install_grants_room, app_install_grants_requested
+;; EXPORTS app_install_grants_observe, app_install_grants_preebs, app_install_grants_save, app_install_grants_restore, app_install_grants_revoke_durable, app_install_grants_revoke_exact, app_install_grants_init, app_install_grants_remember, app_install_grants_lookup, app_install_grants_revoke, app_install_grants_runtime, app_install_grants_room, app_install_grants_requested
 ;; IMPORTS sec/app_grants, sec/app_binding, sec/session, svc/app_script, svc/app_package, svc/app_analysis, svc/command, core/smp
 ;; OWNER saga:app_grants
 ;; CONTEXT: bsp_only
@@ -626,6 +626,119 @@ app_install_grants_revoke_durable:
 .refused:
     xor eax,eax
 .out:
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; revoke_exact(RDI native digest32, RSI profile1|2, RDX owner epoch)->1 confirmed
+; absent in the authenticated variable and RAM/2 denied now, persistence uncertain
+; /0 pre-effect refusal. No candidate or volatile approval ID required after reboot.
+; REMOVE coordinator must first persist exact REMOVING denial and quiesce the VM.
+; This leaf does not authorize that coordinator, install bytes or claim uninstall.
+app_install_grants_revoke_exact:
+    push rbx
+    push r12
+    push r13
+    push r14
+    cld
+    mov rbx,rdi
+    mov r12,rsi
+    mov r13,rdx
+    call ig_enter
+    test eax,eax
+    jz .refused
+    cmp r12,IG_SCRIPT
+    je .profile
+    cmp r12,IG_PACKAGE
+    jne .refused_busy
+.profile:
+    call ig_owner
+    test eax,eax
+    jz .refused_busy
+    test rdx,rdx
+    jz .refused_busy
+    cmp rdx,r13
+    jne .refused_busy
+    mov rdi,rbx
+    mov esi,32
+    call ig_disjoint
+    test eax,eax
+    jz .refused_busy
+    mov [rel ig_profile],r12
+    lea rdi,[rel ig_descriptor+32]
+    mov rsi,rbx
+    mov ecx,4
+    rep movsq
+    lea rdi,[rel ig_descriptor+32]
+    mov rsi,r13
+    call app_grants_revoke_bundle
+    cmp eax,1
+    jne .refused_busy
+    lea r8,[rel ig_rows]
+    mov r9d,IG_ROWS
+.row:
+    cmp qword [r8],0
+    je .next
+    cmp qword [r8+8],PRIN_OWNER
+    jne .next
+    cmp [r8+56],r12
+    jne .next
+    lea rdi,[r8+16]
+    lea rsi,[rel ig_descriptor+32]
+    mov ecx,4
+    repe cmpsq
+    jne .next
+    mov rdi,r8
+    xor eax,eax
+    mov ecx,IG_ROW_BYTES/8
+    rep stosq
+.next:
+    add r8,IG_ROW_BYTES
+    dec r9d
+    jnz .row
+    ; A prior cached image cannot confirm absence for this explicit operation.
+    mov byte [rel ig_store_state],0
+    call ig_store_load
+    test eax,eax
+    jz .uncertain
+    lea rdi,[rel ig_stage]
+    lea rsi,[rel ig_saved]
+    mov ecx,IGS_BYTES/8
+    rep movsq
+    lea rdi,[rel ig_stage]
+    call ig_store_find
+    test rax,rax
+    jz .confirmed
+.wipe:
+    mov rdi,rax
+    xor eax,eax
+    mov ecx,IGS_ROW_BYTES/8
+    rep stosq
+    lea rdi,[rel ig_stage]
+    call ig_store_find
+    test rax,rax
+    jnz .wipe
+    call ig_tomb_strip
+    call ig_store_write
+    test eax,eax
+    jz .uncertain
+.confirmed:
+    mov r14d,1
+    jmp .done
+.uncertain:
+    call ig_tomb_add
+    mov r14d,2
+.done:
+    mov byte [rel ig_busy],0
+    mov eax,r14d
+    jmp .out
+.refused_busy:
+    mov byte [rel ig_busy],0
+.refused:
+    xor eax,eax
+.out:
+    pop r14
     pop r13
     pop r12
     pop rbx
@@ -1256,3 +1369,92 @@ ig_index: resb 1280
 ig_private_end:
 %endmacro
 WDATA_BSS_DEFER WDATA_BSS_sec_app_install_grants
+
+; Native depth-zero keyed OWNER diagnostic. RDI digest32, RSI output40.
+; Output: remembered count, firmware state(1 authentic/2 absent/3 invalid/0 unavailable),
+; durable count, runtime count, pending count. Fresh GetVariable, no cached success.
+; Does not expose variable bytes, HMAC/key material, or write any policy/storage.
+app_install_grants_observe:
+    push rbx
+    push r12
+    push r13
+    mov rbx,rdi
+    mov r12,rsi
+    mov rdi,r12
+    xor eax,eax
+    mov ecx,5
+    cld
+    rep stosq
+    call ig_enter
+    test eax,eax
+    jz .out
+    call ig_owner
+    test eax,eax
+    jz .release
+    lea r8,[rel ig_rows]
+    mov r9d,IG_ROWS
+.ram:
+    cmp qword [r8],0
+    je .next
+    cmp qword [r8+8],PRIN_OWNER
+    jne .next
+    lea rdi,[r8+16]
+    mov rsi,rbx
+    mov ecx,4
+    repe cmpsq
+    jne .next
+    inc qword [r12]
+.next:
+    add r8,IG_ROW_BYTES
+    dec r9d
+    jnz .ram
+    mov rdi,rbx
+    call app_grants_observe
+    mov [r12+24],rax
+    mov [r12+32],rdx
+    cmp byte [rel ig_key_ready],1
+    jne .release
+    call ig_owner_bind
+    test eax,eax
+    jz .release
+    lea rdi,[rel ig_verify]
+    call ig_store_get
+    cmp eax,1
+    je .absent
+    cmp eax,-2
+    je .release
+    test eax,eax
+    jnz .invalid
+    lea rdi,[rel ig_verify]
+    call ig_store_valid
+    test eax,eax
+    jz .invalid
+    mov qword [r12+8],1
+    lea r8,[rel ig_verify+IGS_ROW0]
+    mov r9d,IGS_ROWS
+.durable:
+    cmp dword [r8+40],0
+    je .durable_next
+    mov rdi,r8
+    mov rsi,rbx
+    mov ecx,4
+    repe cmpsq
+    jne .durable_next
+    inc qword [r12+16]
+.durable_next:
+    add r8,IGS_ROW_BYTES
+    dec r9d
+    jnz .durable
+    jmp .release
+.absent:
+    mov qword [r12+8],2
+    jmp .release
+.invalid:
+    mov qword [r12+8],3
+.release:
+    mov byte [rel ig_busy],0
+.out:
+    pop r13
+    pop r12
+    pop rbx
+    ret

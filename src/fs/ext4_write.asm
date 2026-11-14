@@ -512,6 +512,14 @@ ext_w_check_sb:
     push rbx
     push r13
     mov  r13, rsi
+    mov  rdi, [r12 + ext_ctx.dev]       ; T5-15.4: ext is never the MSI's reserved partition
+    xor  esi, esi
+    xor  edx, edx
+    xor  ecx, ecx
+    xor  r8d, r8d
+    call volume_pin_admits
+    test rax, rax
+    jnz  .pin_refused
     mov  rdi, [r12 + ext_ctx.dev]
     mov  rsi, [r12 + ext_ctx.part_lba]
     add  rsi, 2
@@ -580,6 +588,7 @@ ext_w_check_sb:
     mov  dword [rel ext4_disk_last_error], EXT_E_NOJOURNAL
     mov  rax, -1
     jmp  .out
+.pin_refused:
 .gate:
     mov  dword [rel ext4_disk_last_error], EXT_E_WGATE
     mov  rax, -1

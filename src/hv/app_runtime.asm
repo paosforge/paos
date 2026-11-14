@@ -1,11 +1,11 @@
 ;; MODULE hv/app_runtime
 ;; LAYER 5
-;; EXPORTS app_runtime_memory, app_runtime_descriptor, app_runtime_read, app_runtime_retire
-;; IMPORTS hv/vm_profile, hv/vmx, fs/vfs, sec/session, core/smp
+;; EXPORTS app_runtime_select_application, app_runtime_select_updater, app_runtime_updater_ready, app_runtime_updater_current, app_runtime_memory, app_runtime_descriptor, app_runtime_read, app_runtime_retire
+;; IMPORTS hv/vm_profile, hv/vmx, fs/vfs, fs/fat32_disk, sec/session, core/smp
 ;; CAPS
 ;; OWNER saga:hv
 ;; CONTEXT: bsp_only
-; Read-only runtime pair selected by ONE compiler-produced record embedded in
+; Read-only runtime pairs selected by compiler-produced records embedded in
 ; the signed candidate. Never a caller profile/hash/path/verifier callback.
 ; No driver selectors, mutable guest RAM or VFS selected-volume writes.
 ; VM hashes every actual streamed byte against these signed pins before entry.
@@ -14,6 +14,11 @@
 ; descriptor; no caller RAM, output buffer or new descriptor version.
 app_runtime_memory:
 %ifndef PAOS_APP_RUNTIME_PROFILE_INC
+%ifndef PAOS_UPDATER_RUNTIME_PROFILE_INC
+%define AR_NO_RUNTIME 1
+%endif
+%endif
+%ifdef AR_NO_RUNTIME
     xor eax,eax
     ret
 %else
@@ -28,7 +33,8 @@ app_runtime_memory:
     test eax,eax
     jz .leave_bad
 .ready:
-    mov rax,[rel ar_profile+VP_RAM]
+    call ar_source
+    mov rax,[rax+48+VP_RAM]
     mov byte [rel ar_busy],0
     add rsp,8
     ret
@@ -127,15 +133,18 @@ app_runtime_read:
     sub rax,r14
     cmp rbx,rax
     ja .leave_bad
+    call ar_source
+    test rax,rax
+    jz .leave_bad
     mov edi,[rel ar_handle]
     cmp r13d,1
     jne .initrd
-    lea rsi,[rel ar_kernel_name]
+    lea rsi,[rax+24]
     lea rcx,[rel ar_kpath]
     mov edx,[rel ar_klen]
     jmp .source
 .initrd:
-    lea rsi,[rel ar_initrd_name]
+    lea rsi,[rax+35]
     lea rcx,[rel ar_ipath]
     mov edx,[rel ar_ilen]
 .source:
@@ -190,6 +199,265 @@ app_runtime_retire:
 .out:
     add rsp,8
     ret
+
+; Native lifecycle selection only. No guest verb/PIO/setter is exported.
+; Caller owns EMPTY admission. A switch always invalidates the cached pair;
+; generation is never reused. No live VM can survive a pair replacement.
+app_runtime_select_application:
+    xor edx,edx
+    jmp ar_select
+app_runtime_select_updater:
+%ifndef PAOS_UPDATER_RUNTIME_PROFILE_INC
+    xor eax,eax
+    ret
+%else
+    mov edx,1
+%endif
+ar_select:
+    push rbx
+    mov ebx,edx
+    call ar_enter
+    test eax,eax
+    jz .bad
+    call ar_clear
+    mov [rel ar_role],bl
+    call ar_source
+    test rax,rax
+    setnz bl
+    mov byte [rel ar_busy],0
+    movzx eax,bl
+    pop rbx
+    ret
+.bad:
+    xor eax,eax
+    pop rbx
+    ret
+
+; Passive fixed updater prerequisites. Read-only metadata on the already
+; attached exact boot ESP; no open/scan, selected-volume fallback, ar_enter,
+; ar_bind, descriptor publication, generation increment, selection or launch.
+; Matching sizes are availability only: VM still hashes actual bytes before
+; entry. Missing attachment is unavailable, never a reason to initialize it.
+app_runtime_updater_ready:
+%ifndef PAOS_UPDATER_RUNTIME_PROFILE_INC
+    xor eax,eax
+    ret
+%else
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    sub rsp,256                    ; two96B paths + private64B stat
+    call smp_current_logical
+    test eax,eax
+    jnz .bad
+    call session_shell_require_unlocked
+    test eax,eax
+    jnz .bad
+    mov r15,[rel session_authority_epoch]
+    test r15,r15
+    jz .bad
+    cmp byte [rel ar_busy],0
+    jne .bad
+    lea r12,[rel ar_updater_profile]
+    mov rdi,r12
+    mov esi,VP_BYTES
+    call vm_profile_validate
+    test eax,eax
+    jnz .bad
+    lea rdi,[r12+VP_NAME]
+    lea rsi,[rel ar_updater_name]
+    mov ecx,24
+    cld
+    repe cmpsb
+    jne .bad
+    cmp byte [r12+VP_CLASS],VP_CLASS_THIN_CLI
+    jne .bad
+    cmp dword [r12+VP_DEVICES],3
+    jne .bad
+    cmp qword [r12+VP_RAM],0x4000000
+    jb .bad
+    cmp qword [r12+VP_RAM],0x40000000
+    ja .bad
+    cmp byte [r12+VP_DEPS+VPD_KIND],1
+    jne .bad
+    cmp byte [r12+VP_DEPS+VP_DEP_BYTES+VPD_KIND],2
+    jne .bad
+    lea rdi,[r12+VP_DEPS+VPD_NAME]
+    lea rsi,[rel ar_updater_kernel]
+    mov ecx,11
+    repe cmpsb
+    jne .bad
+    lea rdi,[r12+VP_DEPS+VP_DEP_BYTES+VPD_NAME]
+    lea rsi,[rel ar_updater_initrd]
+    mov ecx,11
+    repe cmpsb
+    jne .bad
+    call ar_updater_attached
+    test eax,eax
+    jz .bad
+    lea r13d,[eax-1]
+    mov rdi,rsp
+    lea rsi,[rel ar_updater_kernel]
+    call hv_guest_files_path
+    test eax,eax
+    js .bad
+    mov ebx,eax
+    lea rdi,[rsp+96]
+    lea rsi,[rel ar_updater_initrd]
+    call hv_guest_files_path
+    test eax,eax
+    js .bad
+    mov r14d,eax
+    mov edi,r13d
+    mov rsi,rsp
+    mov edx,ebx
+    lea rcx,[rsp+192]
+    call vfs_stat_path
+    test rax,rax
+    jnz .bad
+    mov rax,[rsp+192]
+    cmp rax,[r12+VP_DEPS+VPD_SIZE]
+    jne .bad
+    ; Every read must remain on the exact original attached source.
+    call ar_updater_attached
+    lea ecx,[r13d+1]
+    cmp eax,ecx
+    jne .bad
+    mov edi,r13d
+    lea rsi,[rsp+96]
+    mov edx,r14d
+    lea rcx,[rsp+192]
+    call vfs_stat_path
+    test rax,rax
+    jnz .bad
+    mov rax,[rsp+192]
+    cmp rax,[r12+VP_DEPS+VP_DEP_BYTES+VPD_SIZE]
+    jne .bad
+    call ar_updater_attached
+    lea ecx,[r13d+1]
+    cmp eax,ecx
+    jne .bad
+    call session_shell_require_unlocked
+    test eax,eax
+    jnz .bad
+    cmp r15,[rel session_authority_epoch]
+    jne .bad
+    mov eax,1
+    jmp .out
+.bad:
+    xor eax,eax
+.out:
+    add rsp,256
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+%endif
+
+; Pure peek of existing native FS facts, agreed with FS110655. No initializer
+; or ambient selected-volume authority. Return exact handle+1, or zero.
+ar_updater_attached:
+%ifndef PAOS_UPDATER_RUNTIME_PROFILE_INC
+    xor eax,eax
+    ret
+%else
+    push rbx
+    cmp byte [rel pbm_manager_launch],1
+    jne .bad
+    cmp byte [rel boot_esp_part_guid_ok],1
+    jne .bad
+    mov rax,[rel boot_esp_part_guid]
+    or rax,[rel boot_esp_part_guid+8]
+    jz .bad
+    mov ebx,[rel fd_ro_handle]
+    test ebx,ebx
+    jz .bad
+    lea edi,[ebx-1]
+    call vfs_mount_ptr
+    test rax,rax
+    jz .bad
+    lea rdx,[rel fd_ro_ctx]
+    cmp [rax+fsmount.priv],rdx
+    jne .bad
+    lea rdx,[rel fd_ro_ops]
+    cmp [rax+fsmount.ops],rdx
+    jne .bad
+    cmp dword [rel fd_ro_ctx+FD_MOUNTED],1
+    jne .bad
+    cmp byte [rel fd_ro_ctx+FD_PART_ESP],1
+    jne .bad
+    mov rax,[rel boot_esp_part_guid]
+    cmp rax,[rel fd_ro_guid]
+    jne .bad
+    cmp rax,[rel fd_ro_ctx+FD_PART_GUID]
+    jne .bad
+    mov rax,[rel boot_esp_part_guid+8]
+    cmp rax,[rel fd_ro_guid+8]
+    jne .bad
+    cmp rax,[rel fd_ro_ctx+FD_PART_GUID+8]
+    jne .bad
+    mov eax,ebx
+    jmp .out
+.bad:
+    xor eax,eax
+.out:
+    pop rbx
+    ret
+%endif
+
+; RDI exact runtime generation ->1 only the current qualified signed pair.
+; This is not a closed-exit identity or authority; VM composes both predicates.
+app_runtime_updater_current:
+    push rbx
+    mov rbx,rdi
+    call ar_enter
+    test eax,eax
+    jz .bad
+    cmp byte [rel ar_role],1
+    jne .leave_bad
+    call ar_source
+    test rax,rax
+    jz .leave_bad
+    call ar_current
+    cmp eax,1
+    jne .leave_bad
+    test rbx,rbx
+    jz .leave_bad
+    cmp rbx,[rel ar_descriptor+8]
+    jne .leave_bad
+    mov eax,1
+    jmp .leave
+.leave_bad:
+    xor eax,eax
+.leave:
+    mov byte [rel ar_busy],0
+.bad:
+    pop rbx
+    ret
+
+; Immutable native source table: name24, kernel11, initrd11, pad2, profile280.
+ar_source:
+    cmp byte [rel ar_role],1
+    je .updater
+%ifdef PAOS_APP_RUNTIME_PROFILE_INC
+    lea rax,[rel ar_profile_name]
+    ret
+%else
+    xor eax,eax
+    ret
+%endif
+.updater:
+%ifdef PAOS_UPDATER_RUNTIME_PROFILE_INC
+    lea rax,[rel ar_updater_name]
+    ret
+%else
+    xor eax,eax
+    ret
+%endif
 
 ar_enter:
     sub rsp,8
@@ -264,7 +532,7 @@ ar_clear:
     ret
 
 ar_bind:
-%ifndef PAOS_APP_RUNTIME_PROFILE_INC
+%ifdef AR_NO_RUNTIME
     xor eax,eax                    ; no record, no fabricated runtime pins
     ret
 %else
@@ -279,13 +547,16 @@ ar_bind:
     jz .bad
     cmp qword [rel ar_sequence],-1
     je .bad
-    lea rdi,[rel ar_profile]
+    call ar_source
+    test rax,rax
+    jz .bad
+    lea rbx,[rax+48]
+    mov rdi,rbx
     mov esi,VP_BYTES
     call vm_profile_validate
     test eax,eax
     jnz .bad
-    lea rbx,[rel ar_profile]
-    lea rsi,[rel ar_profile_name]
+    lea rsi,[rbx-48]
     lea rdi,[rbx+VP_NAME]
     mov ecx,24
     cld
@@ -304,12 +575,12 @@ ar_bind:
     cmp byte [rbx+VP_DEPS+VP_DEP_BYTES+VPD_KIND],2
     jne .bad
     lea rdi,[rbx+VP_DEPS+VPD_NAME]
-    lea rsi,[rel ar_kernel_name]
+    lea rsi,[rbx-24]
     mov ecx,11
     repe cmpsb
     jne .bad
     lea rdi,[rbx+VP_DEPS+VP_DEP_BYTES+VPD_NAME]
-    lea rsi,[rel ar_initrd_name]
+    lea rsi,[rbx-13]
     mov ecx,11
     repe cmpsb
     jne .bad
@@ -322,13 +593,13 @@ ar_bind:
     cmp byte [rel boot_esp_part_guid_ok],1
     jne .root
     lea rdi,[rel ar_kpath]
-    lea rsi,[rel ar_kernel_name]
+    lea rsi,[rbx-24]
     call hv_guest_files_path
     test eax,eax
     js .bad
     mov [rel ar_klen],eax
     lea rdi,[rel ar_ipath]
-    lea rsi,[rel ar_initrd_name]
+    lea rsi,[rbx-13]
     call hv_guest_files_path
     test eax,eax
     js .bad
@@ -365,7 +636,7 @@ ar_bind:
     cmp dword [rel ar_handle],-1
     je .bad
     mov edi,[rel ar_handle]
-    lea rsi,[rel ar_kernel_name]
+    lea rsi,[rbx-24]
     lea rdx,[rel ar_stat]
     call vfs_stat
     test rax,rax
@@ -374,7 +645,7 @@ ar_bind:
     cmp rax,[rbx+VP_DEPS+VPD_SIZE]
     jne .bad
     mov edi,[rel ar_handle]
-    lea rsi,[rel ar_initrd_name]
+    lea rsi,[rbx-13]
     lea rdx,[rel ar_stat]
     call vfs_stat
     test rax,rax
@@ -417,10 +688,12 @@ ar_bind:
 %endif
 
 ar_readonly:
+align 8
 ar_profile_name: db 'app-bash',0
     times 24-9 db 0
 ar_kernel_name: db 'APKERN     '
 ar_initrd_name: db 'APINIT  GZ '
+    times 2 db 0
 %ifdef PAOS_APP_RUNTIME_PROFILE_INC
 align 8
 ar_profile:
@@ -428,6 +701,20 @@ ar_profile:
 ar_profile_end:
 %if ar_profile_end-ar_profile != VP_BYTES
 %error "app runtime requires one exact compiler-produced280B record"
+%endif
+%endif
+%ifdef PAOS_UPDATER_RUNTIME_PROFILE_INC
+align 8
+ar_updater_name: db 'updater-worker',0
+    times 24-15 db 0
+ar_updater_kernel: db 'UPKERN     '
+ar_updater_initrd: db 'UPINIT  GZ '
+    times 2 db 0
+ar_updater_profile:
+%include PAOS_UPDATER_RUNTIME_PROFILE_INC
+ar_updater_profile_end:
+%if ar_updater_profile_end-ar_updater_profile != VP_BYTES
+%error "updater runtime requires one exact compiler-produced280B record"
 %endif
 %endif
 ar_readonly_end:
@@ -439,6 +726,7 @@ ar_descriptor: times 128 db 0
 ar_epoch: dq 0
 ar_sequence: dq 0
 ar_handle: dd -1
+ar_role: db 0
 ar_busy: db 0
 ar_nested: db 0
 align 8

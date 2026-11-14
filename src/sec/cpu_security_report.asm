@@ -41,6 +41,8 @@ cpu_security_report_text:
     test rax, rax
     js   .bad
     lea  r12, [rbx + rax]
+    lea  rsi, [rel csr_percpu]
+    call cpu_security_report_put
     lea  rsi, [rel csr_result]
     call cpu_security_report_put
     cmp  dword [rel mcb_state + MCB_DONE], 1
@@ -129,6 +131,7 @@ cpu_security_report_put:
 .out:
     ret
 
+csr_percpu: db " percpu_report=pages64 coverage=incomplete last_pair=historical",0
 csr_result: db " ucode_bsp_result=",0
 csr_unknown: db "unknown",0
 csr_minus: db "-",0

@@ -37,15 +37,15 @@
 ; ============================================================================
 
 ; BEGIN Guardian source snapshot
-GUARDIAN_SOURCES_SIZE equ 264            ; 3 header qwords + 10 * 3 row qwords
+GUARDIAN_SOURCES_SIZE equ 288            ; 3 header qwords + 11 * 3 row qwords
 GUARDIAN_SOURCES_STACK equ (GUARDIAN_SOURCES_SIZE + 15) & ~15 ; aligned caller scratch
 ; guardian_alert_sources_snapshot(RDI=writable caller buffer, RSI=capacity)
 ; -> EAX1 copied,0 null/short (no writes). Trusted BSP caller, not user memory.
 ; Header: total, unseen, quality (bit0 unseen lower bound,bit1 total lower).
-; Ten rows: total, reset-clamped unseen, quality (0 exact,3 source saturated).
+; Eleven rows: total, reset-clamped unseen, quality (0 exact,3 source saturated).
 ; BSP reads each total/seen once before formatting; no callback/yield/drain.
 ; Concurrent atomic producers may advance between rows: no global-instant claim.
-; Rows and aggregate use these same captured values. Writes only caller264 bytes;
+; Rows and aggregate use these same captured values. Writes only caller288 bytes;
 ; all producer/seen/authority/history state remains untouched. Clobbers
 ; RAX,RDX,R8-R11. Snapshot rows have fixed order, documented by the AUDIT view.
 %macro GA_SOURCE_SNAPSHOT_ROW 3
@@ -94,6 +94,7 @@ guardian_alert_sources_snapshot:
     GA_SOURCE_SNAPSHOT_ROW audit_session_refused, guardian_alert_session_seen, 192
     GA_SOURCE_SNAPSHOT_ROW audit_keyprov_refused, guardian_alert_keyprov_seen, 216
     GA_SOURCE_SNAPSHOT_ROW audit_aer_observed, guardian_alert_aer_seen, 240
+    GA_SOURCE_SNAPSHOT_ROW audit_mca_observed, guardian_alert_mca_seen, 264
     mov  [rdi], r10
     mov  [rdi + 8], r11
     mov  [rdi + 16], rdx
@@ -147,13 +148,35 @@ guardian_alert_count_quality:
     GA_COUNT_QUALITY_SOURCE audit_session_refused, guardian_alert_session_seen
     GA_COUNT_QUALITY_SOURCE audit_keyprov_refused, guardian_alert_keyprov_seen
     GA_COUNT_QUALITY_SOURCE audit_aer_observed, guardian_alert_aer_seen
+    GA_COUNT_QUALITY_SOURCE audit_mca_observed, guardian_alert_mca_seen
     ret
 %unmacro GA_COUNT_QUALITY_SOURCE 2
 ; END GUARDIAN COUNT QUALITY
 
 ; Native session refusals are independent of transport authentication refusal.
 ; Separate deltas keep saturation or restored counters from erasing evidence.
+; Passive non-corrected MCA observations are independent of AER and corrected
+; MCA. A local acknowledgement means seen, never recovered or contained.
 guardian_alert_counts:
+    sub rsp,8
+    call guardian_alert_pre_mca_counts
+    add rsp,8
+    mov rcx,[rel audit_mca_observed]
+    add rdx,rcx
+    jnc .total
+    mov rdx,-1
+.total:
+    sub rcx,[rel guardian_alert_mca_seen]
+    jae .delta
+    xor ecx,ecx
+.delta:
+    add rax,rcx
+    jnc .out
+    mov rax,-1
+.out:
+    ret
+
+guardian_alert_pre_mca_counts:
     sub rsp,8
     call guardian_alert_pre_aer_counts
     add rsp,8
@@ -245,11 +268,14 @@ guardian_alert_acknowledge:
     add rsp,8
     mov rax,[rel audit_aer_observed]
     mov [rel guardian_alert_aer_seen],rax
+    mov rax,[rel audit_mca_observed]
+    mov [rel guardian_alert_mca_seen],rax
 .out:
     ret
 
 align 8
 guardian_alert_aer_seen: dq 0
+guardian_alert_mca_seen: dq 0
 
 guardian_alert_pre_aer_acknowledge:
     cmp  byte [rel audit_sec_test_active], 0

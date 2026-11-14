@@ -1,6 +1,6 @@
 ;; MODULE bus/pci_bdf
 ;; LAYER 2
-;; EXPORTS pci_ecam_cfg_snapshot, pci_ecam_aer_control_snapshot, pci_ecam_aer_coverage_snapshot, pci_bdf_read, pci_bdf_write, pci_find_cap, mmio_mark_uc, pci_ecam_aer_snapshot, pci_mmio_resource_page, pci_mmio_resource_page_diagnostic
+;; EXPORTS pci_ecam_cfg_snapshot, pci_ecam_acs_snapshot, pci_ecam_acs_enable, pci_ecam_aer_control_snapshot, pci_ecam_aer_coverage_snapshot, pci_bdf_read, pci_bdf_write, pci_find_cap, mmio_mark_uc, pci_ecam_aer_snapshot, pci_mmio_resource_page, pci_mmio_resource_page_diagnostic, pci_mmio_nonram_chunk
 ;; IMPORTS bus/pci_aer_control, bus/pci, boot/paging, bus/acpi
 ;; CAPS CAP_MMIO
 ;; OWNER saga:bus
@@ -138,6 +138,14 @@ pci_ecam_aer_control_snapshot:
     lea rdx,[rel pci_aer_control_snapshot]
     jmp pci_ecam_aer_snapshot_common
 
+; U3a: pci_ecam_acs_snapshot(RDI=segment-0 packed BDF, RSI=private64B) -> EAX:
+; pci_acs_snapshot status 0..5 over exactly the same admitted ECAM transport, CF8/ECAM
+; identity rechecks and Linux extended-config applicability (12 not applicable) as
+; the AER readers above; 6..9 are the same transport refusals. Read-only.
+pci_ecam_acs_snapshot:
+    lea rdx,[rel pci_acs_snapshot]
+    jmp pci_ecam_aer_snapshot_common
+
 pci_ecam_aer_snapshot_common:
     cmp rdi, 65535
     ja .bad_request
@@ -229,6 +237,131 @@ pci_ecam_aer_snapshot_common:
     xor r9d, r9d
     xor r10d, r10d
     xor r11d, r11d
+    mov eax, 4
+    ret
+
+; W3 (ROOT 109394, SEC 109421 C1-C5): pci_ecam_acs_enable(EDI=segment-0 packed BDF)
+; -> EAX status, EDX ACS Capability|Control<<16 before (0 if unread), ECX after
+; (0 unless resampled). Takes no offset and no value: the ACS capability comes
+; from pci_ecam_acs_snapshot, and the only store is its Control halfword (cap+6)
+; = Control_before | SV|RR|CR|UF through the admitted UC ECAM leaf. The store is
+; made only when Capability holds all four and Control lacks one, right after a
+; fresh CF8/ECAM identity recheck and an unchanged ACS header and Cap|Control.
+; It never clears a bit (DT/TB/EC/egress untouched). Success requires a fresh
+; stable resample with the same offset, header and Capability and Control
+; exactly Control_before|0x1D. Status: 0 enabled (or already enabled; no store),
+; 1-9/12 snapshot or transport refusal (no store), 10 Capability lacks a required
+; bit (no store), 11 resample refused or differs after the store. The isolation
+; gate never trusts this result: pcia_iso_cb reads ACS fresh at every gate.
+; 0x1D = SV(0) | RR(2) | CR(3) | UF(4), the gate's PCIA_ACS_REQUIRED.
+pci_ecam_acs_enable:
+    cmp rdi, 65535
+    ja .bad_request
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    sub rsp, 160                       ; sample64 @0, admission80 @64, aligned calls
+    mov ebx, edi
+    mov edi, ebx
+    mov rsi, rsp
+    call pci_ecam_acs_snapshot
+    xor edx, edx
+    xor ecx, ecx
+    test eax, eax
+    jnz .done
+    mov r12d, [rsp]                    ; ACS capability offset
+    mov r13d, [rsp+4]                  ; ACS header
+    mov r14d, [rsp+8]                  ; Capability low16, Control high16
+    mov edx, r14d
+    mov eax, r14d
+    and eax, 0x1D
+    cmp eax, 0x1D
+    jne .incapable
+    mov eax, r14d
+    shr eax, 16
+    and eax, 0x1D
+    cmp eax, 0x1D
+    je .resample                       ; already enabled: no store
+    mov edi, ebx
+    lea rsi, [rsp+64]
+    call pci_ecam_admit
+    test edx, edx
+    jnz .admission_refused
+    mov r15, rax                       ; admitted function address
+    mov edi, ebx
+    xor esi, esi
+    call pci_bdf_read                  ; CF8 identity under pci_cfg_io_lock
+    cmp ax, 0xffff
+    je .absent
+    test ax, ax
+    jz .absent
+    cmp eax, [r15]
+    jne .identity
+    cmp r12d, 0xff8
+    ja .malformed
+    cmp r13d, [r15+r12]
+    jne .changed
+    cmp r14d, [r15+r12+4]
+    jne .changed
+    mov eax, r14d
+    shr eax, 16
+    or eax, 0x1D
+    mov [r15+r12+6], ax                ; the single ECAM store (SEC C1)
+.resample:
+    mov edi, ebx
+    mov rsi, rsp
+    call pci_ecam_acs_snapshot
+    mov edx, r14d
+    xor ecx, ecx
+    test eax, eax
+    jnz .readback
+    mov ecx, [rsp+8]
+    cmp [rsp], r12d
+    jne .readback
+    cmp [rsp+4], r13d
+    jne .readback
+    mov eax, r14d
+    or eax, 0x1D << 16
+    cmp ecx, eax                       ; SEC C2: exactly before | 0x1D
+    jne .readback
+    xor eax, eax
+    jmp .done
+.incapable:
+    mov eax, 10
+    jmp .done
+.readback:
+    mov eax, 11
+    jmp .done
+.admission_refused:
+    mov eax, edx
+    jmp .refused
+.absent:
+    mov eax, 7
+    jmp .refused
+.identity:
+    mov eax, 8
+    jmp .refused
+.malformed:
+    mov eax, 2
+    jmp .refused
+.changed:
+    mov eax, 5
+.refused:                              ; before any store: no after value
+    mov edx, r14d
+    xor ecx, ecx
+.done:
+    add rsp, 160
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+.bad_request:
+    xor edx, edx
+    xor ecx, ecx
     mov eax, 4
     ret
 
@@ -523,6 +656,84 @@ pci_ecam_aer_read32:
 .bad:
     xor eax, eax
     mov edx, 1
+    ret
+
+; NIC BAR admission (VM 106805, ROOT 106811). RDI = 2 MiB-aligned chunk whose end
+; is at or below 16 GiB -> EAX 1 admit, 0 refuse. Same saved final map and shape
+; checks as the whole-leaf walk below, with boot/paging.asm .hda_inventory's
+; non-RAM rule: every descriptor overlapping the chunk must be MMIO (11), MMIO
+; port (12) or UC-only reserved (0 without WC/WT/WB), never runtime-backed; any
+; other or unknown type is RAM. A chunk no descriptor overlaps is an undescribed
+; non-RAM gap (OVMF's PCI aperture): firmware describes all RAM. Read-only: no
+; descriptor, device or table write and no retained pointer. Leaf; clobbers only
+; RAX, RCX, RDX, R8-R11.
+pci_mmio_nonram_chunk:
+    test rdi, 0x1FFFFF
+    jnz .no
+    mov r11, rdi
+    add r11, 0x200000
+    jc .no
+    mov rax, 0x400000000
+    cmp r11, rax
+    ja .no
+    mov r8, [rel mmap_buffer]
+    test r8, r8
+    jz .no
+    mov r9, [rel mmap_desc_size]
+    cmp r9, 40
+    jb .no
+    cmp r9, 256
+    ja .no
+    test r9b, 7
+    jnz .no
+    mov rax, [rel mmap_size]
+    xor edx, edx
+    div r9
+    test rdx, rdx
+    jnz .no
+    test rax, rax
+    jz .no
+    cmp rax, 4096
+    ja .no
+    mov r10, rax
+.row:
+    mov rcx, [r8+24]                    ; pages
+    test rcx, rcx
+    jz .next                            ; an empty descriptor owns no page
+    mov rdx, rcx
+    shr rdx, 52
+    jnz .no
+    mov rax, [r8+8]                     ; physical start
+    test rax, 0xFFF
+    jnz .no
+    shl rcx, 12
+    add rcx, rax
+    jc .no                              ; RCX = exclusive end
+    cmp rax, r11
+    jae .next                           ; starts at or after the chunk end
+    cmp rcx, rdi
+    jbe .next                           ; ends at or before the chunk start
+    bt qword [r8+32], 63                ; runtime-backed is never eligible
+    jc .no
+    mov edx, [r8]
+    test edx, edx
+    jz .reserved
+    cmp edx, 11                         ; EfiMemoryMappedIO
+    je .next
+    cmp edx, 12                         ; EfiMemoryMappedIOPortSpace
+    je .next
+    jmp .no                             ; all other or unknown types are RAM
+.reserved:
+    test dword [r8+32], 0x0E            ; reserved WC/WT/WB could still be RAM
+    jnz .no
+.next:
+    add r8, r9
+    dec r10
+    jnz .row
+    mov eax, 1
+    ret
+.no:
+    xor eax, eax
     ret
 
 ; RDI=aligned low16GiB page. Saved final UEFI map was fully validated at EBS;

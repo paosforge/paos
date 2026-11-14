@@ -7,7 +7,7 @@ hw_r_bindusb:
     push rbx
     push r12
     push r13
-    sub rsp,32
+    sub rsp,160
     lea rdi,[rel hwc_usb_scope]
     call hw_puts
     mov r12d,1
@@ -66,12 +66,31 @@ hw_r_bindusb:
     mov edx,9
     movzx ecx,byte [rel msd_bound]
     call hw_usb_census_emit
-    add rsp,32
+    ; Additional cached AXB tuple, not another device probe. v1 field order is
+    ; defined by ax88179b_link_snapshot; existing usb= rows retain their schema.
+    lea rdi,[rsp+32]
+    call ax88179b_link_snapshot
+    lea rdi,[rel hwc_axb_diag]
+    call hw_puts
+    xor r13d,r13d
+.axb_field:
+    test r13d,r13d
+    jz .axb_value
+    lea rdi,[rel str_hw_comma]
+    call hw_puts
+.axb_value:
+    mov rdi,[rsp+32+r13*8]
+    call hw_put_u64
+    inc r13d
+    cmp r13d,16
+    jb .axb_field
+    add rsp,160
     pop r13
     pop r12
     pop rbx
     ret
 hwc_usb_scope: db " scope=usb-bindings-v1 n=9 audio=unobserved",0
+hwc_axb_diag: db " axb_diag=",0
 
 ; Cached validated configuration only. Pure, bounded and no guessed class.
 ; RDI=buffer, ESI=actual capacity, EDX=interface number -> EAX=class24/-1.

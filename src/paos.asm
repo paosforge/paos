@@ -28,6 +28,7 @@ org 0
 %define RCQ37_VIDEO_BUILT 0
 %endif
 %include "hv/guest_media_contract.inc" ; RCQ-37 G3b: RCQ37_MEDIA_PROFILE needs both build flags (no bytes)
+%include "hv/pcia_grp.inc" ; W4c-2 ABI v1: whole-group record equates for pci_assign/vtd_guest/amdvi_guest (no bytes)
 %ifdef RCQ37_MEDIA_PROFILE                ; link-map projections without the contract see the OFF path
 %if RCQ37_MEDIA_PROFILE
 %define PAOS_CRC32_UPDATE ; PMH's DATA CRC uses the streaming form
@@ -374,7 +375,10 @@ boot_gdt_percpu_load equ gdt_percpu_load
     ; RCQ-20: the saved 174 LAB census has 289 sites against 288 rows.
     ; Add 96 rows (4608 bytes), retaining one bound for allocation and admission.
     ; The unchanged build census checks every assembled profile.
-    VERB_MAX %1 + 160                  ; 224 + 160 = 384 rows; 95 spare at 289 sites
+    ; B1/P0 310: the actual LAB listing has 386 registration sites versus 385
+    ; rows. Add 16 rows (768 bytes): 401 total, 15 spare at that static ceiling.
+    ; Allocation and the original full-registry refusal share this same bound.
+    VERB_MAX %1 + 176                  ; 225 + 176 = 401 rows
 %endmacro
 %define command_dispatch command_dispatch_registry
 %include "svc/command.asm"  ; THE command MODEL, with a transport-independent session entry gate
@@ -435,6 +439,8 @@ boot_gdt_percpu_load equ gdt_percpu_load
 %include "sec/replay_floor.asm" ; SEC-replay-record-mac S1: PaOSReplayFloor (NV|BS) pre-EBS signed-request replay floor (after owner_store: needs ows_floor_seeded)
 %include "svc/command_owner_stat.asm" ; owner S1b-2: OWNERSTAT, the owner store state after EBS (owner only)
 %include "sec/node_identity.asm" ; authenticated wrapped node signing identity (1239)
+%include "sec/node_identity_store.asm" ; fixed read-only machine/lifecycle-bound production identity consumer
+%include "sec/update_public_policy.asm" ; immutable installed release/channel public authority; default refuses
 %include "sec/wifi_store.asm" ; internal owner-bound sealed profile donor; no public verb/private receiver
 %include "sec/wifi_profile.asm" ; private local owner profile and revocable opaque intent
 %include "sec/job_receipt.asm" ; M-sec (1055): portable owner/cap-scoped scheduler JOB + TSC metering hook + node-identity Ed25519 receipt; JOBRUN/JOBPUB data before command_udp projection
@@ -510,6 +516,7 @@ command_display_public_observation:
 %include "svc/ssh.asm"       ; 2141 RFC4253/8731/5647 SSH server transport over the shipped TCP service ABI
 %include "svc/ssh_auth.asm"  ; 2142 RFC4252 publickey userauth -> authenticate_bind(ED25519) -> connection-bound principal; PaOSSshKeys store; audit + backoff
 %include "svc/ssh_channel.asm" ; 2143 RFC4254 session channel + exec -> the ONE registry dispatch with the connection's principal
+%include "core/lib/ssh_crypto_work.asm" ; private compute only; guarded original-D caller below
 %include "svc/ssh_client.asm" ; hub packet 0014: the outbound SSH client behind the Terminal's `ssh` (MSI Task3494); defines PAOS_TERMINAL_SSH
 %include "net/tls13_certificate_policy.asm" ; bounded native name/date/CA admission
 %include "net/tls13.asm"     ; 9523 hostile TLS record-framing floor; Task1058 owns the client
@@ -549,6 +556,8 @@ command_display_public_observation:
 %include "dev/net/ax88179.asm" ; ASIX AX88179 USB-GbE backend (post-enum netdev bind; metal-only validation)
 %include "dev/net/ax88179b_codec.asm" ; newer AX packet format only; attachment remains separate
 %include "net/netdev.asm"    ; N-ary NIC TABLE + egress-select — shared state: netdev_table/netdev_egress_calls (1075 LOCK site)
+%include "net/carrier_drill.asm" ; owned, epoch-bound real PHY outage/restoration primitive
+%include "net/usb_command_member.asm" ; read-only USB NIC member projection for the secondary command endpoint
 %include "dev/net/virtio_domain.asm" ; 1013: guest-ring backend behind ordinary netdev_ops
 %include "net/stack.asm"     ; C10a (1042): ARP reply + 2-verb dispatch registry — emits arp.stack + framework.dispatch (1093 ladder-compose)
 %include "svc/command_dns.asm" ; 1025: RESOLVE/DNSCACHE registry projection over the live L4 DNS resolver
@@ -566,6 +575,8 @@ command_display_public_observation:
 ; the classifier directly. Redirect only those three in-module KAT calls; live
 ; dispatch and AUTHSTAT continue to call command_auth_required_cap itself.
 %define command_auth_required_cap command_auth_legacy_read_kat_cap
+%include "svc/guest_failure_record.asm" ; fixed original guest-failure observation
+%include "svc/guest_restart_record.asm" ; fixed original guest-restart observation
 %include "svc/driver_domain_return.asm" ; exact post-ACK retirement + retained observation
 %include "svc/command_udp.asm" ; THE UDP :9997 PROJECTION over the registry (1099): eth/ARP/IPv4/UDP RX engine + reply datagram over the real e1000e ring — the live comms-back surface
 %include "svc/netreturn_diag.asm" ; optional nonce-bound return-readable native NIC diagnostic
@@ -576,8 +587,10 @@ command_display_public_observation:
 %include "svc/command_compat.asm" ; 2908: native read-only compatibility inventory
 %include "svc/hook_edge_hw.asm" ; RCQ-29: the typed hw HOOK edge over COMPAT HW (registered from its owner module)
 %include "hv/domain_channel.asm" ; 2717 bounded typed console channel framing
+%include "svc/cpu_policy_report.asm" ; read-only cached per-CPU policy/execution pages
 %include "hv/vmx.asm"        ; L5 hv (1011): proven REAL Intel VMX/VMCS/EPT backend + GUEST* verbs
 %include "hv/vm_profile.asm" ; RCQ-18: typed VM profiles (thin-cli), fail-closed parse + cost plan
+%include "hv/a1_policy.asm" ; A1: separate signed policy and complete network profile binding
 %include "hv/app_runtime.asm" ; signed candidate's separate bash runtime pair; absent pins refuse
 %include "hv/guest_surface.asm" ; 2716: completed guest flips over the existing console split ring
 %include "hv/cdp_bridge.asm" ; 2717 isolated parser agent + authenticated diagnostics
@@ -660,21 +673,40 @@ command_display_public_observation:
 %include "hv/amdvi.asm"      ; RCQ-18-AMDVI-S3a: AMD-Vi host DMA protection (IVRS, device table, flush)
 %include "hv/amdvi_dma_probe.asm" ; T1-4: signed actual AMD fault/canary Identify diagnostic
 %include "hv/device_assignment.asm" ; Task3250: read-only PCIe/IOMMU isolation topology classifier + content KAT (iommu.isolation.topology.kat)
+%include "hv/a1_topology.asm" ; separate trusted-peer topology predicate, no START/attach grant
 %include "hv/nic_selection.asm" ; common selected NIC/group identity
+%include "hv/a1_nic_selection.asm" ; signed A1 observation, original shared facts; no START grant
 %include "hv/driver_domain.asm" ; exact native Linux NIC lifecycle
 %include "hv/wifi_wire.asm" ; private fixed association frames, no public secret getter
 %include "hv/wifi_channel.asm" ; original owner/START/cutoff and terminal RAM custody
 %include "hv/guestwifi.asm" ; separate private hvc1, selected D0008000 only
+%include "hv/guestpower.asm" ; C10b-1a paos.power port D0009000 + clean HLT rule, driver domain only
+%include "hv/driver_domain_failure.asm" ; selected actual guest failure at signed return
+%include "hv/driver_domain_restart.asm" ; selected same-profile guest restart and work
 %include "hv/driver_domain_return.asm" ; exact bounded native return quiescence
+%include "hv/driver_domain_contained.asm" ; SEC110010 contained-quarantine predicate (outcome 5)
+%include "hv/driver_domain_contained_amdvi.asm" ; AMD fresh backend counterparts
 %include "hv/driver_domain_boot.asm" ; normal verified boot, full domain once
+%include "hv/nd_isolation.asm" ; NDISO1: isolation-refusal record + the one user-text producer (ROOT110035)
 %include "hv/driver_domain_net.asm" ; exact same-guest bridge observation
 %include "hv/driver_domain_command.asm" ; original authenticated command registry
+%include "hv/driver_domain_power.asm" ; bounded driver-domain Shut down (T5-1.C10b-1b)
 %include "hv/nic_observation.asm" ; read-only selected NICS export, no START
+%include "hv/hp_tcr_observe.asm" ; accepted private observation leaf, no START/scope
+%include "hv/pci_census_observation.asm" ; complete read-only eight-function census
 %include "hv/driver_domain_learned.asm" ; bounded full census, native node signature
 %include "hv/guest_bundle_rx.asm" ; owner-armed Terminal bundle lines, hash only
 %include "hv/driver_domain_data.asm"    ; sealed DATA role, signed alternating records
 %include "hv/driver_domain_properties.asm" ; existing System Properties facts consumer
 %include "hv/nic_assignment.asm" ; physical reset/BAR/IRQ/IOMMU leaf
+%include "hv/a1_reset_hp.asm" ; A1: read-only HP reset-method discovery, no qualification
+%include "hv/a1_reset_i219.asm" ; A1: Dell discovery linked; dispatcher op1 only
+%include "hv/a1_reset_rtl8161.asm" ; A1: Lenovo RTL8161 read-only discovery
+%include "hv/a1_reset_rtl8168h.asm" ; A1: Beelink RTL8168H read-only discovery
+%include "hv/a1_reset_e5000b.asm" ; A1: MSI E5000B PCI config-only discovery
+%include "hv/a1_reset_dispatch.asm" ; A1: explicit observation routes; mutating routes refuse
+%include "hv/driver_domain_a1probe.asm" ; A1: original START R2 op1 caller, reads only
+%include "hv/a1_pci_census.asm" ; A1: bounded explicit eight-function config observation
 %include "hv/pci_assign.asm"   ; RCQ-36 V2: generic conf1 shadow of one assigned PCI function (HDA now, RCQ-50 GPU)
 %include "hv/iommu_owner_witness.asm" ; T1-4: STALEOWNER, retired/poisoned guest IOMMU owner after a guest exit
 %include "cognition/gpt2_engine.asm" ; M16-cognition (1061): fp32 CPU transformer (distilgpt2 PXG2 blob) — MODELRUN/MODELOUT/MODELKAT verbs + boot KAT; weights absent -> honest degrade (cog_model_present=0). The 1017 chat tile binds its local-model seam here. AFTER command_udp (uses registry ABI like hv)
@@ -726,6 +758,7 @@ command_display_public_observation:
 %include "dev/blk/usb_msd.asm" ; Try/Install K W3 (MSI spoke packet 0005): USB mass-storage BOT backend (class bind after HID/NIC; usbmsd0, BLKF_RO, PRIO_DOMAIN)
 %include "dev/blk/ahci.asm"   ; C7/1028: AHCI/SATA backend — real HBA port bring-up + IDENTIFY + DMA rw/flush (QEMU ich9-ahci content-graded); degrades to skip when no disk — ahci_blk_create/ahci_self_exercise
 %include "fs/storage_access.asm" ; ROB-03/PETER 21:25: ONE storage-access permission gate (live-GPT classify; implicit writes only to PaOS-owned or QEMU test scratch)
+%include "fs/volume_pin.asm"     ; T5-15.4: lab MSI writes only its reserved partition
 %include "boot/nvram_access.asm" ; PETER 2026-09-30 06:22: NVRAM class of the same gate (PaOS-namespace variables NORMAL; firmware-global/Secure Boot/shim/foreign SENSITIVE -> SPECIAL only, audited)
 %include "fs/blockdev.asm"   ; C7 (1007): blockdev class core + ramblk/nvme/ahci backends — emits blockdev.class.seam.init + blockdev.reinit.verify
 %include "dev/snd/nullsnd.asm" ; A1 (3201): nullsnd discard/accounting reference backend — nullsnd_create/nullsnd_create_fixture (registers UP into snd/core)
@@ -808,9 +841,12 @@ command_display_public_observation:
 %include "svc/command_guestfile.asm" ; 1095a2: GUESTFILE projection over VFS stat/read_at + streaming SHA-256
 %include "svc/command_fs_arm.asm" ; RCQ-20: FSARM owner-signed per-volume ext4 write arm
 %include "fs/vol_owner.asm"       ; RCQ-21: volume ownership and serialized live identity checks
+%include "fs/fs_format.asm"       ; Format F1: removable classification, custody and re-probe (ROOT 108207)
+%include "fs/format_job.asm"      ; confirmed F1 custody -> frozen F2 format job
 %include "svc/command_fs_own.asm" ; RCQ-21: FSOWN/FSOWNSTAT registry commands
 %include "svc/command_memory_consumer.asm" ; authenticated finite CPU scratch; settled idle only
 %include "svc/app_bundle.asm" ; signed recipes; per-install enrolled owner trust in every profile
+%include "svc/app_execution_state.asm" ; native catalog pre-effect generation and uncertain-result barrier
 %include "svc/app_script.asm" ; signed isolated-guest bash snapshots; no native executor
 %include "svc/app_package.asm" ; immutable shareable package candidates, no approval/launch
 %include "svc/app_analysis.asm" ; content-bound disclosure; no grants or effects
@@ -823,7 +859,10 @@ command_display_public_observation:
 %include "hv/app_vm_amd.asm"
 %include "hv/app_vm_intel.asm"
 %include "hv/app_vm_dispatch.asm"
+%include "hv/app_network.asm" ; scoped app mediation; no NIC or driver VM runtime
+%include "hv/app_clock.asm" ; genuine UTC for isolated trusted PID1
 %include "hv/app_vm_devices.asm"
+%include "hv/settings_update_service.asm" ; qualified updater original-request handoff
 %include "hv/app_vm_events.asm"
 %include "hv/app_vm.asm"
 %include "hv/chat_transport.asm" ; bounded native PCHAT quarantine, no send authority
@@ -883,17 +922,33 @@ command_display_public_observation:
 %include "gui/window_mgmt.asm" ; C-1064: desktop window management over the C17 table — RAISE (z-order) + WINNEW/WINMOVE/WINRESIZE/WINGEOM (geometry) + ALTTAB/FOCUSED (focus cycle); 2x titled paint for the GLKVM nonce z-order proof; boot selftest earns wm.multi_window/wm.zorder.raise/wm.move_resize/wm.alttab. AFTER chat_app (reuses wm_* table + chat_out_buf + wm_paint_window/fb_draw_*)
 %include "gui/session_restore.asm" ; C-1105/SS-1: durable desktop document on ahci0 GPT-gap LBAs 0x700/0x708; locked boot observes/caches only, and authenticated session restore re-opens document-owned windows. Verbs WINOPEN/WINLIST/WINCLOSE/SESSSAVE/SESSINFO; QEMU session_persist_selftest gates desktop.session.persist. AFTER window_mgmt + blockdev/ahci
 %include "sec/app_grants.asm" ; native bounded WAIT grants
+%include "fs/app_store_layout.asm"
+%include "fs/app_store_data.asm"
+%include "sec/app_store_authority.asm"
+%include "sec/app_store_seal.asm" ; fixed aggregate MAC, separate Z domain
+%include "sec/app_store_intent.asm" ; synchronous fixed original GUI effect scope
+%include "svc/app_store.asm" ; authenticated installed inventory and snapshot
 %include "sec/app_install_grants.asm" ; owner consent; current instance proof still required
+%include "sec/terminal_grants_store.asm" ; separate authenticated read selections; SEC owns live policy
 %include "sec/app_binding.asm" ; actual VM/signed snapshot/full window identity
 %include "sec/session.asm" ; SS-1: sole login-bound lock/unlock owner; consumes authenticate_bind output and gates session_restore
+%include "sec/adopt_decision.asm" ; fixed native decision bridge; no GUI import from FS
 %if !PAOS_PUBLIC_BUILD
 %include "sec/household.asm" ; RC household voice principal 5: owner marks, one admitted request, the one household dispatch path
 %endif
 %include "sec/keyprov.asm" ; GA0-K: keystroke provenance (origin slots, line taint, injected-line dispatch as the injecting principal); before the line editors for KT_SIZE
 %include "core/unicode_edit.asm" ; RCQ-38 L3b: UTF-8 / grapheme / cell-width primitives (relops, LAYER 1)
+%include "fs/terminal_read.asm" ; bounded native public-document leaf names, no authority
+%include "svc/terminal_scoped_read.asm" ; private staged reads with mandatory current/copyout proofs
+%include "fs/terminal_list.asm" ; pointer-free classified list serialization
+%include "fs/public_documents_read.asm" ; authenticated native Documents root callbacks
+%include "svc/command_documents.asm" ; DOCNEW/DOCLIST/DOCREAD six-callback native Terminal provider
+%include "fs/public_documents.asm" ; distinct native ordinary Documents creator / authenticated DATA record
+%include "sec/public_documents_seal.asm" ; independent owner-generation creator-provenance key domain
 %include "gui/widget.asm"     ; 1110/F1/F2: stable 80-byte widget prefix + additive form-state tail and type VTABLE
 %include "gui/widget_console_grid.asm" ; 2150: allocation-free console_grid over the one shared font8x16 renderer
 %include "gui/ansi_interp.asm"         ; 2155: bounded ANSI/VT mode over the shared console_grid cells
+%include "gui/interpreter_feed.asm"    ; native stack-owned boundary execution
 %include "gui/widget_listview.asm" ; F2: the one bounded table/list view (selection + scroll state)
 %include "gui/widget_progress.asm" ; F2: scalar 0..max progress, token-backed shared primitives
 %include "gui/widget_chart.asm"
@@ -1074,23 +1129,48 @@ command_display_public_observation:
 %include "gui/wifi_local.asm" ; captured local OWNER password/profile action
 %include "gui/app_package_disclosure.asm" ; immutable escaped report, no approval
 %include "gui/app_package_card.asm" ; native read-only paginated disclosure
+%include "gui/adopt_confirm.asm"
+%include "gui/format_confirm.asm"
 %include "gui/app_confirm.asm" ; native human one-invocation approval
+%include "gui/terminal_consent.asm" ; distinct Terminal physical consent/continuous notice
+%include "sec/terminal_policy.asm" ; SEC-owned native Terminal policy and callback composition
+%include "gui/terminal_provider.asm" ; native GUI provider; SEC registers its table
 %include "gui/app_launcher.asm" ; checked bundle desktop entry, native exact-attempt callback
 %include "gui/chat_send.asm" ; native human exact-question confirmation for paos.chat
 %include "gui/app_launch_flow.asm" ; human native policy -> actual isolated appVM lifecycle
 %include "gui/app_install.asm" ; owner install decision for a checked package candidate
+%include "sec/account_secret.asm" ; session-only sealed record, no public secret getter
+%include "gui/account_local.asm" ; native account approval; actual operation offer remains separate
+%include "gui/app_store_install.asm" ; fixed signed candidate catalog writer
+%include "gui/app_remove.asm" ; confirmed exact removal, bounded durable phases
+%include "gui/app_isolation.asm" ; local deny-only signed APP admission proof
 %include "gui/app_ingress.asm" ; owner console selected-VFS signed bundle ingress
 %include "gui/card_surface.asm" ; RCQ-40 J2b: the owner action card's window and the owner's key Confirm
 %include "gui/config_prefs.asm" ; T5-14: authenticated owner preferences on explicitly provisioned DATA
 %include "gui/wallpaper_prefs.asm"
+%define SETTINGS_UPDATE_DAILY_POLICY_BUILT 1
+%include "gui/settings_updates.asm" ; native Updates front door, trusted backend seam
+%include "gui/settings_update_policy.asm" ; exact local-owner signed DATA consent, no restart
+%include "gui/settings_update_daily_policy.asm" ; separate signed daily choice, real original consent
+%include "svc/settings_update_app_source.asm" ; fixed signed source readiness, unconfigured refuses
+%include "gui/settings_update_backend.asm" ; bounded native updater coordinator, independent FS completion
 %include "gui/settings_prefs.asm" ; RCQ-17: the Settings Preferences apply/cancel/reset the display time zone (saved like TZSET)
 %include "gui/text_view.asm" ; T5-15: the Text Viewer (textview type, read-once, line Markdown)
+%include "gui/app_reader.asm" ; G37: bounded app-fed read-only text
 %include "gui/settings_apps.asm" ; Settings > Apps (T5-14)
+%include "gui/settings_apps_share.asm" ; physical destination decision, existing tick
+; Share's standalone read-only section belongs to the single mapped PE section.
+; Keep this binding local: a separate NASM section would append an unmapped tail
+; and also capture subsequent modules until their next explicit section switch.
+%define .rodata .text
+%include "gui/app_share.asm" ; exact installed bytes, native removable frame
+%undef .rodata
 %include "gui/help_view.asm" ; RCQ-38 H2: the native Help surface (helptext type, Contents / pages), l10n_paint's first caller
 %include "gui/power_button.asm" ; RCQ-27: idle-loop power button/battery tick -> the existing Shut down? confirmation
 %include "gui/console.asm" ; 2505: quiet non-window login + principal-bound registry projection
 %include "gui/hook_edges_gui.asm" ; RCQ-15 S1: term/widget/dpms HOOK edge descriptors
 %include "gui/hook_edges_forms.asm" ; current native FORMLIST inventory, unchanged authority
+%include "gui/hook_edge_formload.asm" ; bounded FORMLOAD open through original native authority
 %include "gui/hook_edges_forminfo.asm" ; native FORMINFO bounded page chunks
 %include "gui/hook_edges_display.asm" ; native RESINFO/RESMODES read-only observations
 %include "gui/hook_edges_desk.asm" ; RCQ-15 S5: clock, taskbar, lock, wallpaper, clipboard HOOK edges (native CLOCK/TZSET, TASKBAR/WINATTN, LOCKSTATE/LOCK, WALLPAPER, CLIPINFO)

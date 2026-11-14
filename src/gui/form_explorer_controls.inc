@@ -143,7 +143,9 @@ form_exp_control_find:
     mov  eax, -1
     ret
 
-; Pure bounded registry snapshot: <=16 mounted, exact 1..15 byte labels.
+; Pure bounded registry snapshot: <=16 mounted + 8 sealed FAT32 slots.
+; No firmware or media I/O here; explicit Explorer open prepares the catalog.
+; Ordinary mounted rows have exact 1..15 byte labels.
 ; Each row holds ops, priv, name pointer, index and owned label (48 bytes).
 form_build_fsdrives:
     push rbx
@@ -216,6 +218,96 @@ form_build_fsdrives:
     inc  ebx
     jmp  .next
 .done:
+    ; A2: owner-private sealed slots get generated names, never media labels.
+    ; Ops=-1 tags an opaque {epoch,seq} row, not a mounted ops/device pointer.
+    xor  ebx, ebx
+.owned:
+    cmp  ebx, 8
+    jae  .devices
+    mov  eax, [rel form_exp_drives_count]
+    imul eax, 48
+    lea  r12, [rel form_exp_drives]
+    add  r12, rax
+    mov  edi, ebx
+    lea  rsi, [r12 + 8]
+    call vol_owner_read_catalog
+    test eax, eax
+    jz   .owned_next
+    mov  qword [r12], -1
+    mov  [r12 + 24], ebx
+    lea  rdi, [r12 + 32]
+    lea  rsi, [rel str_exp_owned_drive]
+    mov  ecx, 13
+    rep  movsb
+    lea  eax, [rbx + '1']
+    mov  [r12 + 43], al
+    cmp  dword [rel form_exp_drives_count], 0
+    je   .owned_text
+    lea  rdi, [rel str_fsroot_comma]
+    call form_fsroot_put_str
+.owned_text:
+    lea  rdi, [r12 + 32]
+    call form_fsroot_put_name
+    inc  dword [rel form_exp_drives_count]
+.owned_next:
+    inc  ebx
+    jmp  .owned
+.devices:
+    ; T5-15.4 (SEC 90164): a native removable device no mount views yet gets a row.
+    ; Ops 0 names it. Listing reads nothing from the media.
+    xor  r13d, r13d
+.device:
+    cmp  dword [rel form_exp_drives_count], 24
+    jae  .finish
+    mov  rdi, r13
+    call fat32_disk_next_unviewed       ; -> RAX dev or 0, RDX its name
+    test rax, rax
+    jz   .finish
+    mov  r13, rax
+    mov  rsi, rdx
+    test rsi, rsi
+    jz   .device
+    xor  ecx, ecx
+.device_label:
+    mov  al, [rsi + rcx]
+    test al, al
+    jz   .device_label_end
+    cmp  al, 33
+    jb   .device
+    cmp  al, 126
+    ja   .device
+    cmp  al, ','
+    je   .device
+    cmp  al, '|'
+    je   .device
+    inc  ecx
+    cmp  ecx, 16
+    jb   .device_label
+    jmp  .device
+.device_label_end:
+    test ecx, ecx
+    jz   .device
+    mov  eax, [rel form_exp_drives_count]
+    imul eax, 48
+    lea  r12, [rel form_exp_drives]
+    add  r12, rax
+    mov  qword [r12], 0
+    mov  [r12 + 8], r13
+    mov  [r12 + 16], rsi
+    mov  dword [r12 + 24], VFS_MAX_MOUNTS
+    lea  rdi, [r12 + 32]
+    inc  ecx
+    rep  movsb
+    cmp  dword [rel form_exp_drives_count], 0
+    je   .device_text
+    lea  rdi, [rel str_fsroot_comma]
+    call form_fsroot_put_str
+.device_text:
+    lea  rdi, [r12 + 32]
+    call form_fsroot_put_name
+    inc  dword [rel form_exp_drives_count]
+    jmp  .device
+.finish:
     mov  rax, [rel form_fsroot_cur]
     mov  byte [rax], 0
     lea  rax, [rel form_exp_drives_buf]
@@ -224,16 +316,17 @@ form_build_fsdrives:
     pop  rbx
     ret
 
-; EDI drive row -> EAX changed. No write capability or arm: native FSSEL's
-; no-I/O resolver only. Bind the still-visible row to the live registry tuple,
-; reject alias labels, focus/lock/injected frames and a pending copy start.
+; EDI drive row -> EAX changed. No write capability or arm. Mounted rows use
+; native FSSEL's no-I/O resolver; sealed rows explicitly resolve live media.
+; Bind the visible row to its current tuple/token; reject alias labels,
+; focus/lock/injected frames and a pending copy start.
 form_exp_drive_select:
     push rbx
     push r12
     mov  ebx, edi
     cmp  edi, [rel form_exp_drives_count]
     jae  .no
-    cmp  edi, VFS_MAX_MOUNTS
+    cmp  edi, 24
     jae  .no
     cmp  byte [rel form_exp_paste_pending], 0
     jne  .no
@@ -256,6 +349,63 @@ form_exp_drive_select:
     imul ebx, 48
     lea  r12, [rel form_exp_drives]
     add  r12, rbx
+    cmp  qword [r12], -1
+    je   .owned_row
+    cmp  qword [r12], 0
+    jne  .mounted_row
+    mov  rdi, [r12 + 8]
+    call exfat_disk_select_removable_mbr_ro
+    test rax, rax
+    jns  .entered
+    cmp  rax, -1                     ; only full-width unsupported permits GPT
+    jne  .no
+    mov  rdi, [r12 + 8]               ; original opaque row for exfat GPT
+    call exfat_disk_select_removable_gpt_ro
+    test rax, rax
+    jns  .entered
+    cmp  rax, -1                     ; unsupported/refused exFAT; busy stays refused
+    jne  .no
+    mov  rdi, [r12 + 8]               ; each backend gets the original opaque row
+    call ext4_disk_select_removable_mbr_ro
+    test rax, rax
+    jns  .entered
+    cmp  rax, -1                     ; only full-width unsupported permits GPT
+    jne  .no
+    mov  rdi, [r12 + 8]               ; original opaque row for ext4 GPT
+    call ext4_disk_select_removable_gpt_ro
+    test rax, rax
+    jns  .entered
+    cmp  rax, -1                     ; unsupported/refused ext; busy stays refused
+    jne  .no
+    mov  rdi, [r12 + 8]               ; ext may clobber volatile argument registers
+    call fat32_disk_select_removable_ro
+    test rax, rax
+    jns  .entered
+    cmp  rax, -1                     ; only full-width FAT unsupported permits NTFS
+    jne  .no
+    mov  rdi, [r12 + 8]               ; original opaque row for NTFS mbr
+    call ntfs_disk_select_removable_mbr_ro
+    cmp  rax, -2                     ; exact busy gets a visible read-only reason
+    je   .ntfs_busy
+    test rax, rax
+    jns  .entered
+    cmp  rax, -1                     ; only full-width NTFS MBR unsupported permits NTFS
+    jne  .no
+    mov  rdi, [r12 + 8]               ; original opaque row for NTFS gpt
+    call ntfs_disk_select_removable_gpt_ro
+    cmp  rax, -2                     ; exact busy gets a visible read-only reason
+    je   .ntfs_busy
+    test rax, rax
+    js   .no
+    jmp  .entered
+.owned_row:
+    mov  edi, [r12 + 24]
+    lea  rsi, [r12 + 8]
+    call fat32_disk_select_owned_ro
+    test rax, rax
+    js   .no
+    jmp  .entered
+.mounted_row:
     mov  edi, [r12 + 24]
     call vfs_mount_ptr
     test rax, rax
@@ -314,6 +464,7 @@ form_exp_drive_select:
     call vfs_select_disk_by_name
     cmp  eax, [r12 + 24]
     jne  .no
+.entered:
     mov  byte [rel form_fs_cwd], '/'
     mov  byte [rel form_fs_cwd + 1], 0
     mov  dword [rel form_fs_cwd_len], 1
@@ -321,6 +472,17 @@ form_exp_drive_select:
     call form_exp_entered
     mov  eax, 1
     jmp  .out
+    ; Native NTFS registers only ntfs0. A missing/stale handle names no volume;
+    ; another storage/guest/copy operation can also cause this same -2.
+.ntfs_busy:
+    lea  rbx, [rel str_exp_ntfs_storage_busy]
+    mov  edi, [rel ntfs_disk_handle]
+    call vfs_mount_ptr
+    test rax, rax
+    jz   .ntfs_note
+    lea  rbx, [rel str_exp_ntfs_volume_busy]
+.ntfs_note:
+    mov  [rel form_exp_note], rbx
 .no:
     xor  eax, eax
 .out:
@@ -328,18 +490,26 @@ form_exp_drive_select:
     pop  rbx
     ret
 
-; Capture for the native drives list. Left press only, never middle/right;
-; menu commands and the file view keep their own capture path.
+; Capture for the native drives list. Middle never selects. Right press
+; selects the same bounded original drive row, then offers its separate menu.
 form_exp_controls_capture:
     xor  eax, eax
     cmp  ecx, WGT_CAPTURE_PRESS
     jne  .ret
-    test r8d, r8d
-    jnz  .ret
+    cmp  r8d, 1
+    je   .ret
+    cmp  r8d, 2
+    ja   .ret
     push rbx
     push r12
+    push r13
+    push r14
+    push r15
+    push r8
     mov  ebx, edx
-    mov  r12d, edi
+    mov  r13d, esi
+    mov  r14d, edx
+    mov  r15d, edi
     call wgt_slot_ptr
     cmp  dword [rax + WGI_BIND], FORM_BIND_FS_DRIVES
     jne  .no
@@ -352,6 +522,7 @@ form_exp_controls_capture:
     jne  .no
     test dword [rax + WGI_FLAGS], 1
     jz   .no
+    mov  r12d, [rax + WGI_SCROLL]
     sub  ebx, [rax + WGI_Y]
     sub  ebx, FORM_EXP_LV_HEAD
     js   .yes
@@ -360,7 +531,17 @@ form_exp_controls_capture:
     mov  ecx, FORM_EXP_LV_ROW
     div  ecx
     mov  edi, eax
+    add  edi, r12d
+    jc   .yes
     call form_exp_drive_select
+    test eax, eax
+    jz   .yes
+    cmp  dword [rsp], 2
+    jne  .yes
+    mov  edi, r15d
+    mov  esi, r13d
+    mov  edx, r14d
+    call form_exp_format_open
 .yes:
     call wmx_draw_all
     mov  eax, 1
@@ -368,6 +549,10 @@ form_exp_controls_capture:
 .no:
     xor  eax, eax
 .out:
+    add  rsp, 8
+    pop  r15
+    pop  r14
+    pop  r13
     pop  r12
     pop  rbx
 .ret:
@@ -582,7 +767,7 @@ form_exp_context_open:
     mov  edx, [rbx + WGI_X]
     mov  ecx, [rbx + WGI_W]
     add  ecx, edx
-    sub  ecx, 180
+    sub  ecx, 232
     cmp  r13d, ecx
     cmovg r13d, ecx
     cmp  r13d, edx
@@ -591,14 +776,14 @@ form_exp_context_open:
     mov  edx, [rbx + WGI_Y]
     mov  ecx, [rbx + WGI_H]
     add  ecx, edx
-    sub  ecx, 200                     ; 6 * native 32px rows + 2 * 4px pad
+    sub  ecx, 232                     ; 7 * native 32px rows + 2 * 4px pad
     cmp  r14d, ecx
     cmovg r14d, ecx
     cmp  r14d, edx
     cmovl r14d, edx
     mov  [rax + WGI_Y], r14d
-    mov  dword [rax + WGI_W], 180
-    mov  dword [rax + WGI_H], 200
+    mov  dword [rax + WGI_W], 232
+    mov  dword [rax + WGI_H], 232
     mov  dword [rax + WGI_LAYER], 1
     mov  dword [rax + WGI_SCROLL], 0
     mov  dword [rax + WGI_SEL_LO], 1
@@ -628,6 +813,7 @@ form_exp_context_open:
     ret
 
 form_exp_context_reset:
+    call form_exp_format_reset
     push rdi                         ; FORMLOAD still owns its form index
     mov  edi, [rel form_exp_context_id]
     mov  dword [rel form_exp_context_id], -1
@@ -641,9 +827,10 @@ form_exp_context_reset:
     pop  rdi
     ret
 
-; Consume one kit selection on cadence. These six actions only change view
-; state. Mutation actions are deliberately absent until FS's volume policy.
+; Consume one kit selection on cadence. The adoption entry only opens a
+; native snapshot card; it carries no decision or storage write authority.
 form_exp_context_tick:
+    call form_exp_format_tick
     mov  edi, [rel form_exp_context_id]
     cmp  edi, [rel wgt_count]
     jae  .ret
@@ -716,6 +903,8 @@ form_exp_context_tick:
     jb   .path
     jmp  .out
 .action:
+    cmp r12d,6
+    je .adopt
     cmp  r12d, 5
     ja   .out
     je   .refresh
@@ -725,8 +914,12 @@ form_exp_context_tick:
     lea  edi, [r12d - 2]
     call form_exp_sort_choose
     jmp  .draw
+.adopt:
+    mov edi,[rel form_exp_context_mount]
+    call adopt_confirm_offer
+    jmp .out
 .refresh:
-    mov  qword [rel form_fsroot_snapshot_ms], 0
+    call form_exp_rescan               ; synchronous storage read, before redraw
     jmp  .draw
 .up:
     call form_explorer_up
@@ -750,6 +943,268 @@ form_exp_context_tick:
     call form_exp_context_reset
 .out:
     pop  r12
+    pop  rbx
+.ret:
+    ret
+
+; The one-row Format menu carries no decision. Only the original card can ask
+; for a fresh local password and spend its separate F1 consumer. F1 classifies
+; the exact removable partition both before opening and before the handoff.
+form_exp_format_reset:
+    push rdi
+    mov  edi, [rel form_exp_format_id]
+    mov  dword [rel form_exp_format_id], -1
+    cmp  edi, [rel wgt_count]
+    jae  .out
+    call wgt_slot_ptr
+    cmp  dword [rax + WGI_BIND], FORM_BIND_FS_FORMAT
+    jne  .out
+    mov  dword [rax + WGI_SEL_LO], 0
+.out:
+    pop  rdi
+    ret
+
+; Read-only exact native tuple; never reinterpret a backend private pointer.
+form_exp_format_facts:
+    mov  edi, [rel form_exp_format_mount]
+    cmp  edi, [rel vfs_disk_handle]
+    jne  .bad
+    call vfs_mount_ptr
+    test rax, rax
+    jz   .bad
+    mov  rcx, [rax]
+    cmp  rcx, [rel form_exp_format_ops]
+    jne  .bad
+    mov  rcx, [rax + 8]
+    cmp  rcx, [rel form_exp_format_priv]
+    jne  .bad
+    mov  edi, [rel form_exp_format_mount]
+    lea  rsi, [rel form_exp_format_info]
+    call vfs_info_facts
+    test rax, rax
+    js   .bad
+    mov  rdi, [rel form_exp_format_info + 8]
+    test rdi, rdi
+    jz   .bad
+    mov  rsi, [rel form_exp_format_info + 40]
+    mov  rdx, [rel form_exp_format_info + 48]
+    lea  rcx, [rel form_exp_format_check]
+    jmp  fs_format_classify
+.bad:
+    mov  eax, -1
+    ret
+
+; All original owner/window facts must still name this particular menu.
+form_exp_format_guard:
+    cmp  byte [rel cmd_in_dispatch], 0
+    jne  .bad
+    call wmx_frame_may_focus
+    test eax, eax
+    jnz  .bad
+    call session_shell_local_authority
+    cmp  rax, PRIN_OWNER
+    jne  .bad
+    cmp  rdx, [rel form_exp_format_epoch]
+    jne  .bad
+    mov  rax, [rel session_key_handle]
+    cmp  rax, [rel form_exp_format_key]
+    jne  .bad
+    mov  ecx, [rel form_exp_format_win]
+    cmp  ecx, WM_MAX
+    jae  .bad
+    cmp  ecx, [rel wm_focus]
+    jne  .bad
+    cmp  ecx, [rel form_active_slot + FORM_EXPLORER_INDEX*4]
+    jne  .bad
+    lea  rax, [rel wm_state]
+    test dword [rax + rcx*4], WM_VISIBLE
+    jz   .bad
+    lea  rax, [rel wm_gen]
+    mov  eax, [rax + rcx*4]
+    cmp  eax, [rel form_exp_format_gen]
+    jne  .bad
+    lea  rax, [rel wm_owner]
+    mov  rax, [rax + rcx*8]
+    cmp  rax, [rel form_exp_format_owner]
+    jne  .bad
+    mov  edi, [rel form_exp_format_id]
+    cmp  edi, [rel wgt_count]
+    jae  .bad
+    call wgt_birth_lifetime
+    test rax, rax
+    jz   .bad
+    cmp  rax, [rel form_exp_format_birth]
+    jne  .bad
+    mov  edi, [rel form_exp_format_id]
+    call wgt_slot_ptr
+    cmp  dword [rax + WGI_BIND], FORM_BIND_FS_FORMAT
+    jne  .bad
+    mov  ecx, [rel wgt_menu_type]
+    inc  ecx
+    cmp  ecx, [rax + WGI_TYPE]
+    jne  .bad
+    test dword [rax + WGI_FLAGS], 1
+    jz   .bad
+    mov  ecx, [rel form_exp_format_win]
+    cmp  ecx, [rax + WGI_WIN]
+    jne  .bad
+    cmp  dword [rax + WGI_W], 148
+    jne  .bad
+    cmp  dword [rax + WGI_H], 40
+    jne  .bad
+    xor  eax, eax
+    ret
+.bad:
+    mov  eax, -1
+    ret
+
+; EDI native drive widget, ESI/EDX original local pointer position. Focus was
+; already checked by drive_select. No arbitrary row/name can become a device.
+form_exp_format_open:
+    push rbx
+    push r12
+    push r13
+    push r14
+    mov  r13d, esi
+    mov  r14d, edx
+    ; Keep the whole one-row flyout inside its original drive pane.
+    call wgt_slot_ptr
+    mov  edx, [rax + WGI_X]
+    mov  ecx, [rax + WGI_W]
+    add  ecx, edx
+    sub  ecx, 148
+    cmp  r13d, ecx
+    cmovg r13d, ecx
+    cmp  r13d, edx
+    cmovl r13d, edx
+    mov  edx, [rax + WGI_Y]
+    mov  ecx, [rax + WGI_H]
+    add  ecx, edx
+    sub  ecx, 40
+    cmp  r14d, ecx
+    cmovg r14d, ecx
+    cmp  r14d, edx
+    cmovl r14d, edx
+    call form_exp_context_reset
+    call session_shell_local_authority
+    cmp  rax, PRIN_OWNER
+    jne  .out
+    mov  [rel form_exp_format_epoch], rdx
+    mov  rax, [rel session_key_handle]
+    mov  [rel form_exp_format_key], rax
+    mov  esi, [rel form_active_slot + FORM_EXPLORER_INDEX*4]
+    cmp  esi, WM_MAX
+    jae  .out
+    mov  [rel form_exp_format_win], esi
+    lea  rax, [rel wm_gen]
+    mov  eax, [rax + rsi*4]
+    mov  [rel form_exp_format_gen], eax
+    lea  rax, [rel wm_owner]
+    mov  rax, [rax + rsi*8]
+    mov  [rel form_exp_format_owner], rax
+    mov  edi, FORM_BIND_FS_FORMAT
+    call form_exp_control_find
+    test eax, eax
+    js   .out
+    mov  r12d, eax
+    mov  edi, eax
+    call wgt_birth_lifetime
+    test rax, rax
+    jz   .out
+    mov  [rel form_exp_format_birth], rax
+    mov  edi, r12d
+    call wgt_slot_ptr
+    mov  rbx, rax
+    mov  [rel form_exp_format_id], r12d
+    mov  [rax + WGI_X], r13d
+    mov  [rax + WGI_Y], r14d
+    mov  dword [rax + WGI_W], 148
+    mov  dword [rax + WGI_H], 40
+    mov  dword [rax + WGI_LAYER], 1
+    call form_exp_format_guard
+    test eax, eax
+    jnz  .cancel
+    mov  edi, [rel vfs_disk_handle]
+    mov  [rel form_exp_format_mount], edi
+    call vfs_mount_ptr
+    test rax, rax
+    jz   .cancel
+    mov  rcx, [rax]
+    mov  [rel form_exp_format_ops], rcx
+    mov  rcx, [rax + 8]
+    mov  [rel form_exp_format_priv], rcx
+    call form_exp_format_facts
+    test eax, eax
+    jnz  .cancel
+    lea  rsi, [rel form_exp_format_check]
+    lea  rdi, [rel form_exp_format_class]
+    mov  ecx, 10
+    rep  movsq
+    lea  rsi, [rel form_fs_cwd]
+    lea  rdi, [rel form_exp_format_path]
+    mov  ecx, FORM_FS_CWD_MAX
+    rep  movsb
+    mov  ecx, [rbx + WGI_SUBMITS]
+    mov  [rel form_exp_format_seq], ecx
+    mov  dword [rbx + WGI_SCROLL], 0
+    mov  dword [rbx + WGI_SEL_LO], 1
+    jmp  .out
+.cancel:
+    call form_exp_format_reset
+.out:
+    pop  r14
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+
+form_exp_format_tick:
+    cmp  dword [rel form_exp_format_id], -1
+    je   .ret
+    push rbx
+    call form_exp_format_guard
+    test eax, eax
+    jnz  .cancel
+    mov  edi, [rel form_exp_format_id]
+    call wgt_slot_ptr
+    mov  rbx, rax
+    mov  ecx, [rax + WGI_SUBMITS]
+    cmp  ecx, [rel form_exp_format_seq]
+    jne  .selected
+    cmp  dword [rax + WGI_SEL_LO], 1
+    jne  .cancel
+    jmp  .out
+.selected:
+    mov  ebx, [rax + WGI_SEL_HI]
+    call form_exp_format_reset       ; spend before any refusal or card offer
+    test ebx, ebx                    ; only the single Format entry exists
+    jnz  .out
+    lea  rsi, [rel form_fs_cwd]
+    lea  rdi, [rel form_exp_format_path]
+    mov  ecx, FORM_FS_CWD_MAX
+    repe cmpsb
+    jne  .out
+    ; Pin the original device pointer independently of the classifier's bytes.
+    push qword [rel form_exp_format_info + 8]
+    call form_exp_format_facts
+    pop  rcx
+    test eax, eax
+    jnz  .out
+    cmp  rcx, [rel form_exp_format_info + 8]
+    jne  .out
+    lea  rsi, [rel form_exp_format_check]
+    lea  rdi, [rel form_exp_format_class]
+    mov  ecx, 10
+    repe cmpsq
+    jne  .out
+    mov  rdi, [rel form_exp_format_info + 8]
+    mov  rsi, [rel form_exp_format_class]
+    mov  rdx, [rel form_exp_format_class + 8]
+    call format_confirm_offer       ; no authority except to show default Deny
+    jmp  .out
+.cancel:
+    call form_exp_format_reset
+.out:
     pop  rbx
 .ret:
     ret

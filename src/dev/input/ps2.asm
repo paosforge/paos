@@ -1540,6 +1540,7 @@ kbd_count:       db 0
 kbd_origin_ring: times KBD_RING_LEN db 0   ; GA0-K: KO_* origin of kbd_ring[i]
 ps2_kbd_last_origin: db 0                 ; origin of the byte ps2_kbd_dequeue last returned
 input_key_origin: db KO_INTERNAL          ; origin of the key gui/input_route is delivering (it writes it); INTERNAL when none is (SEC R1 F4)
+input_other_origin_seq: dd 0                ; T5-15.4: input delivered with a non-HUMAN origin
 align 8
 kbd_slot_pending: times KO_SLOTS db 0     ; queued bytes bound to each sec/keyprov slot
 kbd_dropped_count: dq 0

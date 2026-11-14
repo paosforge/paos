@@ -1,11 +1,13 @@
 ;; MODULE gui/widget_image
 ;; LAYER 6
-;; EXPORTS widget_image_register, widget_image_bind, widget_image_rebind_window, widget_image_state_ptr, image_type_id, wallpaper_paint_rect, wallpaper_perf_stage, wallpaper_tree, widget_image_contain_size
-;; IMPORTS gui/widget, gui/window, gui/window_mgmt, gui/wintree, gui/img/img_core, gui/img/img_cache, gui/img/img_cover, gui/img/img_source, boot/serial, core/time, svc/command, svc/command_auth
+;; EXPORTS widget_image_refused_state, widget_image_bound_state, widget_image_register, widget_image_bind, widget_image_rebind_window, widget_image_state_ptr, image_type_id, wallpaper_paint_rect, wallpaper_perf_stage, wallpaper_tree, widget_image_contain_size
+;; IMPORTS gui/app_launcher, gui/lock_screen, gui/widget, gui/window, gui/window_mgmt, gui/wintree, gui/img/img_core, gui/img/img_cache, gui/img/img_cover, gui/img/img_source, boot/serial, core/time, svc/command, svc/command_auth
 ;; CAPS
 ;; OWNER saga:gui_image_pipeline
 
 WIMG_FIT_NONE   equ 0
+WIMG_FIT_TILE   equ 5                 ; repeat natural raster from image origin
+WIB_APP_SZ      equ 40                ; bound app provenance: owner8 + sha256 32 (A4)
 WIMG_FIT_CENTER equ 1
 WIMG_FIT_SCALE  equ 2
 WIMG_FIT_CONTAIN equ 4                ; aspect-preserving bounded fit, no upscale
@@ -79,6 +81,14 @@ widget_image_bind:
     mov  r12d, edi
     mov  r13, rsi
     mov  r14d, edx
+    ; Passive provenance only. Invalidate before any original bind operation;
+    ; retain the entry birth so callbacks cannot certify a recycled slot.
+    mov  edi, r12d
+    call wgt_birth_lifetime
+    push rax
+    imul rax, r12, 48
+    lea  rdx, [rel widget_image_bound]
+    mov  qword [rdx + rax], 0
     mov  edi, r12d
     call widget_image_state_ptr
     mov  rbp, rax
@@ -145,12 +155,199 @@ widget_image_bind:
 .paint:
     mov  edi, r12d
     call widget_image_draw
+    mov  edi, r12d
+    mov  rsi, [rsp]
+    call widget_image_bound_record
+    add  rsp, 8
     mov  eax, [rel widget_image_last_status]
     pop  r15
     pop  r14
     pop  r13
     pop  r12
     pop  rbp
+    pop  rbx
+    ret
+
+; EDI=current id, RSI=original bind-entry birth. This private snapshot is
+; bookkeeping for completed normal binds, never a new getter/decode or grant.
+; Immutable embedded catalog rows qualify, and (widgets-01 A4, SEC A7) a
+; live app bundle row, recorded with its owning handle and image sha256 (never
+; its bytes); other owned/file sources stay U.
+widget_image_bound_record:
+    push rbx
+    mov  rbx, rsi
+    call wgt_birth_lifetime
+    test rax, rax
+    jz   .out
+    cmp  rax, rbx
+    jne  .out
+    call widget_image_state_ptr
+    mov  r11, rax
+    imul r8, rdi, WIB_APP_SZ
+    lea  r10, [rel widget_image_bound_app]
+    add  r10, r8
+    mov  qword [r10], 0                ; embedded rows carry no provenance
+    mov  rax, [r11 + WIS_SRC]
+    lea  rdx, [rel img_assets]
+    sub  rax, rdx
+    cmp  rax, IMG_ASSET_COUNT * IMG_ASSET_ENTSZ
+    jae  .app_row
+    xor  edx, edx
+    mov  ecx, IMG_ASSET_ENTSZ
+    div  rcx
+    test edx, edx
+    jnz  .out
+    jmp  .record
+.app_row:
+    push rdi
+    push r10
+    push r11
+    mov  rdi, [r11 + WIS_SRC]
+    call app_launcher_image_provenance
+    pop  r11
+    pop  r10
+    pop  rdi
+    test rax, rax
+    jz   .out
+    mov  [r10], rax
+%assign i 0
+%rep 4
+    mov  rdx, [rcx + i*8]
+    mov  [r10 + 8 + i*8], rdx
+%assign i i+1
+%endrep
+.record:
+    imul r8, rdi, 48
+    lea  r10, [rel widget_image_bound]
+    add  r10, r8
+    ; Private pointer remains internal; output contains only bounded scalars.
+%assign i 0
+%rep 5
+    mov  rax, [r11 + i*8]
+    mov  [r10 + 8 + i*8], rax
+%assign i i+1
+%endrep
+    mov  [r10], rbx
+.out:
+    pop  rbx
+    ret
+
+; EDI=current id, RAX=its WIS state -> RAX unchanged when the original record
+; is an embedded row or its recorded app owner and digest still match the live
+; launcher row; 0 after that row was dropped or republished. Pure read.
+widget_image_app_current:
+    push rbx
+    push r12
+    push r13
+    mov  r13, rax
+    imul r12, rdi, WIB_APP_SZ
+    lea  rdx, [rel widget_image_bound_app]
+    add  r12, rdx
+    cmp  qword [r12], 0
+    je   .yes
+    mov  rdi, [rax + WIS_SRC]
+    call app_launcher_image_provenance
+    cmp  rax, [r12]
+    jne  .no
+%assign i 0
+%rep 4
+    mov  rdx, [rcx + i*8]
+    cmp  rdx, [r12 + 8 + i*8]
+    jne  .no
+%assign i i+1
+%endrep
+.yes:
+    mov  rax, r13
+    jmp  .out
+.no:
+    xor  eax, eax
+.out:
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+
+; EDI=current id -> RAX=current state only when it still matches an original
+; successful embedded bind of this exact birth. Pure read: no draw/cache/codec.
+widget_image_bound_state:
+    push rbx
+    call wgt_birth_lifetime
+    test rax, rax
+    jz   .bad
+    imul rbx, rdi, 48
+    lea  rdx, [rel widget_image_bound]
+    add  rbx, rdx
+    cmp  [rbx], rax
+    jne  .bad
+    call widget_image_state_ptr
+%assign i 0
+%rep 5
+    mov  rcx, [rax + i*8]
+    cmp  rcx, [rbx + 8 + i*8]
+    jne  .bad
+%assign i i+1
+%endrep
+    call widget_image_app_current      ; A4: app provenance still live
+    test rax, rax
+    jz   .bad
+    cmp  dword [rax + WIS_FIT], WIMG_FIT_TILE
+    ja   .bad
+    cmp  dword [rax + WIS_LOAD], WIMG_LOAD_OK
+    jne  .bad
+    cmp  byte [rax + WIS_REBIND], 0
+    jne  .bad
+    cmp  dword [rax + WIS_NW], 0
+    je   .bad
+    cmp  dword [rax + WIS_NH], 0
+    je   .bad
+    cmp  dword [rax + WIS_OUTW], 0
+    je   .bad
+    cmp  dword [rax + WIS_OUTH], 0
+    je   .bad
+    pop  rbx
+    ret
+.bad:
+    xor  eax, eax
+    pop  rbx
+    ret
+
+; EDI=current id -> RAX only for the exact completed original embedded bind
+; failure of this birth. Private snapshot/asset-row proof is shared bookkeeping;
+; no getter, loading, decoding, cache access, painting or replacement instance.
+widget_image_refused_state:
+    push rbx
+    call wgt_birth_lifetime
+    test rax, rax
+    jz   .bad
+    imul rbx, rdi, 48
+    lea  rdx, [rel widget_image_bound]
+    add  rbx, rdx
+    cmp  [rbx], rax
+    jne  .bad
+    call widget_image_state_ptr
+%assign i 0
+%rep 5
+    mov  rcx, [rax + i*8]
+    cmp  rcx, [rbx + 8 + i*8]
+    jne  .bad
+%assign i i+1
+%endrep
+    call widget_image_app_current      ; A4: app provenance still live
+    test rax, rax
+    jz   .bad
+    cmp  dword [rax + WIS_FIT], WIMG_FIT_TILE
+    ja   .bad
+    ; Only completed, finite original failures. Never interpret stale dimensions.
+    mov  ecx, [rax + WIS_LOAD]
+    sub  ecx, WIMG_LOAD_REFUSED + 1
+    cmp  ecx, 6                        ; IMG_E_BAD_MAGIC through IMG_E_OOM
+    ja   .bad
+    cmp  byte [rax + WIS_REBIND], 0
+    jne  .bad
+    pop  rbx
+    ret
+.bad:
+    xor  eax, eax
     pop  rbx
     ret
 
@@ -195,8 +392,6 @@ widget_image_rebind_window:
     mov  edi, r12d
     call widget_image_state_ptr
     mov  rbx, rax
-    cmp  byte [rbx + WIS_REBIND], 0
-    je   .next
     mov  edi, r12d
     call wgt_slot_ptr
     cmp  [rax + WGI_WIN], r13d
@@ -205,6 +400,27 @@ widget_image_rebind_window:
     inc  ecx
     cmp  [rax + WGI_TYPE], ecx
     jne  .next
+    ; Owned disk snapshots keep their caption/source alive until close, but
+    ; must not republish a cached raster after their authority or file identity
+    ; changes. Validate on ordinary raise, before either rebind or paint; the
+    ; full check performs VFS work and therefore never belongs in draw.
+    mov  rdi, [rbx + WIS_SRC]
+    lea  rax, [rel img_source_slots]
+    cmp  rdi, rax
+    je   .owned
+    add  rax, ISS_SZ
+    cmp  rdi, rax
+    jne  .rebind
+.owned:
+    call img_source_current
+    test eax, eax
+    jz   .rebind
+    mov  dword [rbx + WIS_LOAD], WIMG_LOAD_REFUSED
+    mov  byte [rbx + WIS_REBIND], 0
+    jmp  .next
+.rebind:
+    cmp  byte [rbx + WIS_REBIND], 0
+    je   .next
     mov  edi, r12d
     mov  rsi, [rbx + WIS_SRC]
     mov  edx, [rbx + WIS_FIT]
@@ -241,6 +457,8 @@ widget_image_draw:
     test eax, eax
     jnz  .evicted
     mov  r13, rbx                       ; current packed cache pointer
+    cmp  dword [r15 + WIS_FIT], WIMG_FIT_TILE
+    je   .tile
     cmp  dword [r15 + WIS_FIT], WIMG_FIT_COVER
     je   .cover
     cmp  byte [rel img_cache_ret_nat], 0
@@ -295,9 +513,97 @@ widget_image_draw:
     cmp  r11d, eax
     cmova r11d, eax
 .blit:
+    call widget_image_backdrop          ; A5: the host backdrop under the same rect
     mov  rdi, r13
     mov  esi, [r15 + WIS_OUTW]
-    call fb_blit_rgba
+    call fb_blit_rgba_over              ; straight alpha over that backdrop
+    jmp  .out
+.tile:
+    ; The natural cache key is shared across resize. Intersect the widget
+    ; with the framebuffer in signed64 before looping, so negative origins,
+    ; large endpoints and empty/offscreen widgets never multiply the work.
+    cmp  byte [rel img_cache_ret_nat], 0
+    jne  .placeholder
+    cmp  dword [r15 + WIS_OUTW], 0
+    je   .placeholder
+    cmp  dword [r15 + WIS_OUTH], 0
+    je   .placeholder
+    movsxd rax, dword [rbp + WGI_X]
+    movsxd rcx, dword [rbp + WGI_W]
+    test rcx, rcx
+    jle  .out
+    add  rcx, rax
+    mov  edx, [rel fb_width]
+    cmp  rcx, rdx
+    cmovg rcx, rdx
+    test rax, rax
+    jns  .tile_x0
+    xor  eax, eax
+.tile_x0:
+    cmp  rax, rcx
+    jge  .out
+    mov  r14d, eax                     ; visible left, widget-relative phase below
+    movsxd rax, dword [rbp + WGI_Y]
+    movsxd rdx, dword [rbp + WGI_H]
+    test rdx, rdx
+    jle  .out
+    add  rdx, rax
+    mov  esi, [rel fb_height]
+    cmp  rdx, rsi
+    cmovg rdx, rsi
+    test rax, rax
+    jns  .tile_y0
+    xor  eax, eax
+.tile_y0:
+    cmp  rax, rdx
+    jge  .out
+    mov  r12d, eax                     ; current visible row
+    sub  rsp, 32
+    mov  [rsp], ecx                    ; exclusive right
+    mov  [rsp + 4], edx                ; exclusive bottom
+.tile_row:
+    mov  eax, r12d
+    sub  eax, [rbp + WGI_Y]
+    xor  edx, edx
+    div  dword [r15 + WIS_OUTH]
+    mov  [rsp + 8], edx                ; row within natural tile
+    mov  eax, [r15 + WIS_OUTH]
+    sub  eax, edx
+    mov  ecx, [rsp + 4]
+    sub  ecx, r12d
+    cmp  eax, ecx
+    cmova eax, ecx
+    mov  [rsp + 12], eax               ; clipped row-block height
+    mov  ebx, r14d
+.tile_column:
+    mov  eax, ebx
+    sub  eax, [rbp + WGI_X]
+    xor  edx, edx
+    div  dword [r15 + WIS_OUTW]
+    mov  eax, [rsp + 8]
+    mov  esi, [r15 + WIS_OUTW]
+    imul rax, rsi
+    add  rax, rdx
+    lea  rdi, [r13 + rax*4]
+    mov  r10d, esi
+    sub  r10d, edx
+    mov  eax, [rsp]
+    sub  eax, ebx
+    cmp  r10d, eax
+    cmova r10d, eax
+    mov  [rsp + 16], r10d              ; clipped column-block width
+    mov  r8d, ebx
+    mov  r9d, r12d
+    mov  r11d, [rsp + 12]
+    call widget_image_backdrop         ; repaint alpha over original host backing
+    call fb_blit_rgba_over
+    add  ebx, [rsp + 16]
+    cmp  ebx, [rsp]
+    jb   .tile_column
+    add  r12d, [rsp + 12]
+    cmp  r12d, [rsp + 4]
+    jb   .tile_row
+    add  rsp, 32
     jmp  .out
 .cover:
     ; COVER binds the natural dimensions, so the cache always holds a packed
@@ -339,7 +645,8 @@ widget_image_draw:
     mov  r9d, [rbp + WGI_Y]
     mov  r10d, esi
     mov  r11d, edx
-    call img_cache_nat_blit
+    call widget_image_backdrop
+    call img_cache_nat_blit_over
     test eax, eax
     jnz  .placeholder
     jmp  .out
@@ -359,6 +666,24 @@ widget_image_draw:
     pop  r13
     pop  r12
     pop  rbp
+    pop  rbx
+    ret
+
+; widgets-01 A5 (ROOT 107385): before an image widget composes its alpha, paint
+; what the host shows beneath it over exactly the rect about to be blitted
+; (R8D..R11D, rbp = widget slot): the wallpaper for a desktop-hosted widget, the
+; window body (WIN_BODY_COLOR, window.asm:45) otherwise. A lone repaint therefore
+; never re-blends over its own earlier pixels. Preserves every register.
+widget_image_backdrop:
+    cmp  dword [rbp + WGI_WIN], WGT_HOST_DESKTOP
+    jne  .body
+    jmp  wallpaper_paint_rect           ; preserves all registers
+.body:
+    push rbx
+    push rsi                            ; fb_fill_rect promises only r8..r11/ebx
+    mov  ebx, GUI_TOK_WINDOW_BODY
+    call fb_fill_rect
+    pop  rsi
     pop  rbx
     ret
 
@@ -388,6 +713,7 @@ wallpaper_declare:
 ; R8D/R9D/R10D/R11D = damage rectangle. Preserve all registers, as the old
 ; fill seam did. No allocation, decode, scale or full-screen repaint here.
 wallpaper_paint_rect:
+    push rbp
     push rax
     push rbx
     push rcx
@@ -456,6 +782,10 @@ wallpaper_paint_rect:
     call img_cache_lookup
     test eax, eax
     jnz  .token                        ; defensive; the live key is pinned
+    cmp  dword [rel wallpaper_state + WIS_FIT], WIMG_FIT_TILE
+    je   .tile
+    cmp  dword [rel wallpaper_state + WIS_FIT], WIMG_FIT_CONTAIN
+    je   .fit
     mov  rdi, rbx
     mov  esi, [rel wallpaper_state + WIS_OUTW]
     ; Resolution changes never permit reading outside the bound raster.
@@ -491,6 +821,128 @@ wallpaper_paint_rect:
     mov  r11d, r15d
     call fb_blit_rgba
     jmp  .out
+.fit:
+    ; The cache key is the aspect-fitted output. Fill only this damage, then
+    ; intersect it with the centered image. No decode/scale/allocation here.
+    mov  esi, [rel wallpaper_state + WIS_OUTW]
+    mov  edx, [rel wallpaper_state + WIS_OUTH]
+    test esi, esi
+    jz   .token
+    test edx, edx
+    jz   .token
+    cmp  esi, [rel fb_width]
+    ja   .token
+    cmp  edx, [rel fb_height]
+    ja   .token
+    mov  rbp, rbx                      ; cache pointer survives the bar fill
+    mov  r8d, r12d
+    mov  r9d, r13d
+    mov  r10d, r14d
+    mov  r11d, r15d
+    mov  ebx, GUI_TOK_DESKTOP
+    call fb_fill_rect
+    mov  ecx, [rel fb_width]
+    sub  ecx, [rel wallpaper_state + WIS_OUTW]
+    shr  ecx, 1                       ; image left
+    mov  eax, [rel fb_height]
+    sub  eax, [rel wallpaper_state + WIS_OUTH]
+    shr  eax, 1                       ; image top
+    mov  r8d, r12d
+    cmp  r8d, ecx
+    cmovb r8d, ecx
+    mov  r10d, r12d
+    add  r10d, r14d
+    mov  edx, ecx
+    add  edx, [rel wallpaper_state + WIS_OUTW]
+    cmp  r10d, edx
+    cmova r10d, edx
+    sub  r10d, r8d
+    jle  .out
+    mov  r9d, r13d
+    cmp  r9d, eax
+    cmovb r9d, eax
+    mov  r11d, r13d
+    add  r11d, r15d
+    mov  edx, eax
+    add  edx, [rel wallpaper_state + WIS_OUTH]
+    cmp  r11d, edx
+    cmova r11d, edx
+    sub  r11d, r9d
+    jle  .out
+    mov  ebx, r8d
+    sub  ebx, ecx
+    mov  ecx, ebx                     ; source x in fitted output
+    mov  ebx, r9d
+    sub  ebx, eax
+    mov  eax, ebx                     ; source y in fitted output
+    mov  rdi, rbp
+    mov  esi, [rel wallpaper_state + WIS_OUTW]
+    cmp  byte [rel img_cache_ret_nat], 0
+    je   .fit_direct
+    mov  edx, [rel wallpaper_state + WIS_OUTH]
+    call img_cache_nat_blit
+    test eax, eax
+    jnz  .token
+    jmp  .out
+.fit_direct:
+    imul rax, rsi
+    add  rax, rcx
+    lea  rdi, [rdi + rax*4]
+    call fb_blit_rgba
+    jmp  .out
+.tile:
+    ; The cache key is the natural raster. Repeat from desktop origin even
+    ; for partial damage. Every blit is bounded by both the tile and damage.
+    mov  esi, [rel wallpaper_state + WIS_OUTW]
+    test esi, esi
+    jz   .token
+    cmp  dword [rel wallpaper_state + WIS_OUTH], 0
+    je   .token
+    mov  rbp, rbx
+    add  r14d, r12d                     ; exclusive damage right/bottom
+    add  r15d, r13d
+    sub  rsp, 16
+.tile_row:
+    mov  eax, r13d
+    xor  edx, edx
+    div  dword [rel wallpaper_state + WIS_OUTH]
+    mov  [rsp], edx                     ; source y within this tile
+    mov  eax, [rel wallpaper_state + WIS_OUTH]
+    sub  eax, edx
+    mov  ecx, r15d
+    sub  ecx, r13d
+    cmp  eax, ecx
+    cmova eax, ecx
+    mov  [rsp + 4], eax                 ; bounded row-block height
+    mov  ebx, r12d
+.tile_column:
+    mov  eax, ebx
+    xor  edx, edx
+    div  dword [rel wallpaper_state + WIS_OUTW]
+    mov  eax, [rsp]
+    mov  esi, [rel wallpaper_state + WIS_OUTW]
+    imul rax, rsi
+    add  rax, rdx
+    lea  rdi, [rbp + rax*4]
+    mov  r10d, esi
+    sub  r10d, edx
+    mov  eax, r14d
+    sub  eax, ebx
+    cmp  r10d, eax
+    cmova r10d, eax
+    mov  [rsp + 8], r10d
+    mov  r8d, ebx
+    mov  r9d, r13d
+    mov  r11d, [rsp + 4]
+    call fb_blit_rgba
+    add  ebx, [rsp + 8]
+    cmp  ebx, r14d
+    jb   .tile_column
+    add  r13d, [rsp + 4]
+    cmp  r13d, r15d
+    jb   .tile_row
+    add  rsp, 16
+    jmp  .out
 .token:
     mov  r8d, r12d
     mov  r9d, r13d
@@ -513,6 +965,7 @@ wallpaper_paint_rect:
     pop  rcx
     pop  rbx
     pop  rax
+    pop  rbp
     ret
 
 cmd_verb_wallpaper:
@@ -523,6 +976,8 @@ cmd_verb_wallpaper:
     push r13
     push r14
     push r15
+    sub  rsp, 24                       ; staged fit/output, published after bind
+    mov  dword [rsp], WIMG_FIT_SCALE
     xor  ebp, ebp                      ; staged owned row, never live on failure
     mov  r12, rdi
     mov  r13, rsi
@@ -542,6 +997,25 @@ cmd_verb_wallpaper:
     mov  r15, rax
     cmp  qword [rel fb_base], 0
     je   .no_display
+    cmp  dword [r14], 'lock'
+    jne  .desktop_choice
+    cmp  byte [r14 + 4], ' '
+    je   .lock_choice
+.desktop_choice:
+    cmp  dword [r14], 'fit '
+    jne  .maybe_tile
+    mov  dword [rsp], WIMG_FIT_CONTAIN
+    add  r14, 4                       ; same embedded catalog, no ambient path
+    jmp  .asset
+.maybe_tile:
+    cmp  dword [r14], 'tile'
+    jne  .ordinary
+    cmp  byte [r14 + 4], ' '
+    jne  .ordinary
+    mov  dword [rsp], WIMG_FIT_TILE
+    add  r14, 5                         ; embedded catalog only; no ambient path
+    jmp  .asset
+.ordinary:
     mov  rdi, r14
     lea  rsi, [rel str_wallpaper_none]
     call strcmp
@@ -578,6 +1052,7 @@ cmd_verb_wallpaper:
     mov  dword [rel wallpaper_token_color], GUI_TOK_DESKTOP
     lea  rax, [rel str_wallpaper_desktop]
 .token_commit:
+    mov  dword [rel wallpaper_state + WIS_FIT], WIMG_FIT_SCALE
     mov  [rel wallpaper_token_name], rax
     mov  rdi, [rel wallpaper_state + WIS_SRC]
     mov  qword [rel wallpaper_state + WIS_SRC], 0
@@ -634,9 +1109,59 @@ cmd_verb_wallpaper:
     jz   .missing
 .bind:
     mov  r14, rax
-    mov  rdi, rax
+    cmp  dword [rsp], WIMG_FIT_CONTAIN
+    je   .probe_size
+    cmp  dword [rsp], WIMG_FIT_TILE
+    jne  .stretch
+.probe_size:
+    mov  rdi, [r14 + IMG_ASSET_PTR]
+    mov  rsi, [r14 + IMG_ASSET_LEN]
+    call img_probe
+    test eax, eax
+    jnz  .decode_refused
+    mov  esi, ecx
+    cmp  dword [rsp], WIMG_FIT_CONTAIN
+    jne  .natural_size
+    ; Desktop fit permits up/downscale. Widget contain's no-upscale helper is
+    ; unchanged. Positive natural sizes came from the original bounded probe.
+    mov  r8d, ecx                     ; natural width/height
+    mov  r9d, edx
+    mov  esi, [rel fb_width]
+    mov  eax, esi
+    imul rax, r9
+    mov  ecx, [rel fb_height]
+    imul rcx, r8
+    ; Choose the limiting axis before rounding. A floored candidate height
+    ; can equal the screen height while the exact ratio is already too tall.
+    cmp  rax, rcx
+    jbe  .width_bound
+    mov  eax, [rel fb_height]
+    imul rax, r8
+    xor  edx, edx
+    div  r9
+    mov  esi, eax
+    mov  edx, [rel fb_height]
+    jmp  .fit_minimum
+.width_bound:
+    xor  edx, edx
+    div  r8
+    mov  edx, eax
+.fit_minimum:
+    mov  eax, 1
+    test esi, esi
+    cmovz esi, eax
+    test edx, edx
+    cmovz edx, eax
+.natural_size:
+    mov  rdi, r14
+    jmp  .cache_bind
+.stretch:
+    mov  rdi, r14
     mov  esi, [rel fb_width]
     mov  edx, [rel fb_height]
+.cache_bind:
+    mov  [rsp + 8], esi
+    mov  [rsp + 12], edx
     call img_cache_bind
     test eax, eax
     jnz  .decode_refused
@@ -656,10 +1181,12 @@ cmd_verb_wallpaper:
     ; pinned. Cache failure has not changed the live widget or its pixels.
     mov  [rel wallpaper_state + WIS_NW], ecx
     mov  [rel wallpaper_state + WIS_NH], edx
-    mov  eax, [rel fb_width]
+    mov  eax, [rsp]
+    mov  [rel wallpaper_state + WIS_FIT], eax
+    mov  eax, [rsp + 8]
     mov  [rel wallpaper_state + WIS_OUTW], eax
     mov  [rel img_cache_pin_w], eax
-    mov  eax, [rel fb_height]
+    mov  eax, [rsp + 12]
     mov  [rel wallpaper_state + WIS_OUTH], eax
     mov  [rel img_cache_pin_h], eax
     mov  [rel img_cache_pin_asset], r14
@@ -721,6 +1248,54 @@ cmd_verb_wallpaper:
     mov  rdi, [rel wallpaper_bind_ms]
     call img_out_dec
     jmp  .ok
+.lock_choice:
+    ; Same nonempty-command MUTATE gate above, plus the existing lock floor.
+    ; Stage only the sizing choice. Do not inspect the private node, bind,
+    ; decode or paint while the owner's desktop is visible.
+    cmp  byte [rel session_locked], SESSION_LOCKED
+    je   .source_refused
+    cmp  byte [rel lock_composition_ok], 1
+    jne  .source_refused
+    lea  rdi, [r14 + 5]
+    lea  rsi, [rel str_wallpaper_lock_fit]
+    call strcmp
+    test eax, eax
+    jz   .lock_fit
+    lea  rdi, [r14 + 5]
+    lea  rsi, [rel str_wallpaper_lock_stretch]
+    call strcmp
+    test eax, eax
+    jz   .lock_stretch
+    lea  rdi, [r14 + 5]
+    lea  rsi, [rel str_wimg_fit_cover]
+    call strcmp
+    test eax, eax
+    jz   .lock_cover
+    lea  rdi, [r14 + 5]
+    lea  rsi, [rel str_wallpaper_lock_tile]
+    call strcmp
+    test eax, eax
+    jnz  .source_refused
+    mov  ecx, WIMG_FIT_TILE
+    lea  r14, [rel str_wallpaper_lock_tile_ok]
+    jmp  .lock_publish
+.lock_cover:
+    mov  ecx, WIMG_FIT_COVER
+    lea  r14, [rel str_wallpaper_lock_cover_ok]
+    jmp  .lock_publish
+.lock_fit:
+    mov  ecx, WIMG_FIT_CONTAIN
+    lea  r14, [rel str_wallpaper_lock_fit_ok]
+    jmp  .lock_publish
+.lock_stretch:
+    mov  ecx, WIMG_FIT_SCALE
+    lea  r14, [rel str_wallpaper_lock_stretch_ok]
+.lock_publish:
+    mov  [rel lock_wallpaper_fit_choice], ecx
+    call img_out_reset
+    mov  rdi, r14
+    call img_out_str
+    jmp  .ok
 .read:
     call img_out_reset
     lea  rdi, [rel str_wallpaper_read]
@@ -765,6 +1340,7 @@ cmd_verb_wallpaper:
 .auth_refused:
     mov  qword [r13 + RSP_CODE], CMDE_AUTHDENY
 .out:
+    add  rsp, 24
     pop  r15
     pop  r14
     pop  r13
@@ -805,6 +1381,15 @@ wallpaper_report:
     mov  rdi, rax
     call img_out_str
     lea  rdi, [rel str_wallpaper_state]
+    cmp  dword [rel wallpaper_state + WIS_FIT], WIMG_FIT_CONTAIN
+    je   .fit_state
+    cmp  dword [rel wallpaper_state + WIS_FIT], WIMG_FIT_TILE
+    jne  .state
+    lea  rdi, [rel str_wallpaper_tile_state]
+    jmp  .state
+.fit_state:
+    lea  rdi, [rel str_wallpaper_fit_state]
+.state:
     call img_out_str
     ret
 
@@ -855,6 +1440,15 @@ wallpaper_tree:
     mov  rdi, rax
     call f1_put_escaped
     lea  rdi, [rel str_wallpaper_state]
+    cmp  dword [rel wallpaper_state + WIS_FIT], WIMG_FIT_CONTAIN
+    je   .fit_state
+    cmp  dword [rel wallpaper_state + WIS_FIT], WIMG_FIT_TILE
+    jne  .state
+    lea  rdi, [rel str_wallpaper_tile_state]
+    jmp  .state
+.fit_state:
+    lea  rdi, [rel str_wallpaper_fit_state]
+.state:
     call f1_put_str
     lea  rdi, [rel str_img_w]
     call f1_put_str
@@ -893,6 +1487,8 @@ str_wallpaper_read: db " WALLPAPER",0
 str_wallpaper_mode_token: db " mode=token",0
 str_wallpaper_mode_image: db " mode=image",0
 str_wallpaper_src: db " src=",0
+str_wallpaper_tile_state: db " fit=tile load=ok persistence=runtime tree=WINTREE:desktop",0
+str_wallpaper_fit_state: db " fit=contain load=ok persistence=runtime tree=WINTREE:desktop",0
 str_wallpaper_state: db " fit=scale load=ok persistence=runtime tree=WINTREE:desktop",0
 str_wallpaper_error: db " wallpaper=ERR reason=",0
 str_wallpaper_source: db "source",0
@@ -908,6 +1504,8 @@ str_wallpaper_marker: db "[PAOS64] M6 gui: wallpaper = image widget on desktop l
 
 align 8
 widget_image_state: times (WGT_MAX*WIS_SZ) db 0
+widget_image_bound: times (WGT_MAX*48) db 0 ; birth + private original WIS snapshot
+widget_image_bound_app: times (WGT_MAX*WIB_APP_SZ) db 0 ; A4: owner handle + image sha256
 image_type_id: dd -1
 widget_image_last_status: dd 0
 widget_image_natural_h: dd 0
@@ -916,6 +1514,16 @@ str_wt_image: db "image",0
 str_wimg_fit_none: db "none",0
 str_wimg_fit_center: db "center",0
 str_wimg_fit_scale: db "scale",0
+str_wimg_fit_contain: db "contain",0      ; .frm fit names (widgets-01 A4)
+str_wimg_fit_cover: db "cover",0
+str_wimg_fit_tile: db "tile",0
+str_wallpaper_lock_fit: db "fit",0
+str_wallpaper_lock_stretch: db "stretch",0
+str_wallpaper_lock_tile: db "tile",0
+str_wallpaper_lock_tile_ok: db " wallpaper=ok lock_fit=tile effect=next_lock persistence=runtime",0
+str_wallpaper_lock_cover_ok: db " wallpaper=ok lock_fit=cover effect=next_lock persistence=runtime",0
+str_wallpaper_lock_fit_ok: db " wallpaper=ok lock_fit=contain effect=next_lock persistence=runtime",0
+str_wallpaper_lock_stretch_ok: db " wallpaper=ok lock_fit=scale effect=next_lock persistence=runtime",0
 str_wimg_load_missing: db "missing",0
 str_wimg_load_ok: db "ok",0
 str_wimg_alpha_opaque: db "opaque",0

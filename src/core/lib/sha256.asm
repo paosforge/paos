@@ -226,6 +226,11 @@ sha256_selftest:
     ret
 
 ; sha256_transform(RDI=state,RSI=64-byte block). Proven Classic sequence.
+; Each stream owns its compression schedule and round state on its stack.
+; Wipe this entire private frame before ordinary return. Interrupt/cancel stack
+; retirement remains the caller/fence's responsibility; the legacy one-shot
+; context is still shared and retains its existing BSP/serialization contract.
+SHA256_TRANSFORM_PRIVATE_BYTES equ 288 ; 256-byte schedule + 32-byte round state
 sha256_transform:
     push rbx
     push rbp
@@ -234,7 +239,8 @@ sha256_transform:
     push r14
     push r15
     push rdi
-    lea  r12, [rel sha256_work]
+    sub  rsp, 256
+    lea  r12, [rsp]
     mov  ecx, 16
 .load_w:
     mov  eax, [rsi]
@@ -244,7 +250,7 @@ sha256_transform:
     add  r12, 4
     dec  ecx
     jnz  .load_w
-    lea  r12, [rel sha256_work]
+    lea  r12, [rsp]
     mov  ecx, 48
     lea  rsi, [r12 + 64]
 .expand_w:
@@ -288,7 +294,7 @@ sha256_transform:
     mov  [rsp + 24], eax
     mov  eax, [rdi + 28]
     mov  [rsp + 28], eax
-    lea  r12, [rel sha256_work]
+    lea  r12, [rsp + 32]
     lea  r13, [rel sha256_k]
     xor  r14d, r14d
 .round:
@@ -350,7 +356,7 @@ sha256_transform:
     inc  r14d
     cmp  r14d, 64
     jb   .round
-    mov  rdi, [rsp + 32]
+    mov  rdi, [rsp + SHA256_TRANSFORM_PRIVATE_BYTES]
     mov  eax, [rsp]
     add  [rdi], eax
     mov  eax, [rsp + 4]
@@ -367,7 +373,13 @@ sha256_transform:
     add  [rdi + 24], eax
     mov  eax, [rsp + 28]
     add  [rdi + 28], eax
-    add  rsp, 40
+    mov  rdi, rsp
+    mov  ecx, SHA256_TRANSFORM_PRIVATE_BYTES / 8
+    xor  eax, eax
+    cld
+    rep  stosq
+    add  rsp, SHA256_TRANSFORM_PRIVATE_BYTES
+    pop  rdi
     pop  r15
     pop  r14
     pop  r13

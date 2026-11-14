@@ -1,6 +1,6 @@
 ;; MODULE net/netdev
 ;; LAYER 4
-;; EXPORTS netdev_census_snapshot_v2, netdev_census_snapshot, netdev_register, netdev_egress_select, netdev_has_healthy_native, netdev_has_native_member, netdev_tx, netdev_selftest, netdev_lock_audit, netdev_frame_stats, netdev_selected_owner, netdev_selected_link_ready, netdev_select_peek, netdev_member_info, netdev_usbnic_io, netdev_usbnic_poll, netdev_usbnic_recover, netdev_usbnic_rx, netdev_member_brief, netdev_link_reprobe, netdev_has_native_present, netdev_observation_member, netdev_power_member, netdev_link_wait_member, netdev_tx_identity
+;; EXPORTS netdev_late_pci_closed, netdev_pci_member_present, netdev_census_snapshot_v2, netdev_census_snapshot, netdev_register, netdev_egress_select, netdev_has_healthy_native, netdev_has_native_member, netdev_tx, netdev_selftest, netdev_lock_audit, netdev_frame_stats, netdev_selected_owner, netdev_selected_link_ready, netdev_select_peek, netdev_member_info, netdev_usbnic_io, netdev_usbnic_poll, netdev_usbnic_recover, netdev_usbnic_rx, netdev_member_brief, netdev_link_reprobe, netdev_has_native_present, netdev_observation_member, netdev_power_member, netdev_link_wait_member, netdev_tx_identity
 ;; IMPORTS boot/native_driver_gate, boot/native_driver_preload, boot/serial, core/lib/fmt, core/lock, dev/net/loopnet, dev/net/e1000e, dev/net/rtl8168, dev/net/rtl8126, dev/net/rtl8125, dev/net/ax88179, dev/net/ax88179b, dev/net/cdc_ecm, dev/net/cdc_ncm, dev/net/virtio_domain
 ;; CAPS
 ;; OWNER saga:net
@@ -149,7 +149,7 @@ netdev_register:
     ret
 
 %ifdef PAOS_NATIVE_DRIVER_POLICY_LINKED
-; Exact domain vtable admission, independent of native priority/name/health.
+; Exact domain/USB vtable admission, independent of priority/name/health.
 ; Called by registry AND egress, so a native soft fallback cannot carry traffic.
 ; RDI dev*, every GPR preserved, CF admission as above. Normal avoids dereference.
 netdev_policy_admit:
@@ -157,15 +157,52 @@ netdev_policy_admit:
     push rdi
     push rsi
     cmp qword [rel native_driver_selected_policy], 0
-    je .native
+    je .normal
     test rdi, rdi
     jz .native
     mov rax, [rdi + dev.ops]
     lea rsi, [rel virtio_domain_ops]
     cmp rax, rsi
-    jne .native
+    jne .usb_candidate
     mov edi, 4
     jmp .check
+.usb_candidate:
+    ; Only these actual USB backends add no PCI requester of their own.
+    ; Do not classify by name, priority, caller flags or the broad loopback
+    ; exception in netdev_ops_no_requester. boot_only still refuses class10.
+    lea rsi, [rel ax_ops]
+    cmp rax, rsi
+    je .usb
+    lea rsi, [rel axb_ops]
+    cmp rax, rsi
+    je .usb
+    lea rsi, [rel cdc_ecm_ops]
+    cmp rax, rsi
+    je .usb
+    lea rsi, [rel cdc_ncm_ops]
+    cmp rax, rsi
+    jne .native
+.usb:
+    mov edi, 10
+    jmp .check
+.normal:
+    ; W4a (ROOT109426 (2)(a), SEC109455 Q1): VT-d took ownership with no native
+    ; NIC bound. A later backend whose DMA requester is a PCI function was not
+    ; witnessed at init and would sit in DID 1's identity map: refuse it at
+    ; registration. USB NICs (their DMA is the xHCI's, placed at init), the
+    ; domain relay and loopback add no requester. Any other backend refuses.
+    cmp byte [rel netdev_late_pci_closed], 0
+    je .native
+    test rdi, rdi
+    jz .native
+    mov rax, [rdi + dev.ops]
+    call netdev_ops_no_requester
+    je .native
+    pop rsi
+    pop rdi
+    pop rax
+    stc
+    ret
 .native:
     mov edi, 6
 .check:
@@ -177,6 +214,55 @@ netdev_policy_admit:
     ret
 
 %endif
+
+; W4a: RAX=dev.ops -> ZF=1 iff the backend adds no PCI DMA requester of its
+; own: a USB NIC (its DMA is the xHCI's), the domain relay or loopback. Every
+; other backend, including one not listed yet, adds one. Clobbers RSI only.
+netdev_ops_no_requester:
+    lea rsi, [rel ax_ops]
+    cmp rax, rsi
+    je .out
+    lea rsi, [rel axb_ops]
+    cmp rax, rsi
+    je .out
+    lea rsi, [rel cdc_ecm_ops]
+    cmp rax, rsi
+    je .out
+    lea rsi, [rel cdc_ncm_ops]
+    cmp rax, rsi
+    je .out
+    lea rsi, [rel virtio_domain_ops]
+    cmp rax, rsi
+    je .out
+    lea rsi, [rel loopnet_ops]
+    cmp rax, rsi
+.out:
+    ret
+
+; W4a: EAX=1 iff any registered member, of any health, could add a PCI DMA
+; requester (netdev_ops_no_requester), else 0. Registry read only, no lock or
+; device access, like netdev_has_native_member. Clobbers RAX,RCX,RSI,R9,R10.
+netdev_pci_member_present:
+    lea  r9, [rel netdev_table]
+    xor  ecx, ecx
+.scan:
+    cmp  ecx, NETDEV_MAX_SLOTS
+    jae  .no
+    mov  r10, [r9 + rcx*8]
+    test r10, r10
+    jz   .next
+    mov  rax, [r10 + dev.ops]
+    call netdev_ops_no_requester
+    jne  .yes
+.next:
+    inc  ecx
+    jmp  .scan
+.yes:
+    mov  eax, 1
+    ret
+.no:
+    xor  eax, eax
+    ret
 
 ; Existing registration-lifetime epoch, also exposed to opt-in power binding.
 ; Re-affirming the same registered handle begins a fresh epoch for pinned
@@ -2121,5 +2207,6 @@ WDATA_DEFER WDATA_net_netdev_0
 alignb 8
 netdev_observation_generations: resq NETDEV_MAX_SLOTS
 netdev_observation_testing: resb 1
+netdev_late_pci_closed: resb 1    ; W4a: set once by vtd_ownership_init, never cleared
 %endmacro
 WDATA_BSS_DEFER WDATA_net_netdev_observation

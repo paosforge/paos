@@ -122,6 +122,48 @@ hv_terminal_write:
     xor eax, eax
     ret
 
+; RDI=attached owner, ESI=exact consumed START, EDX=cols, ECX=rows.
+; Cooperative BSP/stopped guest: publish the pair before ConfigGeneration.
+; The latest pair coalesces in the device page, with no queue or guest pointer.
+hv_terminal_resize:
+    HV_POWER_WORK hv_terminal_resize, 0, hv_guest_power_io_admit
+    call hv_terminal_matches
+    test eax, eax
+    jz .bad
+    test edx, edx
+    jz .bad
+    cmp edx, 0xFFFF
+    ja .bad
+    test ecx, ecx
+    jz .bad
+    cmp ecx, 0xFFFF
+    ja .bad
+    mov rax, [rel hv_linux_region]
+    test rax, rax
+    jz .bad
+    mov r8d, ecx
+    shl r8d, 16
+    or r8d, edx
+    cmp r8d, [rax + HV_VCON_PAGE + 0x100]
+    je .accepted
+    mov [rax + HV_VCON_PAGE + 0x100], dx
+    mov [rax + HV_VCON_PAGE + 0x102], cx
+    inc dword [rax + HV_VCON_PAGE + 0xFC]
+    ; A driver declining SIZE gets neither a config IRQ nor a false ACK.
+    ; hv_terminal_matches already earned readiness for this exact START.
+    test dword [rel hv_vcon_drvfeat], 1
+    jz .accepted
+    or dword [rel hv_vcon_isr], 2
+    mov edx, [rel hv_vcon_isr]
+    mov [rax + HV_VCON_PAGE + 0x60], edx
+    mov byte [rel hv_vcon_irq_pend], 1
+.accepted:
+    mov eax, 1
+    ret
+.bad:
+    xor eax, eax
+    ret
+
 hv_terminal_read:
     call hv_terminal_matches
     test eax, eax
@@ -173,6 +215,13 @@ hv_terminal_reset:
     mov dword [rel hv_terminal_head], 0
     mov dword [rel hv_terminal_count], 0
     mov dword [rel hv_terminal_overflow], 0
+    ; No old attachment geometry survives detach, restart or a fresh attach.
+    mov rax, [rel hv_linux_region]
+    test rax, rax
+    jz .done
+    mov dword [rax + HV_VCON_PAGE + 0x100], 0
+    mov dword [rax + HV_VCON_PAGE + 0xFC], 0
+.done:
     ret
 
 ; AL=actual hvc0 TX byte; preserve every register and flags for VM owner.

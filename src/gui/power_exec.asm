@@ -1,7 +1,7 @@
 ;; MODULE gui/power_exec
 ;; LAYER 6
-;; EXPORTS power_recovery_controller, power_lab_return, power_execute, power_question_text, power_warm_reset, acpi_sleep_s5, power_s5_bind, power_s5_request, power_s5_step, power_s5_cancel, power_s5_status, power_button_ownership, power_button_ownership_abort, power_button_ownership_live
-;; IMPORTS svc/driver_domain_return, svc/recovery_boot, svc/recovery_controller, svc/lab_return, hv/guest_power, svc/reinit_power_e1000e, bus/acpi_hp_s5, bus/acpi, svc/command, svc/command_udp, svc/command_bootmenu, core/diag, dev/blk/ahci, dev/blk/nvme, boot/boot_v2_health, boot/serial, sec/principal, svc/command_software_stop, core/reset_wipe, svc/reinit_power, svc/reinit_power_ram, sec/session, core/time, hv/vtd
+;; EXPORTS power_label_pending, power_s5_failure_label, power_failure_label, power_recovery_controller, power_lab_return, power_execute_desktop, power_execute, power_question_text, power_warm_reset, acpi_sleep_s5, power_s5_bind, power_s5_request, power_s5_step, power_s5_cancel, power_s5_cancel_desktop, power_s5_status, power_button_ownership, power_button_ownership_abort, power_button_ownership_live
+;; IMPORTS dev/usb/xhci, dev/snd/hda_runtime, dev/snd/hda_loopback_native, dev/net/e1000e, fs/vfs, fs/storage_access, dev/blk/usb_msd, dev/net/rtl8168, dev/net/rtl8125, dev/net/rtl8126, hv/pci_assign, svc/command_shutdown, svc/driver_domain_return, hv/driver_domain, hv/driver_domain_return, hv/driver_domain_contained, svc/recovery_boot, svc/recovery_controller, svc/lab_return, hv/guest_power, hv/app_vm, svc/reinit_power_e1000e, bus/acpi_hp_s5, bus/acpi, svc/command, svc/command_udp, svc/command_bootmenu, core/diag, dev/blk/ahci, dev/blk/nvme, boot/boot_v2_health, boot/serial, sec/principal, svc/command_software_stop, core/reset_wipe, svc/reinit_power, svc/reinit_power_ram, sec/session, core/time, hv/vtd
 ;; CAPS io
 ;; OWNER saga:msi_start_programs_settings
 ; ============================================================================
@@ -17,7 +17,7 @@
 ;                   Windows Boot Manager). Only if it was accepted does the warm
 ;                   reset below follow; a refusal resets nothing.
 ;   POWER_RESTART   the hub's warm reset, the same sequence command_udp's REBOOT
-;                   runs: diag ring flush, NVMe quiesce, firmware ResetSystem(warm)
+;                   runs: guest guard, diag/AHCI/USB/NVMe quiesce, firmware ResetSystem(warm)
 ;                   when it is proven usable, else CF9.
 ;   POWER_SHUTDOWN  ACPI S5 (soft off) through the FADT PM1 control blocks and
 ;                   the DSDT's \_S5 sleep type, else firmware
@@ -56,6 +56,7 @@ power_question_text:
 ;; power_execute(EDI = kind): the owner confirmed. Returns only on failure,
 ;; RAX = a one-line reason (nothing was reset).
 power_execute:
+    mov byte [rel power_q_work_busy],0   ; no prior call can supply this reason
     push rbx
     mov  ebx, edi
     lea  rax, [rel power_r_unknown]
@@ -70,7 +71,24 @@ power_execute:
     ; authenticated remote/operator rails retain their existing legacy path.
     cmp ebx, POWER_SHUTDOWN
     jne .legacy
-    call hv_guest_power_s5_inactive
+    ; ROOT108445 (2): a live driver domain (1 armed, 2 attached, 3 stopping)
+    ; gets the same one STOP and actual retirement the reset paths give it,
+    ; before the unchanged guest check decides. Other states skip the call so
+    ; the boot's single attempt stays for a later restart or BOOT WIN.
+    mov eax, [rel nd_state]
+    dec eax
+    cmp eax, 2
+    ja .guest_check
+    call driver_domain_return_prepare_s5   ; no reset follows: the uncertain-undo retry is for resets
+    mov edi,11
+    mov esi,eax
+    xor edx,edx
+    call command_power_return_trace    ; preserves EAX/flags; passive
+    cmp eax,3
+    lea rax, [rel power_r_guest_active]
+    jae .out                            ; unsafe retirement: no wipe, FENCE or S5
+.guest_check:
+    call power_guest_inactive
     test eax, eax
     lea rax, [rel power_r_guest_active]
     jnz .out                            ; before key wipe or managed FENCE
@@ -103,15 +121,13 @@ power_execute:
     je   .windows
     cmp  ebx, POWER_SHUTDOWN
     je   .shutdown
-    call power_warm_reset               ; does not return
-    lea  rax, [rel power_r_reset]
+    call power_warm_reset               ; returns a reason if preparation refuses
     jmp  .out
 .windows:
     call power_boot_win                 ; -> EAX 0 accepted
     test eax, eax
     jnz  .windows_refused
     call power_warm_reset
-    lea  rax, [rel power_r_reset]
     jmp  .out
 .windows_refused:
     lea  rdi, [rel power_windows_refused_text]
@@ -119,7 +135,7 @@ power_execute:
     lea  rax, [rel power_r_windows]
     jmp  .out
 .shutdown:
-    call principal_wipe_owner_boot_key
+    ; Owner-key destruction follows successful terminal storage, like reset.
     call acpi_sleep_s5                  ; returns only if S5 did not take: EAX why
     cmp  eax, POWER_S5_UNQUIESCED
     je   .unquiesced                    ; a disk is not quiesced: remove no power
@@ -137,6 +153,9 @@ power_execute:
     lea  rax, [rel power_r_shutdown_offline]
     jmp  .out
 .unquiesced:
+    cmp byte [rel power_q_work_busy],1
+    lea rax,[rel power_work_refused_text]
+    je .out                            ; actual pre-effect work reason, no stale device result
     call power_nvme_offline
     test eax, eax
     lea  rax, [rel power_r_unquiesced]
@@ -146,8 +165,329 @@ power_execute:
     pop  rbx
     ret
 
+; ROOT110842 / SEC110859,110862: only Start's deliberate local confirmation
+; calls this opt-in. The context is this synchronous stack frame, never ambient
+; state or a retained5. Async/serial/terminal/policy/recovery entries stay strict.
+power_execute_desktop:
+    push rbx
+    push r12
+    sub rsp,24                         ; {generation, sequence}, saved refusal
+    mov ebx,edi
+    call session_shell_local_authority
+    cmp rax,PRIN_OWNER
+    jne .authority_refused
+    cmp ebx,POWER_WINDOWS
+    jb .authority_refused
+    cmp ebx,POWER_SHUTDOWN
+    ja .authority_refused
+    ; Empty/retired domains need no new opt-in and keep ordinary managed S5.
+    mov eax,[rel nd_state]
+    test eax,eax
+    jz .ordinary
+    cmp eax,5
+    je .ordinary
+    mov byte [rel power_q_work_busy],0
+    call software_stop_stability_exit_hook
+    cmp ebx,POWER_WINDOWS
+    jne .prepare
+    call power_boot_win                 ; original owner gate/write/readback
+    test eax,eax
+    jnz .windows_refused
+.prepare:
+    cmp dword [rel nd_state],6
+    jne .initial_prepare
+    call driver_return_contained_identity
+    test eax,eax
+    jnz .identity_refused
+    mov [rsp],rdx                      ; original validated same-boot/gen/BDF5
+    jmp .contained                    ; fresh actual proof below, no second STOP
+.identity_refused:
+    ; A never-guest attach can reach state6 before any desktop attempt. Its
+    ; first action must obtain this call's fresh validated5, just like a live
+    ; domain. A spent attempt still requires its original record above; never
+    ; ask the one-shot service for a replacement record or a second STOP.
+    cmp byte [rel driver_return_once],0
+    je .initial_prepare
+    mov eax,3
+    jmp .domain_refused
+.initial_prepare:
+    mov rax,[rel nd_generation]
+    mov [rsp],rax
+    call driver_domain_return_prepare_contained
+    mov edi,11
+    mov esi,eax
+    xor edx,edx
+    call command_power_return_trace
+    cmp eax,5
+    je .contained
+    cmp eax,3
+    jae .domain_refused
+    ; Safe0..2 may use the existing cache; it never issues another STOP.
+    cmp ebx,POWER_WINDOWS
+    jne .ordinary
+    call power_warm_reset               ; keep the already-verified Windows target
+    jmp .refused
+.ordinary:
+    mov edi,ebx
+    call power_execute
+    jmp .out
+.contained:
+    mov rax,[rel nd_return_sequence]
+    mov [rsp+8],rax
+    pushfq
+    sub rsp,8
+    cli
+    lea rdi,[rsp+16]
+    call power_guest_inactive_contained  ; VM retained slots + independent APP VM
+    test eax,eax
+    jnz .guest_refused_if0
+    cmp ebx,POWER_SHUTDOWN
+    je .s5
+    lea rdi,[rsp+16]
+    call power_storage_quiesce_contained ; all original storage/work/USB guards
+    test eax,eax
+    jnz .storage_refused
+    lea rdi,[rsp+16]
+    call power_guest_inactive_contained
+    test eax,eax
+    jnz .guest_refused_if0
+    call power_s5_nic_stop              ; native controllers retain their own guards
+    cmp eax,-1
+    je .nic_refused
+    cmp eax,1
+    ja .terminal_uncertain
+    mov r12d,eax                       ; actual native irreversible effect
+    lea rdi,[rsp+16]
+    call power_guest_inactive_contained ; current proof at the terminal boundary
+    test eax,eax
+    jz .reset
+    test r12d,r12d
+    jnz .terminal_uncertain
+.guest_refused_if0:
+    call power_usb_release
+    add rsp,8
+    popfq
+    jmp .guest_refused
+.reset:
+    mov edi,4
+    call command_power_return_event
+    call serial_drain_poll
+    call reset_wipe_all
+    ; Keep TES/DID17/poison installed. No firmware or TE-off in this route.
+    mov dx,0x0cf9
+    in al,dx
+    test al,4
+    jz .cf9
+    mov al,0x02
+    out dx,al
+.cf9:
+    mov al,0x06
+    out dx,al
+    mov ecx,65536
+.wait:
+    pause
+    dec ecx
+    jnz .wait
+    jmp reset_wipe_halt
+.s5:
+    lea rdi,[rsp+16]
+    call acpi_sleep_s5_contained        ; synchronous only; no cached async5
+    add rsp,8
+    popfq
+    lea rax,[rel power_r_shutdown]
+    cmp byte [rel power_q_work_busy],1
+    jne .refused
+    lea rax,[rel power_work_refused_text]
+    jmp .refused                       ; direct S5 only; no firmware fallback
+.nic_refused:
+    call power_usb_release
+    add rsp,8
+    popfq
+    lea rax,[rel power_r_restart_nic]
+    call power_restart_refusal_reason
+    jmp .refused
+.storage_refused:
+    add rsp,8
+    popfq
+    lea rax,[rel power_r_restart_storage]
+    cmp byte [rel power_q_work_busy],1
+    jne .storage_reason
+    lea rax,[rel power_work_refused_text]
+.storage_reason:
+    call power_restart_refusal_reason
+    jmp .refused
+.terminal_uncertain:
+    call reset_wipe_all
+    jmp reset_wipe_halt
+.domain_refused:
+    call power_warm_reset.domain_refused ; original actual guest/target reason
+    jmp .refused
+.guest_refused:
+    lea rax,[rel power_r_guest_active]
+    jmp .refused
+.windows_refused:
+    lea rax,[rel power_r_windows]
+    jmp .out
+.authority_refused:
+    lea rax,[rel power_r_guest_active]
+    jmp .out
+.refused:
+    cmp ebx,POWER_WINDOWS
+    jne .out
+    mov [rsp+16],rax
+    call driver_return_disarm           ; original verified undo, never blind clear
+    mov rax,[rsp+16]
+    cmp byte [rel driver_return_uncertain],0
+    je .out
+    lea rax,[rel power_r_restart_target] ; disclose an override not verified undone
+.out:
+    add rsp,24
+    pop r12
+    pop rbx
+    ret
+
 ;; power_boot_win -> EAX 0 when the hub's `BOOT WIN` armed the return (its
 ;; staged reply is consumed and logged), else nonzero.
+; T4-4 P3: compact public cause for the existing Start question widget.
+; RAX is the actual power executor's returned static reason; RAX returns a
+; <=31-byte label. Compare pointers only: never read an unknown caller pointer,
+; resample mutable driver state, infer rollback, or perform a power action.
+power_failure_label:
+    lea rcx,[rel power_r_windows]
+    cmp rax,rcx
+    jne .next0
+    lea rax,[rel power_label_windows]
+    ret
+.next0:
+    lea rcx,[rel power_r_shutdown]
+    cmp rax,rcx
+    jne .next1
+    lea rax,[rel power_label_shutdown]
+    ret
+.next1:
+    lea rcx,[rel power_r_reset]
+    cmp rax,rcx
+    jne .next2
+    lea rax,[rel power_label_reset]
+    ret
+.next2:
+    lea rcx,[rel power_r_unquiesced]
+    cmp rax,rcx
+    jne .next3
+    lea rax,[rel power_label_flush]
+    ret
+.next3:
+    lea rcx,[rel power_r_unquiesced_offline]
+    cmp rax,rcx
+    jne .next4
+    lea rax,[rel power_label_offline]
+    ret
+.next4:
+    lea rcx,[rel power_r_shutdown_offline]
+    cmp rax,rcx
+    jne .next5
+    lea rax,[rel power_label_offline]
+    ret
+.next5:
+    lea rcx,[rel power_r_guest_active]
+    cmp rax,rcx
+    jne .next6
+    lea rax,[rel power_label_active]
+    ret
+.next6:
+    lea rcx,[rel power_r_restart_domain]
+    cmp rax,rcx
+    jne .next7
+    lea rax,[rel power_label_domain]
+    ret
+.next7:
+    lea rcx,[rel power_r_restart_guest]
+    cmp rax,rcx
+    jne .next8
+    lea rax,[rel power_label_guest]
+    ret
+.next8:
+    lea rcx,[rel power_r_restart_target]
+    cmp rax,rcx
+    jne .next9
+    lea rax,[rel power_label_target]
+    ret
+.next9:
+    lea rcx,[rel power_r_restart_guest_target]
+    cmp rax,rcx
+    jne .next10
+    lea rax,[rel power_label_target]
+    ret
+.next10:
+    lea rcx,[rel power_r_restart_storage]
+    cmp rax,rcx
+    jne .next11
+    lea rax,[rel power_label_storage]
+    ret
+.next11:
+    lea rcx,[rel power_r_restart_nic]
+    cmp rax,rcx
+    jne .next12
+    lea rax,[rel power_label_nic]
+    ret
+.next12:
+    lea rcx,[rel power_work_refused_text]
+    cmp rax,rcx
+    jne .next13
+    lea rax,[rel power_label_work]
+    ret
+.next13:
+    lea rcx,[rel ps5_pending_text]
+    cmp rax,rcx
+    jne .next14
+    lea rax,[rel power_label_pending]
+    ret
+.next14:
+    lea rcx,[rel ps5_refused_text]
+    cmp rax,rcx
+    jne .next15
+    lea rax,[rel power_label_ownership]
+    ret
+.next15:
+    lea rcx,[rel power_r_restart_offline]
+    cmp rax,rcx
+    jne .next16
+    lea rax,[rel power_label_offline]
+    ret
+.next16:
+    lea rax,[rel power_label_unknown]
+    ret
+
+; Read-only terminal managed-S5 display projection. EDX is the retained signed
+; coordinator error, R8D the actual commit-attempt latch, R9D the canonical NVMe
+; offline observation. Material offline/commit facts outrank pre-commit causes.
+; The returned pointer is one existing <=31-byte public label. No error implies
+; hardware readiness; no cancellation, retry, device sample or power action.
+power_s5_failure_label:
+    lea rax,[rel power_label_offline]
+    test r9d,r9d
+    jnz .out
+    lea rax,[rel power_label_shutdown]
+    test r8d,r8d
+    jnz .out
+    lea rax,[rel power_label_ownership]
+    cmp edx,PS5_AUTH
+    je .out
+    cmp edx,DP_CHANGED
+    je .out
+    lea rax,[rel power_label_domain]
+    cmp edx,DP_TIMEOUT
+    je .out
+    cmp edx,DP_BAD_ACK
+    je .out
+    cmp edx,DP_FAILED
+    je .out
+    cmp edx,DP_UNRESOLVED
+    je .out
+    lea rax,[rel power_label_unknown]    ; unknown/cancel/clock: claim no driver cause
+.out:
+    ret
+
 power_boot_win:
     push rbx
     lea  rdi, [rel power_verb_boot]
@@ -195,6 +535,11 @@ power_boot_win:
 ;; The timer already consumed this attempt, so a refusal cannot create a loop.
 power_lab_return:
     call driver_domain_return_prepare
+    ; Passive actual retirement result, before the existing unsafe branch.
+    mov edi,11
+    mov esi,eax
+    xor edx,edx
+    call command_power_return_trace    ; preserves EAX/flags; private original plan only
     cmp eax,3
     jae .domain_refused
     pushfq
@@ -222,16 +567,35 @@ power_lab_return:
 ;; that returns halts after the key wipe (SEC-pre-reset-wipe-hook).
 power_warm_reset:
     call driver_domain_return_prepare
+    ; Passive actual retirement result, before the existing unsafe branch.
+    mov edi,11
+    mov esi,eax
+    xor edx,edx
+    call command_power_return_trace    ; preserves EAX/flags; private original plan only
     cmp eax,3
     jae .domain_refused
+    pushfq
+    cli
+    call power_storage_quiesce          ; AHCI + USB + NVMe, guest guard; no reset on refusal
+    test eax,eax
+    jnz .storage_refused
+    jmp .ready
 .prepared:                              ; only the already-guarded lab timer enters here
+    pushfq
+    cli
+.ready:
+    ; Same terminal native leaf as shutdown, before irreversible key wipe/reset.
+    ; A post-fence/unknown outcome cannot resume or attempt firmware/CF9.
+    call power_s5_nic_stop
+    cmp eax,-1
+    je .nic_refused
+    cmp eax,1
+    ja .nic_uncertain
+    mov edi,4
+    call command_power_return_event       ; attempt only, storage already completed
     lea  rdi, [rel power_reset_text]
     call serial_string
     call serial_drain_poll
-    pushfq
-    cli
-    call diag_persist_flush             ; seal the persistent ring first
-    call nvme_quiesce_for_reset         ; DRAM-less drives lose cached writes at CF9
     call reset_wipe_all                 ; no key material survives into the next boot's DRAM
     call vtd_reset_te_off               ; DMA remapping off before firmware/next OS (root 74762, SEC F1)
     cmp  byte [rel pbm_runtime_reset_usable], 1
@@ -243,14 +607,54 @@ power_warm_reset:
     mov  dx, 0x0cf9
     out  dx, al
     jmp  reset_wipe_halt                ; the keys are gone: never resume
+.nic_refused:
+    call power_usb_release             ; release only this call's held terminal fence
+    popfq
+    lea rax,[rel power_r_restart_nic]
+    jmp power_restart_refusal_reason
+.nic_uncertain:
+    call reset_wipe_all
+    jmp reset_wipe_halt                 ; IF0, keep USB fenced; never reset/resume
 .domain_refused:
+    ; Actual supported refusal, before CLI/storage/key wipe/reset. Retirement
+    ; itself may have progressed: this is not an unchanged-domain assertion.
+    mov edi,14
+    mov esi,eax
+    xor edx,edx
+    call command_power_return_trace
+    lea rax,[rel power_r_restart_domain]
+    cmp byte [rel driver_return_admit_reason],0
+    je .domain_target                  ; ROOT109575: name the guest when its stop refused
+    lea rax,[rel power_r_restart_guest]
+    cmp byte [rel driver_return_uncertain],0
+    je .domain_text                    ; SEC109734: and a one-shot target that may still be set
+    lea rax,[rel power_r_restart_guest_target]
+    jmp .domain_text
+.domain_target:
+    cmp byte [rel driver_return_uncertain],0
+    je .domain_text
+    lea rax,[rel power_r_restart_target]
+.domain_text:
     ret
+.storage_refused:
+    lea rax,[rel power_r_restart_storage]
+    cmp byte [rel power_q_work_busy],1
+    jne .storage_reason
+    lea rax,[rel power_work_refused_text]
+.storage_reason:
+    popfq                              ; restore original flags after choosing actual reason
+    jmp power_restart_refusal_reason
 
 ; Owner-grant R5 only, called at BSP depth zero after an irreversible one-time
 ; policy claim. Existing quiesce/key wipe and ResetSystem paths are retained.
 ; Pre-reset refusal leaves keys intact and never resets or retries. No timer reaches S5.
 power_recovery_controller:
     call driver_domain_return_prepare
+    ; Passive actual retirement result, before the existing unsafe branch.
+    mov edi,11
+    mov esi,eax
+    xor edx,edx
+    call command_power_return_trace    ; preserves EAX/flags; private original plan only
     cmp eax,3
     jae .domain_refused
     pushfq
@@ -272,6 +676,17 @@ power_recovery_controller:
     call recovery_boot_effect_budget
     test eax,eax
     jz .refused
+    xor edi,edi
+    call power_xhci_terminal           ; final recovery budget passed, no earlier native NIC effect
+    cmp eax,1
+    ja .recovery_terminal_result
+    mov edi,eax
+    call power_ahci_terminal           ; retain actual earlier xHCI irreversible effect
+.recovery_terminal_result:
+    cmp eax,-1
+    je .refused
+    cmp eax,1
+    ja .terminal_uncertain
     ; BootNext/request were exactly read back. The canonical helper wipes
     ; all reset-sensitive keys immediately before ResetSystem. Returned reset
     ; is terminal; do not resume with wiped keys or issue another reset.
@@ -280,9 +695,14 @@ power_recovery_controller:
     call recovery_boot_failure         ; returned reset is recorded uncertain before terminal halt
     jmp reset_wipe_halt
 .refused:
+    call power_usb_release              ; a later recovery guard may refuse after storage
     call recovery_boot_failure
     popfq
     ret
+.terminal_uncertain:
+    call recovery_boot_failure         ; never return or reset after partial controller stop
+    call reset_wipe_all
+    jmp reset_wipe_halt
 .domain_refused:
     call recovery_boot_failure
     ret
@@ -299,69 +719,376 @@ power_nvme_offline:
 .out:
     ret
 
+; Restart's recoverable refusal may follow an irreversible NVMe shutdown.
+; Retain that actual material state in the returned reason, using the same
+; canonical present/poisoned predicate as shutdown. A result code alone is not
+; evidence of an offline disk. Keep the original reason otherwise, and preserve
+; flags and all registers except the returned pointer. No retry or device I/O.
+power_restart_refusal_reason:
+    pushfq
+    push rax
+    call power_nvme_offline
+    test eax,eax
+    pop rax
+    jz .out
+    lea rax,[rel power_r_restart_offline]
+.out:
+    popfq
+    ret
+
 ;; power_shutdown_fallback(EDI = why acpi_sleep_s5 returned): firmware
 ;; ResetSystem(shutdown) under the S5 storage rule. POWER_S5_SPUN already
 ;; quiesced before its PM1 writes; MODE_REFUSED also quiesced before its mode
 ;; attempt; HP_REFUSED/NIC_REFUSED completed storage before their preflight.
-;; Every other reason needs storage quiesce here first.
-;; -> EAX 1 when power_storage_quiesce refused (nothing was
-;; powered off, keys intact); never returns once ResetSystem was called (the
+;; Every other reason needs storage quiesce here first. A NIC preflight refusal
+;; must not be bypassed through firmware. Other unattempted paths run the same
+;; native terminal stop; SPUN already passed it on this exact S5 call.
+;; -> EAX 1 when storage/USB/NIC preparation refused (nothing was
+;; powered off, keys intact; earlier storage completion may remain); never returns once ResetSystem was called (the
 ;; key wipe ran: a firmware that returns ends in reset_wipe_halt).
 power_shutdown_fallback:
     pushfq
     cli
     push rdi                            ; census may clobber caller-saved reason
-    call hv_guest_power_s5_inactive
+    call power_guest_inactive
     pop rdi
     test eax, eax
-    jnz .out                            ; even an already-flushed reason must refuse
+    jnz .guest_refused                   ; no UI return after acknowledged controller stop
+    cmp edi,POWER_S5_NIC_REFUSED
+    je .nic_refused                     ; before-effect refusal remains authoritative
     cmp  edi, POWER_S5_SPUN
-    je   .reset
+    je   .usb_prepared                  ; this call already completed/skipped NIC stop
     cmp  edi, POWER_S5_MODE_REFUSED
-    je   .reset
+    je   .usb
     cmp  edi, POWER_S5_HP_REFUSED
-    je   .reset
-    cmp  edi, POWER_S5_NIC_REFUSED
-    je   .reset
+    je   .usb
     call power_storage_quiesce
     test eax, eax
     jnz  .out
+    jmp .nic
+.usb:
+    ; ACPI returned and released its fence. Revalidate USB even when native
+    ; AHCI/NVMe are already quiesced; never reuse an unfenced cached result.
+    cmp byte [rel power_q_usb_held],1
+    je .nic
+    call power_usb_prepare
+    test eax,eax
+    jnz .out
+.nic:
+    call power_s5_nic_stop              ; original fenced DMA/IRQ/master-disable + D3
+    cmp eax,-1
+    je .nic_refused                     ; actual no-effect refusal, never firmware bypass
+    cmp eax,1
+    ja .nic_uncertain                   ; -2 and all unknown results remain terminal
+    jmp .reset                         ; only explicit0 other backend /1 confirmed D3
+.guest_refused:
+    cmp byte [rel power_q_ahci_stopped],1
+    je .nic_uncertain
+    cmp byte [rel power_q_xhci_stopped],1
+    je .nic_uncertain
+    jmp .out
+.usb_prepared:
+    ; The returned PM1 path either still holds its original USB fence or has
+    ; released it. Revalidate USB only; do not repeat the terminal NIC effect.
+    cmp byte [rel power_q_usb_held],1
+    je .reset
+    cmp byte [rel power_q_ahci_stopped],1
+    je .nic_uncertain
+    cmp byte [rel power_q_xhci_stopped],1
+    je .nic_uncertain                   ; lost original fence: no USB IO or replay after halt
+    call power_usb_prepare
+    test eax,eax
+    jnz .out
 .reset:
+    mov edi,6
+    call command_power_return_event       ; firmware attempt, never soft-off proof
     call power_s5_commit_key             ; managed firmware path has the same storage rule
     mov  ecx, 2                         ; EfiResetShutdown
     call power_reset_system
     jmp  reset_wipe_halt                ; firmware returned, the keys are gone: stop
+.nic_uncertain:
+    call reset_wipe_all                 ; device fenced/uncertain: never resume or issue reset
+    jmp reset_wipe_halt
+.nic_refused:
+    mov eax,1
 .out:
+    call power_usb_release
     popfq
     ret
 
 ;; power_storage_quiesce (IF clear) -> EAX 0 when every disk PaOS owns is
 ;; quiesced, 1 when one is not (the caller then removes no power). Order: the
 ;; diag ring to DRAM; one FLUSH CACHE EXT per live AHCI port (state-preserving,
-;; so a refusal there skips the NVMe and leaves it usable, nvme=4); then the
-;; NVMe Flush + normal shutdown, complete only at CSTS.SHST=10b (a timeout refuses; a
-;; controller this driver does not own or that is not enabled has nothing to
-;; quiesce). Reports one line and drains it: the caller's next I/O may remove
+;; so a refusal there skips USB/NVMe and leaves NVMe usable, nvme=4); then
+;; generation-bound USB flush/fence; USB refusal likewise skips NVMe; then the
+;; NVMe Flush + normal shutdown, complete only at CSTS.SHST=10b. The driver's
+;; explicit inactive result proves no owned controller state; present disabled,
+;; degraded, policy/flush/shutdown failures and unknown results refuse.
+;; Reports one line and drains it: the caller's next I/O may remove
 ;; power.
-power_storage_quiesce:
+; Original Linux/PCI first-blocker ordinal1..23 is unchanged. Only after that
+; predicate permits admission, read the separate native app VM custody. The
+; native leaf writes this call's trusted256B snapshot; no retirement is requested.
+; Return EAX0 only for actual native0, otherwise1; EDX24 denotes native refusal.
+; Preserve the caller operands across both passive reporting and the extra leaf.
+; RDI = pointer to this outer call's {generation,sequence}, or strict entry.
+power_guest_inactive_contained:
+    mov r11,rdi
+    jmp power_guest_inactive.body
+power_guest_inactive:
+    xor r11d,r11d
+.body:
+    push rbp
     push rbx
+    push rcx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    mov rbp,rsp
+    sub rsp,272
+    and rsp,-16                      ; original entries have differing frames
+    test r11,r11
+    jz .strict
+    mov rdi,[r11]
+    cmp rdi,[rel nd_generation]
+    jne .context_refused
+    mov rax,[r11+8]
+    cmp rax,[rel nd_return_sequence]
+    jne .context_refused
+    call nd_contained_power_ok          ; VM alone owns exact retained-slot census
+    jmp .linux_result
+.context_refused:
+    mov eax,1
+    xor edx,edx
+    jmp .out
+.strict:
     call hv_guest_power_s5_inactive
+.linux_result:
+    test eax,eax
+    jnz .out
+    mov rdi,rsp
+    mov esi,256
+    call app_vm_power_inactive
+    mov ebx,eax                       ; actual result survives the passive report
+    mov ecx,1                         ; unknown/unavailable is never inactive
+    test ebx,ebx
+    jnz .report
+    cmp qword [rsp],1                 ; available same-call record only
+    jne .report
+    cmp qword [rsp+8],0               ; actual result/ordinal/context agree
+    jne .report
+    cmp qword [rsp+16],0
+    jne .report
+    cmp qword [rsp+24],0
+    jne .report
+    xor ecx,ecx
+.report:
+    mov [rsp+256],ecx                 ; normalized admission, independent of trace
+    mov rdi,rsp
+    mov esi,ebx
+    mov edx,14
+    call command_power_return_native_nic
+    mov eax,[rsp+256]
+    xor edx,edx
+    test eax,eax
+    jz .out
+    mov edx,24
+.out:
+    mov rsp,rbp
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rcx
+    pop rbx
+    pop rbp
+    ret
+
+power_storage_quiesce_contained:
+    mov r11,rdi
+    jmp power_storage_quiesce.body
+power_storage_quiesce:
+    xor r11d,r11d
+.body:
+    mov byte [rel power_q_ahci_stopped],0 ; same-call actual terminal effect only
+    mov byte [rel power_q_xhci_stopped],0 ; same-call actual terminal effect, never cached admission
+    mov byte [rel power_q_work_busy],0   ; per-call reason only, not admission authority
+    push rbx
+    push r12
+    push r13
+    push r14
+    sub rsp,8
+    mov r14,r11
+    mov rdi,r14
+    call power_guest_inactive_contained
+    ; Only if the original predicate actually reached the assignment check.
+    ; The passive formatter preserves every register/flag and existing refusal.
+    push rdi
+    lea rdi,[rel pcia_power_observation]
+    call command_power_return_pci
+    pop rdi
+    ; EAX actual readiness; EDX first predicate actually refusing (0 if ready).
+    mov edi,12
+    mov esi,eax
+    call command_power_return_trace    ; before any diagnostic/storage effect
     test eax, eax
     jnz .guest_refused                   ; no disk shutdown while guest work is live
+    ; Original command ownership only, before any diagnostic/storage effect.
+    ; Preserve actual aggregate independently through passive family9 reports.
+    call xhci_power_command_guard
+    mov r12d,eax
+    xor r13d,r13d
+.xhci_report:
+    mov edi,r13d
+    shl rdi,6
+    lea rax,[rel xhci_power_command_observations]
+    add rdi,rax
+    cmp dword [rdi],1
+    jne .xhci_next
+    mov esi,[rdi+8]
+    mov edx,9
+    mov ecx,r12d
+    call command_power_return_native_nic
+.xhci_next:
+    inc r13d
+    cmp r13d,4
+    jb .xhci_report
+    test r12d,r12d
+    jnz .command_refused
+    ; Original fixed ISO endpoint operands, after command ownership is quiet.
+    ; No endpoint STOP or controller action; save actual aggregate over reports.
+    call xhci_power_iso_guard
+    mov r12d,eax
+    xor r13d,r13d
+.iso_report:
+    imul edi,r13d,160
+    lea rax,[rel xhci_power_iso_observations]
+    add rdi,rax
+    cmp dword [rdi],1
+    jne .iso_next
+    mov esi,[rdi+8]
+    mov edx,10
+    mov ecx,r12d
+    call command_power_return_native_nic
+.iso_next:
+    inc r13d
+    cmp r13d,4
+    jb .iso_report
+    test r12d,r12d
+    jnz .iso_refused
+    ; Existing pure BSP predicates include queued/reclaiming copies and retained
+    ; storage writers/owned operations/jobs. Do not cancel or steal ownership.
+    ; Save both actual returns independently across passive command reporting.
+    call vfs_copy_busy
+    mov r12d,eax
+    call storage_access_binding_busy
+    mov r13d,eax
+    mov edi,r12d
+    mov esi,r13d
+    mov edx,3                          ; both original predicates observed
+    call command_power_return_work
+    test r12d,r12d
+    jnz .work_refused
+    test r13d,r13d
+    jnz .work_refused
     call diag_persist_flush
+    ; Actual returned count/end, not an intended-flush flag. Observe only on
+    ; the original private Linux rail; unavailable ring does not add a gate.
+    ; This later UART record is not committed by the flush it describes.
+    pushfq
+    push rdi
+    push rsi
+    push rdx
+    mov esi,ecx
+    mov rdx,rdi
+    mov edi,13
+    call command_power_return_trace
+    pop rdx
+    pop rsi
+    pop rdi
+    popfq
     call ahci_flush_for_reset           ; EAX flushed, EDX failed
     mov  [rel power_q_ahci_ok], eax
     mov  [rel power_q_ahci_failed], edx
+    ; Read the actual immutable-for-this-call driver snapshots. The private
+    ; trace helper only emits for the original committed local BOOT LINUX.
+    xor r12d,r12d
+    lea r13,[rel ahci_flush_observations]
+.device_report:
+    cmp dword [r13],1
+    jne .device_next
+    mov rdi,r13
+    mov esi,r12d
+    call command_power_return_ahci
+.device_next:
+    ; Additive original inactive-slot record: present/poison/retained RAM only.
+    ; A slot result is not a Flush, physical-absence claim or new admission.
+    mov rdi,r13
+    lea rax,[rel ahci_flush_observations]
+    sub rdi,rax
+    lea rax,[rel ahci_inactive_observations]
+    add rdi,rax
+    cmp dword [rdi],1
+    jne .inactive_next
+    mov esi,[rdi+8]                    ; actual saved per-slot inactive/refusal
+    mov edx,7
+    mov ecx,[rel power_q_ahci_failed]   ; independent actual whole-call failed count
+    call command_power_return_native_nic
+.inactive_next:
+    mov rdi,r13
+    lea rax,[rel ahci_flush_observations]
+    sub rdi,rax
+    lea rax,[rel ahci_table_observations]
+    add rdi,rax
+    cmp dword [rdi],1
+    jne .table_next
+    mov esi,[rdi+8]                    ; actual table-binding decision, not Flush
+    mov edx,8
+    mov ecx,[rel power_q_ahci_failed]   ; independently saved native aggregate
+    call command_power_return_native_nic
+.table_next:
+    add r13,64
+    inc r12d
+    cmp r12d,8
+    jb .device_report
+    mov edx,[rel power_q_ahci_failed]
     mov  dword [rel power_q_nvme], 4    ; 4 = not attempted
     mov  ebx, 1
     test edx, edx
     jnz  .report                        ; refused: the NVMe stays up and usable
-    call nvme_quiesce_for_reset         ; EAX 0 shut down / 1 not enabled / 2 timeout / 3 not owned
+    ; USB must complete under its terminal admission fence before irreversible
+    ; NVMe shutdown. Unsupported/unknown ownership is a refusal, never absent.
+    call power_usb_prepare
+    test eax,eax
+    jnz .report
+    call nvme_quiesce_for_reset         ; terminal ABI: 0 complete, 1 verified inactive, 2..5 refusal
     mov  [rel power_q_nvme], eax
+    lea rdi,[rel nvme_quiesce_observation]
+    mov esi,[rel power_q_nvme]          ; actual per-call terminal decision, including inactive/refusal
+    call command_power_return_nvme      ; original actual flush/shutdown distinct
+    lea rdi,[rel nvme_quiesce_lifetime]
+    mov esi,[rel power_q_nvme]          ; reload actual result after original reporter
+    call command_power_return_nvme_lifetime
+    lea rdi,[rel nvme_quiesce_completion]
+    mov esi,[rel power_q_nvme]
+    call command_power_return_nvme_completion
+    ; Only explicit driver success may precede key wipe/reset/off. Read the
+    ; saved actual result after reporting, independent of caller-saved RAX.
+    ; All refusal classes and future/unknown values release our USB fence.
+    mov  ebx, 1
+    cmp  dword [rel power_q_nvme], 1
+    ja   .report
     xor  ebx, ebx
-    cmp  eax, 2
-    sete bl
 .report:
+    test ebx,ebx
+    jz .retained
+    call power_usb_release             ; NVMe failure must not strand a USB fence
+.retained:
     lea  rdi, [rel power_q_text]
     call serial_string
     mov  edi, [rel power_q_ahci_ok]
@@ -382,8 +1109,113 @@ power_storage_quiesce:
     call serial_string
     call serial_drain_poll
     mov  eax, ebx
+    mov edi,3
+    mov esi,[rel power_q_ahci_ok]
+    mov edx,[rel power_q_ahci_failed]
+    mov ecx,[rel power_q_nvme]
+    mov r8d,ebx
+    call command_power_return_trace      ; actual completed/refused driver outcomes
+    add rsp,8
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+.iso_refused:
+    lea rdi,[rel power_q_iso_refused_text]
+    jmp .device_refused
+.command_refused:
+    lea rdi,[rel power_q_xhci_refused_text]
+.device_refused:
+    call serial_string
+    call serial_drain_poll
+    mov eax,1
+    add rsp,8
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+.work_refused:
+    mov byte [rel power_q_work_busy],1
+    ; No diagnostic/storage/USB effect occurred, so no stale device result is
+    ; reported as this call's outcome. Ordinary caller restores original IF.
+    lea rdi,[rel power_work_refused_text]
+    call serial_string
+    call serial_drain_poll
+    mov eax,1
+    add rsp,8
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
 .guest_refused:
+    mov edi,3
+    xor esi,esi
+    xor edx,edx
+    mov ecx,4
+    mov r8d,2                           ; no storage was attempted
+    call command_power_return_trace
+    add rsp,8
+    pop r14
+    pop r13
+    pop r12
     pop  rbx
+    ret
+
+; Existing terminal power boundary only. EAX0 complete/absent; EAX1 refuse.
+; Keep the actual driver return separate from the optional snapshot: a busy
+; caller must not read another terminal owner's previous/current sample.
+power_usb_prepare:
+    push rbx
+    call usb_msd_power_quiesce
+    mov ebx,eax
+    mov esi,eax
+    lea rdi,[rel usb_msd_power_snapshot]
+    call command_power_return_usb
+    mov eax,1
+    cmp ebx,1
+    ja .out
+    mov byte [rel power_q_usb_held],1
+    xor eax,eax
+.out:
+    pop rbx
+    ret
+
+; Release only a terminal fence this power call acquired. Preserve every
+; caller-clobbered operand and flags (including IF); no admission/retry here.
+power_usb_release:
+    pushfq
+    push rax
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push rbp
+    mov rbp,rsp
+    and rsp,-16
+    cmp byte [rel power_q_usb_held],1
+    jne .out
+    mov byte [rel power_q_usb_held],0
+    call usb_msd_power_release
+.out:
+    mov rsp,rbp
+    pop rbp
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rax
+    popfq
     ret
 
 ;; power_reset_system(ECX = EFI_RESET_TYPE): firmware ResetSystem, exactly as
@@ -917,16 +1749,23 @@ power_button_ownership_changed: db 0
 WDATA_DEFER WDATA_gui_button_ownership
 ; END BUTTON OWNERSHIP
 
+acpi_sleep_s5_contained:
+    mov r11,rdi
+    jmp acpi_sleep_s5.body
 acpi_sleep_s5:
+    xor r11d,r11d
+.body:
     push rbx
     push r12
     push r13
     push r14
     push r15
-    sub  rsp, 16                    ; status, mode commands, mode/NIC-effect flags
+    sub  rsp, 32                    ; status, mode commands, mode/NIC-effect flags
     mov dword [rsp + 8], 0
     mov dword [rsp + 12], 0
-    call hv_guest_power_s5_inactive
+    mov [rsp+24],r11
+    mov rdi,r11
+    call power_guest_inactive_contained
     test eax, eax
     mov r15d, POWER_S5_GUEST_REFUSED
     jnz .fail
@@ -1035,7 +1874,8 @@ acpi_sleep_s5:
     call serial_drain_poll
     pushfq                              ; the caller's IF, restored exactly below
     cli
-    call power_storage_quiesce          ; completed (not just issued) before any PM1 write
+    mov rdi,[rsp+32]                  ; outer call context, above saved flags
+    call power_storage_quiesce_contained ; completed (not just issued) before any PM1 write
     test eax, eax
     jnz  .unquiesced
     ; Firmware can hand us legacy mode (observed on HP179). SCI_EN is a
@@ -1082,12 +1922,21 @@ acpi_sleep_s5:
     sub rsp,8                         ; flags above locals skew call alignment
     call power_s5_nic_stop
     add rsp,8
-    cmp eax,-2
-    je .nic_terminal_failed
-    test eax,eax
-    js .nic_refused
+    cmp eax,-1
+    je .nic_refused
+    cmp eax,1
+    ja .nic_terminal_failed            ; uncertain and unknown can never reach PM1
     mov [rsp+20],eax                   ; 0 skipped /1 terminal D3 (flags above locals)
-    call power_s5_commit_key             ; managed only: storage complete before key wipe
+    cmp qword [rsp+32],0
+    je .terminal_admitted
+    mov rdi,[rsp+32]
+    call power_guest_inactive_contained  ; proof and APP VM still current after native stop
+    test eax,eax
+    jnz .nic_terminal_failed            ; native effects may already be irreversible
+.terminal_admitted:
+    mov edi,5
+    call command_power_return_event       ; PM1 attempt only, not completed S5
+    call power_s5_commit_key             ; storage complete before owner-key destruction
     wbinvd
     ; ACPI legacy sleep starts by clearing WAK_STS (W1C). Preserve every
     ; other fixed-event status and every enable bit. A latched prior wake
@@ -1138,6 +1987,8 @@ acpi_sleep_s5:
     pause
     dec  ecx
     jnz  .spin
+    cmp qword [rsp+32],0
+    jne .nic_terminal_failed            ; returned contained S5 is always terminal
     call .restore_mode                  ; no new SCI mode escapes to the live caller
     cmp dword [rsp+20],0
     je .returned_without_nic
@@ -1167,7 +2018,7 @@ acpi_sleep_s5:
 .nic_refused:
     call .restore_mode
     popfq
-    mov r15d,POWER_S5_NIC_REFUSED       ; no NIC effect; ordinary firmware fallback
+    mov r15d,POWER_S5_NIC_REFUSED       ; no NIC effect; firmware must retain this refusal
     jmp .fail
 .mode_failed:
     call .restore_mode                  ; cancel even an unacknowledged enable command
@@ -1203,10 +2054,11 @@ acpi_sleep_s5:
 .no_pm1:
     mov  r15d, 2
 .fail:
+    call power_usb_release              ; every return resumes without our terminal fence
     lea  rdi, [rel power_s5_failed_text]
     call serial_string
     mov  eax, r15d
-    add  rsp, 16
+    add  rsp, 32
     pop  r15
     pop  r14
     pop  r13
@@ -1239,13 +2091,106 @@ power_s5_nic_trace:
     pop rbx
     ret
 
-; Called with IF clear after storage/platform preparation. The production leaf
-; provides the result plus exact PCI readbacks, not a claim of electrical off.
+; IF clear after storage/platform preparation. Native terminal calls are
+; ordered foreground HDA guard/terminal, original native HDA, RTL8168,
+; RTL8125, I219, RTL8126, accepted82574,82540. Explicit0 means this driver's own
+; inactive decision, never PCI absence. Any actual1 is irreversible: a later
+; before-effect refusal must halt with USB fenced rather than resume the UI.
+; Stack: Intel32B+actual32, RTL/I219/8126 actual36/40/44/48, reports64B@64/160B@128/128B@304,
+; RTL8126 report128B@432, HDA160B@576/actual52, diagnostic96B@736/actual56,
+; diagnostic terminal320B@832/actual60;82540report160B@1152/actual1312; frame1328B,
+; attempted mask288, irreversible292, final aggregate296. No uncalled record.
 power_s5_nic_stop:
     push rbx
-    sub rsp,32
+    sub rsp,1328
+    mov dword [rsp+288],0
+    mov dword [rsp+292],0
+    lea rdi,[rsp+736]
+    call hda_probe_power_guard
+    mov [rsp+56],eax                    ; actual guard result, independent of record
+    or dword [rsp+288],32
+    test eax,eax
+    jz .diagnostic_terminal
+    cmp eax,-1                         ; original retained-lifetime refusal is not closure
+    jne .stopped                       ; unknown guard never calls a terminal producer
+.diagnostic_terminal:
+    lea rdi,[rsp+832]
+    call hda_probe_terminal
+    mov [rsp+60],eax                    ; actual return before any reporter, not raw word2
+    or dword [rsp+288],64
+    test eax,eax
+    jz .diagnostic_inactive
+    cmp eax,1
+    jne .stopped
+    mov dword [rsp+292],1              ; latch/effects prevent any later UI resumption
+    cmp dword [rsp+56],-1
+    jne .uncertain                     ; inconsistent positive effect retains custody
+    jmp .native_hda
+.diagnostic_inactive:
+    cmp dword [rsp+56],0
+    je .native_hda
+    mov eax,-1                         ; inactive cannot erase independently retained lifetime
+    jmp .stopped
+.native_hda:
+    lea rdi,[rsp+576]
+    call hda_loopback_native_terminal
+    mov [rsp+52],eax                    ; actual return, never report word1
+    or dword [rsp+288],16
+    test eax,eax
+    jz .rtl8168
+    cmp eax,1
+    jne .stopped
+    mov dword [rsp+292],1
+.rtl8168:
+    lea rdi,[rsp+64]
+    call rtl8168_terminal_quiesce
+    mov [rsp+36],eax                    ; actual return before any reporting
+    or dword [rsp+288],1
+    test eax,eax
+    jz .rtl8125
+    cmp eax,1
+    jne .stopped
+    mov dword [rsp+292],1
+.rtl8125:
+    lea rdi,[rsp+128]
+    call rtl8125_terminal_quiesce
+    mov [rsp+40],eax
+    or dword [rsp+288],2
+    test eax,eax
+    jz .i219
+    cmp eax,1
+    jne .stopped
+    mov dword [rsp+292],1
+.i219:
+    lea rdi,[rsp+304]
+    call e1000e_i219_terminal_quiesce
+    mov [rsp+44],eax
+    or dword [rsp+288],4
+    test eax,eax
+    jz .rtl8126
+    cmp eax,1
+    jne .stopped
+    mov dword [rsp+292],1
+.rtl8126:
+    lea rdi,[rsp+432]
+    call rtl8126_terminal_quiesce
+    mov [rsp+48],eax                    ; actual EAX independent of raw report word1
+    or dword [rsp+288],8
+    test eax,eax
+    jz .intel
+    cmp eax,1
+    jne .stopped
+    mov dword [rsp+292],1
+.intel:
     mov rdi,rsp
     call reinit_power_e1000e_s5
+    mov [rsp+32],eax                    ; actual return independent of report/formatter
+    mov rdi,rsp
+    mov esi,[rsp+32]
+    call command_power_return_nic
+    mov rdi,rsp
+    mov esi,[rsp+32]
+    call command_power_return_nic_warm  ; additive original Linux2 guard, no extra device IO
     lea rdi,[rel power_s5_nic_stop_text]
     call serial_string
     xor ebx,ebx
@@ -1259,8 +2204,270 @@ power_s5_nic_stop:
     jb .field
     call serial_newline
     call serial_drain_poll
-    mov eax,[rsp]
-    add rsp,32
+    mov eax,[rsp+32]
+    test eax,eax
+    jz .backend82540
+    cmp eax,1
+    jne .stopped
+    mov dword [rsp+292],1
+.backend82540:
+    lea rdi,[rsp+1152]
+    call e1000e_82540_terminal_quiesce
+    mov [rsp+1312],eax                 ; actual saved before reporter/aggregate
+    or dword [rsp+288],128
+    test eax,eax
+    jz .xhci
+    cmp eax,1
+    jne .stopped
+    mov dword [rsp+292],1
+.xhci:
+    mov edi,[rsp+292]                   ; actual earlier irreversible effects survive refusal
+    call power_xhci_terminal
+    cmp eax,1
+    ja .report                         ; helper returns exact -1/-2 combined terminal outcome
+    mov edi,eax
+    call power_ahci_terminal
+    cmp eax,1
+    ja .report
+    mov [rsp+292],eax
+.completed:
+    mov eax,[rsp+292]                   ; any completed backend prevents resumption
+    jmp .report
+.stopped:
+    cmp eax,-1
+    jne .uncertain
+    cmp dword [rsp+292],0
+    je .report                         ; only no earlier NIC effect may release USB
+.uncertain:
+    mov eax,-2                         ; unknown or partial effect is never success
+.report:
+    mov [rsp+296],eax                   ; final decision survives every reporter
+    lea rdi,[rsp+736]                   ; guard is always attempted before any native effect
+    mov esi,[rsp+56]
+    mov edx,6
+    mov ecx,[rsp+296]
+    call command_power_return_native_nic
+    test dword [rsp+288],64
+    jz .hda_report
+    lea rdi,[rsp+832]                   ; two original per-call records, same identity
+    mov esi,[rsp+60]
+    mov edx,15
+    mov ecx,[rsp+296]
+    call command_power_return_native_nic
+    lea rdi,[rsp+992]
+    mov esi,[rsp+60]
+    mov edx,15
+    mov ecx,[rsp+296]
+    call command_power_return_native_nic
+.hda_report:
+    test dword [rsp+288],16
+    jz .first_report
+    lea rdi,[rsp+576]                   ; report native HDA only when actually called
+    mov esi,[rsp+52]
+    mov edx,5
+    mov ecx,[rsp+296]
+    call command_power_return_native_nic
+.first_report:
+    test dword [rsp+288],1
+    jz .second_report
+    lea rdi,[rsp+64]
+    mov esi,[rsp+36]
+    mov edx,1
+    mov ecx,[rsp+296]
+    call command_power_return_native_nic
+.second_report:
+    test dword [rsp+288],2
+    jz .i219_report
+    lea rdi,[rsp+128]
+    mov esi,[rsp+40]
+    mov edx,2
+    mov ecx,[rsp+296]
+    call command_power_return_native_nic
+.i219_report:
+    test dword [rsp+288],4
+    jz .rtl8126_report
+    lea rdi,[rsp+304]
+    mov esi,[rsp+44]
+    mov edx,3
+    mov ecx,[rsp+296]
+    call command_power_return_native_nic
+.rtl8126_report:
+    test dword [rsp+288],8
+    jz .backend82540_report
+    lea rdi,[rsp+432]
+    mov esi,[rsp+48]
+    mov edx,4
+    mov ecx,[rsp+296]
+    call command_power_return_native_nic
+.backend82540_report:
+    test dword [rsp+288],128
+    jz .out
+    lea rdi,[rsp+1152]
+    mov esi,[rsp+1312]
+    mov edx,16
+    mov ecx,[rsp+296]
+    call command_power_return_native_nic
+.out:
+    mov eax,[rsp+296]
+    add rsp,1328
+    pop rbx
+    ret
+
+; Same native leaf for ordinary terminal aggregation and final-budget recovery.
+; EDI actual prior irreversible0/1; returns existing aggregate0/1/-1/-2. This
+; function never retries, flushes, releases a fence or fabricates a participant.
+power_xhci_terminal:
+    push rbx
+    sub rsp,16
+    mov [rsp+8],edi
+    call xhci_terminal_quiesce
+    mov [rsp],eax                       ; actual native whole result before any reporting
+    cmp eax,1
+    jne .classify
+    mov byte [rel power_q_xhci_stopped],1
+.classify:
+    cmp eax,1
+    jbe .ready
+    cmp eax,-1
+    jne .uncertain
+    cmp dword [rsp+8],0
+    je .combined
+.uncertain:
+    mov eax,-2
+    jmp .combined
+.ready:
+    or eax,[rsp+8]                      ; actual prior effects remain irreversible
+.combined:
+    mov [rsp+4],eax
+    xor ebx,ebx
+.record:
+    imul eax,ebx,160
+    lea rdi,[rel xhci_terminal_observations]
+    add rdi,rax
+    cmp dword [rdi],1
+    jne .next
+    mov esi,[rsp]                      ; actual native result, independent of record word3
+    mov edx,11
+    mov ecx,[rsp+4]                     ; actual final combined effect fact
+    call command_power_return_native_nic
+    imul eax,ebx,160
+    lea rdi,[rel xhci_terminal_firmware_observations]
+    add rdi,rax
+    cmp dword [rdi],2
+    jne .next
+    mov esi,[rsp]                      ; reload actual native result after reporting
+    mov edx,11
+    mov ecx,[rsp+4]                     ; reload actual aggregate, never record word3
+    call command_power_return_native_nic
+.next:
+    inc ebx
+    cmp ebx,14                         ; header + at most4 LIVE/parked +1partial +8retained
+    jb .record
+    xor ebx,ebx
+.initial_record:
+    imul eax,ebx,160
+    lea rdi,[rel xhci_legacy_observations]
+    add rdi,rax
+    cmp dword [rdi],3
+    jne .initial_next
+    mov esi,[rsp]                      ; actual terminal result, not initial word3
+    mov edx,11
+    mov ecx,[rsp+4]                     ; unchanged actual combined effect
+    call command_power_return_native_nic
+.initial_next:
+    inc ebx
+    cmp ebx,8                          ; original bounded candidate array
+    jb .initial_record
+    mov eax,[rsp+4]
+    add rsp,16
+    pop rbx
+    ret
+
+; Same-call legacy AHCI after original flushes, NIC and xHCI terminal effects.
+power_ahci_terminal:
+    push rbx
+    sub rsp,16
+    mov [rsp+8],edi
+    call ahci_terminal_quiesce
+    mov [rsp],eax                       ; actual native whole result before any reporting
+    cmp eax,1
+    jne .classify
+    mov byte [rel power_q_ahci_stopped],1
+.classify:
+    cmp eax,1
+    jbe .ready
+    cmp eax,-1
+    jne .uncertain
+    cmp dword [rsp+8],0
+    je .combined
+.uncertain:
+    mov eax,-2
+    jmp .combined
+.ready:
+    or eax,[rsp+8]                      ; actual prior effects remain irreversible
+.combined:
+    mov [rsp+4],eax
+    xor ebx,ebx
+.record:
+    imul eax,ebx,160
+    lea rdi,[rel ahci_terminal_observations]
+    add rdi,rax
+    cmp dword [rdi],1
+    jne .next
+    mov esi,[rsp]                      ; actual native result, independent of record word3
+    mov edx,12
+    mov ecx,[rsp+4]                     ; actual final combined effect fact
+    call command_power_return_native_nic
+.next:
+    inc ebx
+    cmp ebx,33                         ; original HBA header +32 physical port decisions
+    jb .record
+    lea rdi,[rel ahci_boh_terminal_observations]
+    cmp dword [rdi],1
+    je .boh_record
+    cmp dword [rdi],2                  ; selected VMD, explicit separate ABI
+    jne .boh_reported
+.boh_record:
+    mov esi,[rsp]                      ; same saved actual terminal result
+    mov edx,12                         ; additive kind4 HBA acquisition record,40words
+    mov ecx,[rsp+4]
+    call command_power_return_native_nic
+.boh_reported:
+    xor ebx,ebx
+.vmd_record:
+    imul eax,ebx,160
+    lea rdi,[rel ahci_vmd_terminal_observations]
+    add rdi,rax
+    cmp dword [rdi],1
+    jne .vmd_next
+    mov esi,[rsp]
+    mov edx,13
+    mov ecx,[rsp+4]
+    call command_power_return_native_nic
+.vmd_next:
+    inc ebx
+    cmp ebx,3
+    jb .vmd_record
+    cmp dword [rel ahci_boh_terminal_observations],2
+    jne .vmd_initial_reported
+    xor ebx,ebx
+.vmd_initial_record:
+    imul eax,ebx,160
+    lea rdi,[rel ahci_vmd_boh_initial_root]
+    add rdi,rax
+    cmp dword [rdi],1
+    jne .vmd_initial_next
+    mov esi,[rsp]                      ; original terminal, never initial API return
+    mov edx,13
+    mov ecx,[rsp+4]                     ; original combined effect classification
+    call command_power_return_native_nic
+.vmd_initial_next:
+    inc ebx
+    cmp ebx,2
+    jb .vmd_initial_record
+.vmd_initial_reported:
+    mov eax,[rsp+4]
+    add rsp,16
     pop rbx
     ret
 
@@ -1448,6 +2655,8 @@ power_r_windows:         db "Return to Windows refused: no Windows boot entry co
 power_r_unquiesced:      db "Shut down refused: a disk could not be flushed, so power was left on (try again)",13,10,0
 power_r_unquiesced_offline: db "Shut down refused: the NVMe disk did not finish shutting down; power was left on and that disk is offline until restart (Shut down again to power off)",13,10,0
 power_r_shutdown_offline: db "Shut down failed: neither ACPI S5 nor the firmware powered off; the disks were flushed and the NVMe disk is offline until restart",13,10,0
+power_q_iso_refused_text: db "[PAOS64] power.usb.iso_work.refused (no storage or reset effect)",13,10,0
+power_q_xhci_refused_text: db "[PAOS64] power.usb.command_lifetime.refused (no storage or reset effect)",13,10,0
 power_q_text:            db "[PAOS64] power.storage.quiesce ahci_flushed=",0
 power_q_failed_text:     db " ahci_failed=",0
 power_q_nvme_text:       db " nvme=",0
@@ -1456,6 +2665,11 @@ power_q_refused_text:    db " REFUSED",13,10,0
 power_r_guest_active:    db "Shut down refused: guest work or an assigned device is still active; actual stop and teardown are required",13,10,0
 power_r_shutdown:        db "Shut down failed: neither ACPI S5 nor the firmware powered off (nothing was reset)",13,10,0
 power_r_reset:           db "Restart failed: the reset did not take",13,10,0
+power_r_restart_domain:  db "Restart refused: a driver domain could not retire safely (nothing was reset)",13,10,0
+power_r_restart_guest:   db "Restart refused: a running guest did not stop (nothing was reset)",13,10,0
+power_r_restart_target:  db "Restart refused: a driver domain could not retire safely; a one-time boot target may still be set (nothing was reset)",13,10,0
+power_r_restart_guest_target: db "Restart refused: a running guest did not stop; a one-time boot target may still be set (nothing was reset)",13,10,0
+power_r_restart_storage: db "Restart refused: guest ownership or a disk flush is incomplete (nothing was reset)",13,10,0
 power_r_unknown:         db "unknown power request",13,10,0
 power_verb_boot:         db "BOOT",0
 power_arg_win:           db "WIN",0
@@ -1467,6 +2681,10 @@ power_rsp:               resb RSP_SZ
 power_q_ahci_ok:         resd 1
 power_q_ahci_failed:     resd 1
 power_q_nvme:            resd 1
+power_q_usb_held:        resb 1
+power_q_xhci_stopped:    resb 1
+power_q_ahci_stopped:    resb 1
+power_q_work_busy:       resb 1
 %endmacro
 WDATA_BSS_DEFER WDATA_gui_power_exec_0
 
@@ -1666,6 +2884,51 @@ power_s5_abort:
     add rsp, 8
     ret
 
+ ; Original Start dialog only: RDI=the full64 plan token captured when this
+; confirmed request was accepted. Acquire the same try-only guard before any
+; authority callback. Existing owner/epoch and live parent must still match;
+; only WAIT before the irreversible latch may enter existing cancel/recovery.
+power_s5_cancel_desktop:
+    PS5_ENTER
+    mov r12,rdi
+    call power_s5_enter
+    test rax,rax
+    jnz .out
+    mov rbp,DP_INVALID
+    cmp dword [rel ps5_state],PS5_WAIT
+    jne .done
+    cmp byte [rel ps5_attempted],0
+    jne .done
+    mov rbx,[rel ps5_plan]
+    test rbx,rbx
+    jz .done
+    mov rbp,DP_CHANGED
+    test r12,r12
+    jz .done
+    cmp r12,-1
+    je .done
+    cmp r12,[rel ps5_plan_token]
+    jne .done
+    cmp r12,[rbx+dp_context.token]
+    jne .done
+    call power_s5_owner_valid
+    mov rbp,PS5_AUTH
+    test rax,rax
+    jnz .done
+    mov rbp,DP_CANCELLED
+    call power_s5_abort
+    cmp dword [rel ps5_state],PS5_RECOVER
+    jne .error
+    mov rbp,DP_PENDING
+    jmp .done
+.error:
+    movsxd rbp,dword [rel ps5_error]
+.done:
+    mov rax,rbp
+    mov byte [rel ps5_busy],0
+.out:
+    PS5_EXIT
+
 power_s5_cancel:
     PS5_ENTER
     call power_s5_enter
@@ -1808,13 +3071,14 @@ power_s5_managed_commit:
     ret
 
 ; Called only AFTER the existing canonical storage helper returned complete.
-; Legacy callers have already wiped at power_execute and remain unchanged.
+; Legacy callers also defer owner-key destruction until this storage-complete seam.
 power_s5_commit_key:
     cmp byte [rel ps5_committing], 1
-    jne .out
+    jne .wipe
     cmp byte [rel ps5_wipe_done], 0
     jne .out
     mov byte [rel ps5_wipe_done], 1
+.wipe:
     sub rsp, 8
     call principal_wipe_owner_boot_key
     add rsp, 8
@@ -1851,3 +3115,25 @@ ps5_pending_text: db "Shut down requested; waiting for owned drivers to stop.", 
 ps5_refused_text: db "Managed shut down refused or already active; inspect driver ownership.", 0
 %endmacro
 WDATA_DEFER WDATA_gui_managed_s5
+
+; Visible reason for the common pre-effect storage-work refusal.
+power_work_refused_text: db "Power refused: storage work is active (nothing was reset).",13,10,0
+power_r_restart_nic: db "Restart refused: the native NIC could not stop safely (nothing was reset)",13,10,0
+power_r_restart_offline: db "Restart refused: the NVMe disk is offline until restart (nothing was reset)",13,10,0
+
+; Public cause labels fit WGI_VAL_MAX without truncating material state.
+power_label_windows: db "No Windows entry could be armed",0
+power_label_shutdown: db "Power-off failed; still on",0
+power_label_reset: db "Restart failed; still running",0
+power_label_flush: db "Disk flush incomplete",0
+power_label_offline: db "Disk offline until restart",0
+power_label_active: db "Guest or assigned device active",0
+power_label_domain: db "Driver could not retire safely",0
+power_label_guest: db "Guest did not stop",0
+power_label_target: db "Boot target may still be set",0
+power_label_storage: db "Guest or disk flush incomplete",0
+power_label_nic: db "Network device could not stop",0
+power_label_work: db "Storage work active; try later",0
+power_label_pending: db "Shut down in progress",0
+power_label_ownership: db "Driver ownership not ready",0
+power_label_unknown: db "Power action did not finish",0

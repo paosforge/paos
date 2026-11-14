@@ -1,7 +1,7 @@
 ;; MODULE net/icmp
 ;; LAYER 4
 ;; EXPORTS icmp_echo_selftest, icmp_build_reply_kat, icmp_build_ipv4_reply
-;; IMPORTS boot/serial, core/lib/fmt, core/lib/cksum, core/lib/mem
+;; IMPORTS boot/serial, core/lib/fmt, core/lib/cksum, core/lib/mem, lib/safe_buffer
 ;; CAPS
 ;; OWNER saga:net
 ; ============================================================================
@@ -35,6 +35,7 @@ ICMP_MIN_LEN           equ 8       ; ICMP header = type,code,cksum(2),id(2),seq(
 ICMP_ETH_HLEN          equ 14
 ICMP_IPV4_MIN_HLEN     equ 20
 ICMP_IPV4_MTU          equ 1500
+ICMP_FRAME_MAX         equ 2048    ; original live receive scratch ceiling
 
 ; icmp_build_ipv4_reply — build one complete Ethernet+IPv4 Echo Reply through the
 ;   protocol-layer seam. The caller has already established that the IPv4 dst is
@@ -66,6 +67,17 @@ icmp_build_ipv4_reply:
     jz   .ipv4_reject
     cmp  r10, ICMP_ETH_HLEN + ICMP_IPV4_MIN_HLEN + ICMP_MIN_LEN
     jb   .ipv4_reject
+    cmp  r10, ICMP_FRAME_MAX
+    ja   .ipv4_reject
+    ; Validate the full declared input before any header load. The live caller
+    ; already caps the whole receive frame at 2048; keep that same ceiling.
+    mov  rdi, r12
+    mov  rsi, r10
+    xor  edx, edx
+    mov  rcx, r10
+    call safe_span_validate
+    test eax, eax
+    jnz  .ipv4_reject
     cmp  r14, ICMP_IPV4_MIN_HLEN
     jb   .ipv4_reject
     cmp  r14, 60                          ; IPv4 IHL maximum

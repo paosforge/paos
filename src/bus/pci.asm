@@ -1,7 +1,7 @@
 ;; MODULE bus/pci
 ;; LAYER 2
-;; EXPORTS pci_cfg_quarantine, pci_inventory_read32, pci_inventory_diag_begin, pci_inventory_diag_finish, pci_inventory_diag_active, pci_inventory_diag_done, pci_inventory_diag_original, pci_inventory_diag_first, pci_inventory_diag_repeat, pci_ecam_resolve_span, pci_ext_find_cap, pci_aer_snapshot, pci_cfg_read32, pci_cfg_write32, pci_scan_with_filter, pci_cfg_same_bar_roundtrip, pci_selftest, pci_lock_audit, pci_dev_count
-;; IMPORTS boot/serial, core/lib/fmt, core/lock
+;; EXPORTS pci_cfg_quarantine, pci_inventory_read32, pci_inventory_diag_begin, pci_inventory_diag_finish, pci_inventory_diag_active, pci_inventory_diag_done, pci_inventory_diag_original, pci_inventory_diag_first, pci_inventory_diag_repeat, pci_ecam_resolve_span, pci_ext_find_cap, pci_aer_snapshot, pci_acs_snapshot, pci_cfg_read32, pci_cfg_write32, pci_scan_with_filter, pci_cfg_same_bar_roundtrip, pci_selftest, pci_lock_audit, pci_dev_count
+;; IMPORTS boot/serial, core/lib/fmt, core/lock, hv/pci_assign
 ;; CAPS
 ;; OWNER saga:bus
 ;; LOCK: pci_lock PROTECTS pci_dev_count
@@ -98,13 +98,15 @@ pci_cfg_write32:
 %if PAOS_LAB_HP_PCICMD_PROVENANCE
     call pci_lab_cfgw_record                ; before either port write
 %endif
-    PCI_CFG_ENTER
 %if PAOS_LAB_HP_PCICMD_PROVENANCE
     push rdx                                ; fn, for an overlap record
     push r10
-    mov  r10d, 1
-    lock xadd [rel pci_lab_cfg_inflight], r10d
-    push r10                                ; other accesses already in flight
+    push r11
+%endif
+    PCI_CFG_ENTER
+%if PAOS_LAB_HP_PCICMD_PROVENANCE
+    mov  r11d, 1
+    lock xadd [rel pci_lab_cfg_inflight], r11d  ; other accesses already in flight
     mov  r10d, 1
     lock xadd [rel pci_lab_cfg_seq], r10d
     inc  r10d                               ; sequence including this selection
@@ -150,25 +152,31 @@ pci_cfg_write32:
 %if PAOS_LAB_HP_PCICMD_PROVENANCE
     lock dec dword [rel pci_lab_cfg_inflight]
     cmp  r10d, [rel pci_lab_cfg_seq]
-    jne  .lab_overlap                       ; another access began in this window
-    cmp  dword [rsp], 0
-    je   .lab_alone                         ; and none was in flight at entry
-.lab_overlap:
+    je   .lab_seq_same
+    mov  r11d, 1                            ; another access began in this window
+.lab_seq_same:                              ; R11D != 0: overlapped (verdict only)
+%endif
+    PCI_CFG_LEAVE
+%if PAOS_LAB_HP_PCICMD_PROVENANCE
+    ; The record is taken after the lock is released and IF restored (SEC109398
+    ; (2)/(3): no call inside the bracket). Its flags are not the caller's.
+    test r11d, r11d
+    jz   .lab_alone
     call pci_lab_cfgw_overlap
 .lab_alone:
-    add  rsp, 8
+    pop  r11
     pop  r10
     pop  rdx
 %endif
-    PCI_CFG_LEAVE
     ret
 
 %if PAOS_LAB_HP_PCICMD_PROVENANCE
 ; pci_lab_cfgw_overlap — another pci_cfg_read32/write32 was in flight at this
 ;   write's entry or began before its data write, so CF8 may have been
 ;   reselected and the data gone to another function. Records {TSC, caller,
-;   intended CONFIG_ADDRESS | 1, value} in a 4-slot ring. Frame: our return,
-;   in-flight count, saved R10, saved fn, caller's return.
+;   intended CONFIG_ADDRESS | 1, value} in a 4-slot ring. Called after the
+;   lock is released and IF restored. Frame: our return, saved R11, saved R10,
+;   saved fn, caller's return.
 ;   clobbers: RDX (pci_cfg_write32 clobbers it; its exit pop restores fn).
 pci_lab_cfgw_overlap:
     push rax
@@ -179,7 +187,7 @@ pci_lab_cfgw_overlap:
     mov  r9d, esi
     shl  r9d, 11
     or   eax, r9d
-    mov  r9d, [rsp+48]                      ; fn (above RAX, RCX, R9, return, count, R10)
+    mov  r9d, [rsp+48]                      ; fn (above RAX, RCX, R9, return, R11, R10)
     shl  r9d, 8
     or   eax, r9d
     and  ecx, 0xFC
@@ -196,7 +204,7 @@ pci_lab_cfgw_overlap:
     shl  rdx, 32
     or   rax, rdx
     mov  [rcx], rax
-    mov  rax, [rsp+64]                      ; caller, above saved interrupt flags
+    mov  rax, [rsp+56]                      ; caller, directly above saved fn
     mov  [rcx+8], rax
     mov  [rcx+16], r9
     mov  eax, r8d
@@ -792,6 +800,130 @@ pci_aer_snapshot:
     mov  eax, 4
     ret
 
+; pci_acs_snapshot(RDI=reader, RSI=context, RDX=output, RCX=capacity) -> EAX=status.
+;   U3a: read-only Access Control Services facts for the device-isolation gate.
+;   Same trusted reader ABI and status codes as pci_aer_snapshot: 0 READ, 1 ABSENT,
+;   2 MALFORMED, 3 READ_ERROR, 4 BAD_REQUEST, 5 CHANGED. Finds the first ACS
+;   extended capability (ID 0x000D, version >= 1) through pci_ext_find_cap; its
+;   Capability/Control dword at cap+4 must lie within 0xffc. Reads that dword,
+;   then re-reads the header and the dword: any difference is CHANGED, an
+;   all-ones dword is READ_ERROR. Success writes exactly 64 bytes: +0 cap offset,
+;   +4 header, +8 ACS Capability (low16) / ACS Control (high16), +12..63 zero.
+;   Every refusal leaves output untouched. No config write: this never changes ACS
+;   Control, so only what firmware already enabled can be observed. R8..R11 carry
+;   the walker diagnostic tuple; reason 8 (cap+4 out of range), 1/2 (read error,
+;   all-ones), 12 (header changed) or 13 (Capability/Control changed) replace it
+;   when this routine refuses after the walk. At most 963 reads.
+pci_acs_snapshot:
+    test rdi, rdi
+    jz   .bad_request
+    test rdx, rdx
+    jz   .bad_request
+    cmp  rcx, 64
+    jb   .bad_request
+    mov  rax, rdx
+    add  rax, 63
+    jc   .bad_request
+    push rbx
+    push rbp
+    push r12
+    push r13
+    push r14
+    push r15
+    sub  rsp, 104                          ; diagnostic32 at +64, aligned calls
+    mov  r12, rdi                          ; reader
+    mov  r13, rsi                          ; opaque context
+    mov  r14, rdx                          ; output, untouched until publication
+    mov  edx, 0x0D                         ; ACS extended capability
+    mov  ecx, 1
+    call pci_ext_find_cap
+    mov  [rsp+64], r8
+    mov  [rsp+72], r9
+    mov  [rsp+80], r10
+    mov  [rsp+88], r11
+    test edx, edx
+    jnz  .walker_refused
+    mov  ebx, eax                          ; cap offset
+    mov  ebp, ecx                          ; matched header
+    cmp  ebx, 0xff8                        ; cap+4 dword fits through 0xfff
+    ja   .prefix_span
+    lea  esi, [rbx+4]
+    mov  rdi, r13
+    call r12
+    test edx, edx
+    jnz  .read_error
+    cmp  eax, -1
+    je   .all_ones
+    mov  r15d, eax                         ; Capability low16, Control high16
+    mov  esi, ebx
+    mov  rdi, r13
+    call r12
+    test edx, edx
+    jnz  .read_error
+    cmp  eax, -1
+    je   .all_ones
+    cmp  eax, ebp
+    jne  .header_changed
+    lea  esi, [rbx+4]
+    mov  rdi, r13
+    call r12
+    test edx, edx
+    jnz  .read_error
+    cmp  eax, r15d
+    jne  .control_changed
+    mov  rdi, r14
+    mov  ecx, 8
+    xor  eax, eax
+    cld
+    rep  stosq
+    mov  [r14], ebx
+    mov  [r14+4], ebp
+    mov  [r14+8], r15d
+    xor  eax, eax
+    jmp  .done
+.walker_refused:
+    mov  eax, edx
+    jmp  .done
+.prefix_span:
+    mov  dword [rsp+64], 8
+    mov  eax, 2
+    jmp  .done
+.all_ones:
+    mov  dword [rsp+64], 2
+    mov  eax, 3
+    jmp  .done
+.read_error:
+    mov  dword [rsp+64], 1
+    mov  eax, 3
+    jmp  .done
+.header_changed:
+    mov  dword [rsp+64], 12
+    mov  eax, 5
+    jmp  .done
+.control_changed:
+    mov  dword [rsp+64], 13
+    mov  eax, 5
+.done:
+    mov  r8, [rsp+64]
+    mov  r9, [rsp+72]
+    mov  r10, [rsp+80]
+    mov  r11, [rsp+88]
+    add  rsp, 104
+    pop  r15
+    pop  r14
+    pop  r13
+    pop  r12
+    pop  rbp
+    pop  rbx
+    ret
+.bad_request:
+    mov  r8d, 14
+    xor  r9d, r9d
+    xor  r10d, r10d
+    xor  r11d, r11d
+    mov  eax, 4
+    ret
+
 ; pci_scan_with_filter(RDI=callback) — sweep bus 0..255, dev 0..31, fn 0..7.
 ;   For each PRESENT function calls callback(EDI=bus,ESI=dev,EDX=fn,ECX=vendev),
 ;   where vendev = dword at config offset 0 (vendor in low 16, device in high 16).
@@ -1087,6 +1219,14 @@ pci_cfg_same_bar_roundtrip:
     mov  rax, [rel pci_safe_bar_bdf]
     cmp  rax, -1
     je   .roundtrip_fail
+%ifdef PAOS_PCIA_GRP_AUTHORITY
+    ; Even an idempotent BAR store must not race guest-group custody. This
+    ; diagnostic is retryable after the actual all-member claim retirement.
+    call pcia_grp_any_held
+    test eax, eax
+    jnz .roundtrip_fail
+    mov rax, [rel pci_safe_bar_bdf]
+%endif
     mov  r12d, eax
     shr  r12d, 16
     and  r12d, 0xFF                          ; r12 = bus

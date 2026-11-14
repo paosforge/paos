@@ -196,7 +196,7 @@ sa_job_find:
 ;   -> RAX job tag (> 0) / -1 refused (gate refusal marker, a zero/wrapping
 ;   range, or no free slot).
 storage_access_job_grant:
-    movzx ecx, byte [rel sa_request_intent]   ; the CURRENT request's intent decides
+    call sa_intent_for                       ; the CURRENT request's intent decides
 .carried:                                    ; storage_access_job_grant_carried joins here with its own ECX
     push rbx
     push r12
@@ -247,9 +247,10 @@ storage_access_job_grant:
     ret
 
 ; storage_access_job_grant_carried(RDI=dev, RSI=lba, RDX=count, ECX=SA_INTENT_*, R8=caller tag cstr) -> as
-;   storage_access_job_grant, decided under the intent a queued ext4 copy carried from its owner's console
-;   request (RCQ-20 S5c; rc-sec rev 3 6454fc74). ONE caller, ext_w_job_open_carried (storage_grant_lint). It
-;   never reads or writes the request's intent or owner bit; the body above is the one copy both share.
+;   storage_access_job_grant, decided under the intent a queued copy carried from its owner's console
+;   request (RCQ-20 S5c; rc-sec rev 3 6454fc74; FAT scratch: rc-sec 105819/105840). TWO callers, exactly
+;   ext_w_job_open_carried (ext4) and fd_scratch_job_open_carried (FAT scratch), pinned by storage_grant_lint.
+;   It never reads or writes the request's intent or owner bit; the body above is the one copy both share.
 storage_access_job_grant_carried:
     jmp  storage_access_job_grant.carried
 
@@ -700,6 +701,69 @@ storage_access_request_owner:               ; -> EAX = 0/1
     movzx eax, byte [rel sa_request_owner]
     ret
 
+; T5-15.4 (SEC 89584): the local grant is a generation-tagged token, not
+; request intent. Low bit is authority; the remaining bits name the scheduler's
+; revocation generation. A saved outer token cannot revive across a yield or IPI.
+; The terminal generation disables local grants rather than wrapping.
+; EDI=0/1 -> RAX opaque outer token (keep all 64 bits in the dispatch frame).
+storage_access_request_local_swap:
+    and  edi, 1
+    mov  rax, [rel sched_request_local_epoch]
+    or   rdi, rax
+    mov  rax, rdi
+    xchg rax, [rel sched_request_local]
+    ret
+
+; RDI=opaque saved token. Restoring stale bits is harmless: readers validate the
+; original generation, including if revocation races this store. Never re-stamp.
+storage_access_request_local_restore:
+    mov  rax, rdi
+    xchg rax, [rel sched_request_local]
+    ret
+
+storage_access_request_local:               ; -> EAX=0/1; only RAX is clobbered
+    mov  rax, [rel sched_request_local]
+    xor  rax, [rel sched_request_local_epoch]
+    cmp  rax, 1
+    jne  .no
+    cmp  qword [rel sched_request_local_epoch], -2
+    je   .no
+    mov  eax, 1
+    ret
+.no:
+    xor  eax, eax
+    ret
+
+; RDI=dev -> ECX = the intent this request presents for that device. Clobbers RAX.
+; Removable is the native transport flag, read as fs_volume_write_rule reads it.
+sa_intent_for:
+    movzx ecx, byte [rel sa_request_intent]
+    cmp  ecx, SA_INTENT_SPECIAL
+    je   .out
+    call storage_access_request_local
+    cmp  eax, 1
+    jne  .out
+    cmp  byte [rel sa_request_owner], 1
+    jne  .out
+    test rdi, rdi
+    jz   .out
+    mov  rax, [rdi + dev.info]
+    test rax, rax
+    jz   .out
+    cmp  byte [rax + blk_info.removable], 0
+    jne  .special
+    test dword [rax + blk_info.flags], BLKF_REMOVABLE
+    jz   .out
+.special:
+    mov  ecx, SA_INTENT_SPECIAL
+.out:
+    ret
+
+storage_access_intent_for_dev:              ; RDI=dev -> EAX; clobbers RCX
+    call sa_intent_for
+    mov  eax, ecx
+    ret
+
 ; storage_access_owned_latched -> EAX 1 once the owned-op handle space is exhausted (no owned op begins again
 ;   this boot) / 0. Read-only; RCQ-20 S5c: a carried BEGIN refuses on it (rc-sec rev 3 C3 (h)).
 storage_access_owned_latched:
@@ -708,7 +772,7 @@ storage_access_owned_latched:
 
 ; storage_access_require_request(RDI=dev, RSI=lba, RDX=count, R8=caller tag) -> RAX 0 / -1 (marker on refusal)
 storage_access_require_request:
-    movzx ecx, byte [rel sa_request_intent]
+    call sa_intent_for
     jmp  storage_access_require
 
 ; storage_access_permitted_request(RDI=dev, RSI=lba, RDX=count) -> RAX 0 permitted / -1 refused. NO marker:
@@ -717,7 +781,7 @@ storage_access_permitted_request:
     mov  [rel sa_req_dev], rdi
     mov  [rel sa_req_lba], rsi
     mov  [rel sa_req_count], rdx
-    movzx ecx,byte [rel sa_request_intent]
+    call sa_intent_for
     call storage_access_decision
     test rax,rax
     jz .yes

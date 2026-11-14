@@ -1,7 +1,7 @@
 ;; MODULE gui/widget
 ;; LAYER 6
-;; EXPORTS wgt_form_event_hook, wgt_secret_owner, wgt_text_paint_hook, wgt_secret_human, wgt_secret_revision, wgt_secret_hidden, str_wgt_withheld, wgt_focus_visible, wgt_reserve_run, wgt_alloc_next, wgt_library_init, wgt_declare, wgt_type_register, wgt_type_bind_capture, wgt_type_capture_buttons, wgt_type_capture_motion, wgt_pointer_motion, wgt_pointer_capture_press, wgt_pointer_capture_press_button, wgt_pointer_capture_find, wgt_pointer_capture_event, wgt_type_headroom_report, wgt_create, wgt_slot_ptr, wgt_draw_id, wgt_draw_desktop, wgt_desktop_erase_rect, wgt_draw_glyph, wgt_rect_hittest, wgt_focus_window, wgt_focus_at, wgt_textfield_key, wgt_tab_reverse, wgt_textfield_event_hook, wgt_textfield_event_hook2, wgt_textfield_clip_get, wgt_textfield_clip_set, wgt_focus_id, wgt_count, wgt_out_buf, wgt_out_ready, wgt_m_library, wgt_m_registry, wgt_fill_rect, wgt_draw_text, wgt_pointer_hit_dispatch, wgt_type_name_of, wgt_shift_window, wgt_resize_window, wgt_secret_register, wgt_secret_clear, wgt_secret_selftest, wgt_secret_type, wgt_secret_bytes, wgt_secret_len, wgt_key_filter, wgt_click_hook, wgt_button_open_hook, wgt_button_get_hook, wgt_action_hook, wgt_hot_id, wgt_press_id, wgt_state_of, wgt_focus_ring_draw, wgt_hover_at, wgt_press_set, wgt_row_shown, wgt_overlay_host_shown, wgt_flyout_painted, wgt_mark_sectext, wgt_mark_formtext, wgt_mark_ascii, wgt_text_buf, wgt_text_len, wgt_text_refused, wgt_textfield_preedit, wgt_tf_buf, wgt_tf_long_free, wgt_textfield_long
-;; IMPORTS gui/calendar, boot/serial, core/unicode_edit, gui/window, gui/window_mgmt, gui/widget_containers, gui/chat_app, gui/cadence_mark, svc/command, svc/clipboard, core/lib/fmt, core/lib/str, dev/input/ps2, sec/keyprov, sec/session, gui/widget_scalar_inputs, gui/lock_screen
+;; EXPORTS wgt_menu_text_ptr, wgt_menu_get, wgt_secret_key, wgt_sensitive_current, wgt_sensitive_plan, wgt_sensitive_set_result, wgt_provider_bind, wgt_provider_plan, wgt_provider_pending, wgt_provider_decision, wgt_provider_set_result, wgt_provider_result, wgt_guard_bind, wgt_guard_provider_refused, wgt_birth_lifetime, wgt_terminal_fill_op, wgt_button_paint_hook, wgt_form_event_hook, wgt_secret_owner, wgt_text_paint_hook, wgt_secret_human, wgt_secret_revision, wgt_secret_hidden, str_wgt_withheld, wgt_focus_visible, wgt_reserve_run, wgt_alloc_next, wgt_library_init, wgt_declare, wgt_type_register, wgt_type_bind_capture, wgt_type_capture_buttons, wgt_type_capture_motion, wgt_pointer_motion, wgt_pointer_capture_press, wgt_pointer_capture_press_button, wgt_pointer_capture_find, wgt_pointer_capture_event, wgt_type_headroom_report, wgt_create, wgt_slot_ptr, wgt_draw_id, wgt_draw_desktop, wgt_desktop_erase_rect, wgt_draw_glyph, wgt_rect_hittest, wgt_focus_window, wgt_focus_at, wgt_textfield_key, wgt_tab_reverse, wgt_textfield_event_hook, wgt_textfield_event_hook2, wgt_textfield_clip_get, wgt_textfield_clip_set, wgt_focus_id, wgt_count, wgt_out_buf, wgt_out_ready, wgt_m_library, wgt_m_registry, wgt_fill_rect, wgt_draw_text, wgt_pointer_hit_dispatch, wgt_type_name_of, wgt_shift_window, wgt_resize_window, wgt_secret_register, wgt_secret_clear, wgt_secret_selftest, wgt_secret_type, wgt_secret_bytes, wgt_secret_len, wgt_key_filter, wgt_click_hook, wgt_button_open_hook, wgt_button_get_hook, wgt_action_hook, wgt_hot_id, wgt_press_id, wgt_state_of, wgt_focus_ring_draw, wgt_hover_at, wgt_press_set, wgt_row_shown, wgt_overlay_host_shown, wgt_flyout_painted, wgt_mark_sectext, wgt_mark_formtext, wgt_mark_ascii, wgt_text_buf, wgt_text_len, wgt_text_refused, wgt_textfield_preedit, wgt_tf_buf, wgt_tf_long_free, wgt_textfield_long
+;; IMPORTS gui/form_events, gui/summon_palette, gui/form_loader, gui/calendar, boot/serial, core/unicode_edit, gui/window, gui/window_mgmt, gui/widget_containers, gui/chat_app, gui/cadence_mark, svc/command, svc/clipboard, core/lib/fmt, core/lib/str, dev/input/ps2, sec/keyprov, sec/session, gui/widget_image, gui/widget_scalar_inputs, gui/lock_screen, gui/input_route
 ;; CAPS
 ;; OWNER saga:gui
 ; ============================================================================
@@ -76,8 +76,8 @@ WT_SZ       equ 48
 ; form identity/layout and typed list/progress state. The clipboard-sized value
 ; keeps every established offset stable; only the role pointer moves from the
 ; reclaimed adjacent word to the new additive tail. ---
-WGT_MAX     equ 64                     ; retain the sign-in form while its workspace is hidden; G9 (0.0.53): 48 -> 64
-                                       ; with WK-B7B (boot uses 36: 28 free at the tail + the reusable B18 run)
+WGT_MAX     equ 128                    ; ROB-04: resident sign-in + Summon and twelve app windows
+                                       ; per-widget provenance must match (KP_FIELD_MAX, sec/keyprov)
 WGI_TYPE    equ 0                     ; dd: 0 = free, else vtable index + 1
 WGI_WIN     equ 4                     ; dd: host wm_* slot (0=A 1=B 2=chat)
 WGI_X       equ 8                     ; dd absolute x
@@ -88,6 +88,11 @@ WGI_FLAGS   equ 24                    ; dd bit0 = visible
 WGI_VLEN    equ 28                    ; dd live field-text length
 WGI_VAL     equ 32                    ; 40-byte inline field text (label/value)
 WGI_VAL_MAX equ 31                    ; legacy button/label + keyboard-edit bound
+; A menu's whole '|' item text lives in its own wgt_menu_text entry (own-partition A3 Explorer menu: 7 items,
+; 49 B > the 31 B inline copy). Entry = dq birth serial at the store, then MENU text + NUL. WGI_VAL keeps the
+; bounded inline copy for every non-menu reader; the slot layout and WGI_VAL_MAX are unchanged.
+WGT_MENU_ENTRY    equ 64
+WGT_MENU_TEXT_MAX equ WGT_MENU_ENTRY - 8 - 1   ; 55 text bytes after the serial, then NUL
 WGT_TEXTFIELD_VAL_MAX equ 39           ; includes the required 32-byte clipboard token + NUL
 WGI_SEL_LO  equ 72                    ; dd: selection start
 WGI_SEL_HI  equ 76                    ; dd: selection end
@@ -519,6 +524,29 @@ wgt_slot_ptr:
     add  rax, r10
     ret
 
+; Native-only creation lifetime, distinct from mutable interaction counters.
+; EDI live widget id -> RAX saturating per-slot birth serial, or0. Recycled
+; entries and boot KAT count rewinds never reset it. No authority is granted.
+wgt_birth_lifetime:
+    cmp edi,WGT_MAX
+    jae .bad
+    cmp edi,[rel wgt_count]
+    jae .bad
+    imul eax,edi,WGI_SZ
+    lea r10,[rel wgt_tbl]
+    cmp dword [r10+rax+WGI_TYPE],0
+    je .bad
+    lea r10,[rel wgt_birth_serial]
+    mov rax,[r10+rdi*8]
+    test rax,rax
+    jz .bad
+    cmp rax,-1
+    je .bad
+    ret
+.bad:
+    xor eax,eax
+    ret
+
 ; ---------------------------------------------------------------------------
 ; wgt_create(EDI=type index, ESI=win slot) -> EAX = widget id, or -1 if full.
 ;   Fills the struct (geometry = host slot inset + stacked pitch, dims from the
@@ -591,6 +619,10 @@ wgt_create:
     cmp  eax, WGT_MAX
     jae  .full
 .have_id:
+    lea rdx,[rel wgt_birth_serial]
+    cmp qword [rdx+rax*8],-1
+    je .full                          ; permanent exhaustion, never wrap/reuse
+    inc qword [rdx+rax*8]              ; before any new object publication
     mov  r12d, eax                     ; r12d = new id
     mov  r13d, edi                     ; r13d = type index
     ; --- struct base ---
@@ -657,6 +689,7 @@ wgt_create:
     mov  qword [rbx + WGI_MAXVAL], 100
     mov  dword [rbx + WGI_BIND], 0
     xchg rax, rbx
+    call wgt_editor_free                ; wipe prior multiline value and undo
     call wgt_tf_long_free               ; RCQ-38 L3c: a recycled slot's long value is wiped
     xchg rax, rbx                       ; RAX = the type name again (WGI_LABEL below)
     mov  dword [rbx + WGI_RSVD], 0
@@ -740,6 +773,16 @@ wgt_set_text_cap:
     call serial_string
     jmp  .refused
 .copy_public:
+    mov eax,[rel wgt_editor_type]
+    inc eax
+    cmp [rbx+WGI_TYPE],eax
+    jne .legacy_text
+    mov rdx,rsi
+    lea rsi,[rel str_wf_value]
+    mov edi,r12d
+    call wgt_editor_set
+    jmp .refused
+.legacy_text:
     cmp  dword [rbx + WGI_TYPE], WGT_TYPE_BUTTON
     je   .runtime_text
     cmp  dword [rbx + WGI_TYPE], WGT_TYPE_LABEL
@@ -747,6 +790,8 @@ wgt_set_text_cap:
 .runtime_text:
     and  dword [rbx + WGI_EDIT], ~WGT_EDIT_FORMTEXT ; set text is shown as given
 .cp_buffer:
+    mov  rax, rbx
+    call wgt_menu_text_store             ; a menu also keeps its whole text (<= WGT_MENU_TEXT_MAX)
     lea  rdi, [rbx + WGI_VAL]
     cmp  dword [rbx + WGI_TYPE], WGT_TYPE_TEXTFIELD
     jne  .cp_start
@@ -983,6 +1028,15 @@ wgt_geometry_min:
     cmp  eax, [rel wgt_secret_type]
     je   .field
     inc  eax
+    ; Dynamic editor: one 8x16 font cell plus four-pixel insets.
+    ; An unregistered type (-1) must never classify stored type zero.
+    cmp  dword [rel wgt_editor_type], 0
+    jl   .not_editor
+    dec  eax
+    cmp  eax, [rel wgt_editor_type]
+    je   .editor
+    inc  eax
+.not_editor:
     cmp  eax, 3
     je   .label
     cmp  eax, 4
@@ -999,6 +1053,10 @@ wgt_geometry_min:
     jne  .out
     mov  r8d, 5
     mov  r11d, 6
+    ret
+.editor:
+    mov  r8d, 16
+    mov  r11d, 24
     ret
 .button:
     mov  r8d, 20
@@ -1580,6 +1638,7 @@ wgt_retire_window_widgets:
     call wgt_slot_ptr
     cmp  [rax + WGI_WIN], r13d
     jne  .rw_next
+    call wgt_editor_free                ; retired editors retain no text/undo
     call wgt_tf_long_free               ; RCQ-38 L3c: RAX = the slot; its long value is wiped
     mov  dword [rax + WGI_TYPE], 0
     call wgt_capture_forget            ; EDI = the retired id
@@ -1671,6 +1730,10 @@ wgt_stateful_type:
     je   .out
     cmp  ecx, WGT_TYPE_TEXTFIELD
     je   .out
+    mov edx,[rel wgt_editor_type]
+    inc edx
+    cmp ecx,edx
+    je .out
     mov  edx, [rel wgt_scalar_toggle_type]
     inc  edx                            ; an unregistered kind (-1) becomes 0: never a live WGI_TYPE
     cmp  ecx, edx
@@ -2019,6 +2082,18 @@ wgt_button_draw:
     mov  ebx, ecx                       ; the state's fill
     call fb_fill_rect
 .body_done:
+    ; Native cached-raster adapter, inside the stock button's paint gates.
+    ; EDI=id, R12=row, ECX=current fill. EAX=1 drew a cached48 icon;
+    ; its escaped label goes beside it. Body/focus stay stock. No hook: text.
+    mov  rax, [rel wgt_button_paint_hook]
+    test rax, rax
+    jz   .stock_content
+    mov  edi, [rsp + 40]
+    call wgt_button_palette
+    call [rel wgt_button_paint_hook]
+    cmp  eax, 1
+    je   .cached_label
+.stock_content:
     test dword [r12 + WGI_EDIT], WGT_EDIT_HELP_ICON
     jnz  .help_icon
     test dword [r12 + WGI_EDIT], WGT_EDIT_ARROW
@@ -2095,6 +2170,16 @@ wgt_button_draw:
     add  r9d, 42                        ; panel + 6
     mov  r11d, 33
     jmp  .label_text
+.cached_label:
+    mov  edi, [rsp + 40]
+    call wgt_button_palette
+    mov  ebx, edx
+    mov  r8d, [r12 + WGI_X]
+    add  r8d, 56
+    mov  r9d, [r12 + WGI_Y]
+    add  r9d, 20
+    mov  r11d, 8
+    jmp  .label_text                   ; keep escaping + public-font adapter
 .label:
     mov  edi, [rsp + 40]
     call wgt_button_palette
@@ -3562,6 +3647,15 @@ wgt_textfield_key:
     test dword [rbx + WGI_EDIT], WGT_EDIT_DISABLED
     jnz  .ignored                       ; RCQ-16 S4: a disabled control takes no key
     mov  ecx, [rbx + WGI_TYPE]
+    mov edx,[rel wgt_editor_type]
+    inc edx
+    cmp ecx,edx
+    jne .legacy_key
+    mov edi,r12d
+    mov eax,r13d
+    call wgt_editor_key
+    jmp .key_out
+.legacy_key:
     cmp  ecx, WGT_TYPE_TEXTFIELD
     je   .textfield
     cmp  ecx, 1
@@ -4143,10 +4237,112 @@ wgt_label_get:
     pop  r12
     ret
 
+; wgt_menu_get(EDI = id, RSI = field): wgt_label_get's fields ("value"/"text"); a live menu answers from its whole
+;   wgt_menu_text entry, any other widget from WGI_VAL as wgt_label_get. RAX = text, or 0 for another field.
+wgt_menu_get:
+    call wgt_label_get
+    test rax, rax
+    jz   .out
+    sub  rax, WGI_VAL
+    jmp  wgt_menu_text_ptr
+.out:
+    ret
+
+; wgt_menu_entry(RAX = slot) -> RAX = its wgt_menu_text entry when the slot is a live menu (registered menu type,
+;   inside wgt_tbl on a slot boundary, birth serial live), else 0. RDX = the slot's birth serial. Preserves RCX
+;   and every other register.
+wgt_menu_entry:
+    push rcx
+    push r8
+    mov  r8, rax
+    mov  ecx, [rel wgt_menu_type]
+    inc  ecx
+    jz   .none                          ; no menu type registered
+    cmp  [r8 + WGI_TYPE], ecx
+    jne  .none
+    lea  rcx, [rel wgt_tbl]
+    mov  rax, r8
+    sub  rax, rcx
+    jb   .none
+    cmp  rax, WGT_MAX * WGI_SZ
+    jae  .none
+    xor  edx, edx
+    mov  ecx, WGI_SZ
+    div  rcx                            ; RAX = id, RDX = offset in the slot
+    test rdx, rdx
+    jnz  .none
+    lea  rcx, [rel wgt_birth_serial]
+    mov  rdx, [rcx + rax*8]
+    test rdx, rdx
+    jz   .none
+    imul rax, rax, WGT_MENU_ENTRY
+    lea  rcx, [rel wgt_menu_text]
+    add  rax, rcx
+    jmp  .out
+.none:
+    xor  eax, eax
+    xor  edx, edx
+.out:
+    pop  r8
+    pop  rcx
+    ret
+
+; wgt_menu_text_ptr(RAX = slot) -> RAX = a live menu's whole NUL-ended text when its entry was stored at the slot's
+;   current birth serial, else slot + WGI_VAL (other types, a retired or reused slot, a menu not set since creation).
+;   Preserves every other register.
+wgt_menu_text_ptr:
+    push rdx
+    push r9
+    mov  r9, rax
+    call wgt_menu_entry
+    test rax, rax
+    jz   .inline
+    cmp  [rax], rdx
+    jne  .inline
+    add  rax, 8
+    jmp  .out
+.inline:
+    lea  rax, [r9 + WGI_VAL]
+.out:
+    pop  r9
+    pop  rdx
+    ret
+
+; wgt_menu_text_store(RAX = slot, RSI = text): a live menu keeps up to WGT_MENU_TEXT_MAX bytes of text, NUL-ended,
+;   stamped with the slot's birth serial; any other widget is untouched. Preserves every register.
+wgt_menu_text_store:
+    push rax
+    push rcx
+    push rdx
+    push rdi
+    call wgt_menu_entry
+    test rax, rax
+    jz   .out
+    mov  [rax], rdx                     ; this lifetime's text
+    lea  rdi, [rax + 8]
+    xor  ecx, ecx
+.copy:
+    cmp  ecx, WGT_MENU_TEXT_MAX
+    jae  .end
+    mov  dl, [rsi + rcx]
+    test dl, dl
+    jz   .end
+    mov  [rdi + rcx], dl
+    inc  ecx
+    jmp  .copy
+.end:
+    mov  byte [rdi + rcx], 0
+.out:
+    pop  rdi
+    pop  rdx
+    pop  rcx
+    pop  rax
+    ret
+
 ; Clipboard's explicit bridge is narrower than the general widget vtable:
-; only the stock textfield may cross it. Future secret-input types necessarily
-; use another row and therefore refuse here under every capability. Selection
-; and caret state remain inert.
+; stock textfield value or an explicit bounded public-editor selection only.
+; Secret/password types refuse under every capability. The editor also requires
+; its visible unlocked host; the service still owns clipboard authorization.
 ; wgt_textfield_clip_get(EDI=id) -> RAX=value, ECX=len, EDX=0; EDX=1 refuses.
 wgt_textfield_clip_get:
     push rbx
@@ -4156,6 +4352,14 @@ wgt_textfield_clip_get:
     jae  .bad
     call wgt_slot_ptr
     mov  rbx, rax
+    mov eax,[rel wgt_editor_type]
+    inc eax
+    cmp [rbx+WGI_TYPE],eax
+    jne .legacy_copy
+    mov edi,r12d
+    call wgt_editor_copy
+    jmp .out
+.legacy_copy:
     cmp  dword [rbx + WGI_TYPE], WGT_TYPE_TEXTFIELD
     jne  .bad
     mov  edi, r12d
@@ -4278,6 +4482,7 @@ wgt_declare:
     ; Register the damage-ring reads before the long widget/catalog tail so the
     ; generated bounded CATALOG cannot truncate their discoverability.
     call cadence_mark_declare
+    call wgt_editor_register            ; A3 stretch: one bounded public editor type
     push rbx
     xor  ebx, ebx                      ; goes negative if any register returns -1
     lea  rdi, [rel str_verb_widgettypes]
@@ -4557,20 +4762,25 @@ cmd_verb_widgetnew:
     mov  edi, ebx
     call wgt_out_dec
     jmp  .stage
-.badtype:
+.badtype:                              ; G-11: each refusal keeps its text and gets its own code
     lea  rdi, [rel str_wo_e_type]
     call wgt_out_str
-    jmp  .stage
+    mov  ebx, CMDE_BADARG
+    jmp  .staged
 .badwin:
     lea  rdi, [rel str_wo_e_win]
     call wgt_out_str
-    jmp  .stage
+    mov  ebx, CMDE_BADSEL
+    jmp  .staged
 .full:
     lea  rdi, [rel str_wo_e_full]
     call wgt_out_str
+    mov  ebx, CMDE_BUSY
+    jmp  .staged
 .stage:
-    mov  byte [rel wgt_out_ready], 1
     mov  ebx, CMDE_OK
+.staged:
+    mov  byte [rel wgt_out_ready], 1
     jmp  .reply
 .locked:
     call wgt_refuse_locked             ; EBX = the reply code
@@ -4609,7 +4819,24 @@ wgt_refuse_stage:
 ;   + store + repaint dispatch through the element's TYPE vtable.
 ; ---------------------------------------------------------------------------
 cmd_verb_widgetset:
+%ifndef PAOS_PUBLICITY_LAB_PROFILE
+%define PAOS_PUBLICITY_LAB_PROFILE 0
+%endif
+%if PAOS_PUBLICITY_LAB_PROFILE
+    mov byte [rel wgt_change_active],0
+%endif
     call cmd_handler_prologue
+    cmp qword [rel wgt_terminal_fill_op],0
+    je .ordinary
+    push rdi
+    push rsi
+    call [rel wgt_terminal_fill_op]
+    pop rsi
+    pop rdi
+    cmp eax,-1
+    je .ordinary
+    ret
+.ordinary:
     push rdi
     push rsi
     push rbx
@@ -4650,6 +4877,11 @@ cmd_verb_widgetset:
     mov  rdi, r13
     call wgt_tok_split                 ; r13 token NUL-split, rax = value start
     mov  r14, rax                      ; r14 = value (rest of line)
+%if PAOS_PUBLICITY_LAB_PROFILE
+    call wgt_toggle_condition          ; optional compare-before mutation; same SET below
+    test eax,eax
+    jnz .badfield
+%endif
     mov  rdi, r13
     lea  rsi, [rel wgt_field_rect]
     call strcmp
@@ -4718,6 +4950,13 @@ cmd_verb_widgetset:
     mov  [rax + WGI_SEL_LO], ebx
     mov  [rax + WGI_SEL_HI], edx
 .set_ok:
+%if PAOS_PUBLICITY_LAB_PROFILE
+    cmp byte [rel wgt_change_active],1
+    jne .ordinary_result
+    call wgt_toggle_change_result
+    jmp .stage
+.ordinary_result:
+%endif
     lea  rdi, [rel str_wo_set]         ; " widget set id="
     call wgt_out_str
     mov  edi, r12d
@@ -4733,20 +4972,25 @@ cmd_verb_widgetset:
     mov  edi, [rax + WGI_VLEN]
     call wgt_out_dec
     jmp  .stage
-.badid:
+.badid:                                ; G-11: each refusal keeps its text and gets its own code
     lea  rdi, [rel str_wo_e_id]
     call wgt_out_str
-    jmp  .stage
+    mov  ebx, CMDE_BADSEL
+    jmp  .staged
 .badfield:
     lea  rdi, [rel str_wo_e_field]
     call wgt_out_str
-    jmp  .stage
+    mov  ebx, CMDE_BADARG
+    jmp  .staged
 .oversize:
     lea  rdi, [rel str_wo_e_size]
     call wgt_out_str
+    mov  ebx, CMDE_BADARG
+    jmp  .staged
 .stage:
-    mov  byte [rel wgt_out_ready], 1
     mov  ebx, CMDE_OK
+.staged:
+    mov  byte [rel wgt_out_ready], 1
     jmp  .reply
 .locked:
     call wgt_refuse_locked             ; EBX = the reply code
@@ -4799,6 +5043,58 @@ cmd_verb_widgetget:
     je   .badfield
     mov  rdi, r13
     call wgt_tok_split                 ; NUL-terminate the field token
+    ; Metadata-only census. Never consult a value getter, selection or secret
+    ; storage; the existing native dispatch/read authority still owns entry.
+    lea rdi,[rel str_wf_value_gate]
+    mov rsi,r13
+    call strcmp
+    test eax,eax
+    jz .get_value_gate
+    lea rdi,[rel str_wf_mutation_gate]
+    mov rsi,r13
+    call strcmp
+    test eax,eax
+    jz .get_mutation_gate
+    lea rdi,[rel str_wf_sensitive_effect]
+    mov rsi,r13
+    call strcmp
+    test eax,eax
+    jz .get_sensitive_effect
+    lea rdi,[rel str_wf_sensitive_state]
+    mov rsi,r13
+    call strcmp
+    test eax,eax
+    jz .get_sensitive_state
+    lea rdi,[rel str_wf_provider_state]
+    mov rsi,r13
+    call strcmp
+    test eax,eax
+    jz .get_provider_state
+    lea  rdi, [rel str_wf_guard_state]
+    mov  rsi, r13
+    call strcmp
+    test eax,eax
+    jz .get_guard_state
+    lea  rdi, [rel str_wf_census]
+    mov  rsi, r13
+    call strcmp
+    test eax, eax
+    jz   .get_census
+    lea  rdi, [rel str_wf_content]
+    mov  rsi, r13
+    call strcmp
+    test eax, eax
+    jz   .get_content
+    lea  rdi, [rel str_wf_content_mode]
+    mov  rsi, r13
+    call strcmp
+    test eax, eax
+    jz   .get_content_mode
+    lea  rdi, [rel str_wf_content_refusal]
+    mov  rsi, r13
+    call strcmp
+    test eax, eax
+    jz   .get_content_refusal
     lea  rdi, [rel str_wf_role]
     mov  rsi, r13
     call strcmp
@@ -4850,6 +5146,57 @@ cmd_verb_widgetget:
     jz   .badfield
     mov  rbx, rax                      ; live value ptr
     jmp  .emit
+.get_content:
+    xor  edx, edx
+    jmp  .content_dispatch
+.get_content_mode:
+    mov  edx, 1
+    jmp  .content_dispatch
+.get_content_refusal:
+    mov  edx, 2
+.content_dispatch:
+    mov  edi, r12d
+    mov  rsi, [rsp + 32]               ; original nested request, not a new principal
+    call wgt_content_emit
+    test eax, eax
+    jz   .badfield
+    jmp  .stage
+.get_value_gate:
+    mov edi,r12d
+    mov rsi,[rsp+32]                ; same original nested caller, never ambient grant
+    call wgt_value_access_emit
+    jmp .stage
+.get_mutation_gate:
+    mov edi,r12d
+    mov rsi,[rsp+32]                ; same nested original caller
+    call wgt_access_emit
+    jmp .stage
+.get_sensitive_effect:
+    mov edi,r12d
+    mov rsi,[rsp+32]
+    call wgt_sensitive_effect
+    jmp .stage
+.get_sensitive_state:
+    mov edi,r12d
+    mov rsi,[rsp+32]
+    call wgt_sensitive_emit
+    jmp .stage
+.get_provider_state:
+    mov edi,r12d
+    mov rsi,[rsp+32]
+    call wgt_provider_emit
+    jmp .stage
+.get_guard_state:
+    mov edi,r12d
+    mov rsi,[rsp+32]
+    call wgt_guard_emit
+    jmp .stage
+.get_census:
+    mov  edi, r12d
+    call wgt_census_emit
+    test eax, eax
+    jz   .badid
+    jmp  .stage
 .get_role:
     mov  edi, r12d
     call wgt_slot_ptr
@@ -4919,14 +5266,19 @@ cmd_verb_widgetget:
     mov  rdi, rbx
     call wgt_out_str
     jmp  .stage
-.badid:
+.badid:                                ; G-11: each refusal keeps its text and gets its own code
     lea  rdi, [rel str_wo_e_id]
     call wgt_out_str
-    jmp  .stage
+    mov  edx, CMDE_BADSEL
+    jmp  .staged
 .badfield:
     lea  rdi, [rel str_wo_e_field]
     call wgt_out_str
+    mov  edx, CMDE_BADARG
+    jmp  .staged
 .stage:
+    xor  edx, edx                      ; CMDE_OK
+.staged:
     mov  byte [rel wgt_out_ready], 1
     pop  r13
     pop  r12
@@ -4935,10 +5287,933 @@ cmd_verb_widgetget:
     pop  rdi
     mov  rax, [rdi + REQ_ARG]
     mov  [rsi + RSP_VAL], rax
-    mov  qword [rsi + RSP_CODE], CMDE_OK
+    mov  [rsi + RSP_CODE], rdx           ; EDX was zero-extended into RDX
     ret
 
 ; ---------------------------------------------------------------------------
+; One bounded native instance observation. Lifetime is the actual allocator's
+; per-slot birth serial, never an interaction counter. Hex strings are exactly
+; the already-public role/label metadata; values and their lengths are withheld
+; even for local OWNER. Null/oversize labels are explicit, never silent clips.
+; No claim about current write authority is made by the static read capability.
+wgt_census_emit:
+    push rbx
+    push r12
+    push r13
+    mov  r12d, edi
+    call wgt_birth_lifetime
+    test rax, rax
+    jz   .bad
+    mov  r13, rax
+    mov  edi, r12d
+    call wgt_slot_ptr
+    mov  rbx, rax
+    lea  rdi, [rel str_wc_start]
+    call wgt_out_str
+    mov  edi, r12d
+    call wgt_out_dec
+    lea  rdi, [rel str_wc_life]
+    call wgt_out_str
+    mov  rdi, r13
+    call wgt_out_dec
+    lea  rdi, [rel str_wo_win]
+    call wgt_out_str
+    mov  edi, [rbx + WGI_WIN]
+    call wgt_out_dec
+    lea  rdi, [rel str_wc_type]
+    call wgt_out_str
+    mov  edi, [rbx + WGI_TYPE]
+    call wgt_out_dec
+    lea  rdi, [rel str_wc_flags]
+    call wgt_out_str
+    mov  edi, [rbx + WGI_FLAGS]
+    call wgt_out_dec
+    lea  rdi, [rel str_wc_role]
+    call wgt_out_str
+    mov  rdi, [rbx + WGI_ROLE]
+    call wgt_census_hex
+    mov  r13d, eax
+    lea  rdi, [rel str_wc_role_complete]
+    call wgt_out_str
+    mov  edi, r13d
+    call wgt_out_dec
+    lea  rdi, [rel str_wc_label]
+    call wgt_out_str
+    mov  rdi, [rbx + WGI_LABEL]
+    call wgt_census_hex
+    mov  r13d, eax
+    lea  rdi, [rel str_wc_label_complete]
+    call wgt_out_str
+    mov  edi, r13d
+    call wgt_out_dec
+    lea  rdi, [rel str_wc_end]
+    call wgt_out_str
+    mov  eax, 1
+    jmp  .out
+.bad:
+    xor  eax, eax
+.out:
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+
+; Finite typed-content witnesses: stock button public text/boolean state and
+; public stock label/textfield and registered status/col text; row/grid/separator/console_grid geometry;
+; registered secret geometry with a fixed withheld value (no value-derived byte);
+; toggle/slider/numeric scalar metadata.
+; Registered public listview selection/scroll use the shipped getter only with
+; absent or original naming-picker hook (unhandled fields fall through). No items
+; or other type values/lengths are read; unknown hooks withhold. The original WIDGETGET dispatch owns read admission;
+; supported SET fields are grammar metadata, not a current authorization grant.
+; RSI is the original request preserved through HOOK's nested dispatch. These
+; source/principal words are observation context, not independent consent proof.
+wgt_content_emit:
+    push rbp
+    mov  ebp, edx                      ; 0 content, 1 chart mode, 2 image refusal
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    xor  r15d, r15d                    ; status1/progress2/listview3/chart4/mode5/col6/overlay7/menu8/tabstrip9/image10/refusal11/row12/grid13/separator14/console_grid15/secret16
+    mov  r12d, edi
+    mov  r14, rsi
+    call wgt_birth_lifetime
+    test rax, rax
+    jz   .bad
+    mov  r13, rax
+    mov  edi, r12d
+    call wgt_slot_ptr
+    mov  rbx, rax
+    cmp  dword [rbx + WGI_TYPE], WGT_TYPE_BUTTON
+    je   .supported
+    cmp  dword [rbx + WGI_TYPE], WGT_TYPE_LABEL
+    je   .public_text
+    cmp  dword [rbx + WGI_TYPE], WGT_TYPE_TEXTFIELD
+    je   .public_text
+    ; A dynamic registration index is not a stock type number. Require the
+    ; actual registered toggle/slider/numeric/status/col/progress/listview/chart row/name/getter, never another callback.
+    mov  eax, [rbx + WGI_TYPE]
+    dec  eax
+    cmp  eax, WTYPE_MAX
+    jae  .bad
+    cmp  eax, 3
+    jb   .bad
+    cmp eax,[rel wgt_editor_type]
+    je .editor_type
+    cmp  eax, [rel wgt_scalar_toggle_type]
+    je   .toggle_type
+    cmp  eax, [rel wgt_scalar_slider_type]
+    je   .slider_type
+    cmp  eax, [rel wgt_scalar_numeric_type]
+    jne  .status_type
+    lea  rsi, [rel str_wt_numeric]
+    jmp  .scalar_type
+.slider_type:
+    lea  rsi, [rel str_wt_slider]
+    jmp  .scalar_type
+.toggle_type:
+    lea  rsi, [rel str_wt_toggle]
+    jmp .scalar_type
+.editor_type:
+    mov ecx,[rbx+WGI_WIN]
+    call wgt_overlay_host_shown
+    jc .bad
+    lea rsi,[rel str_wt_editor]
+    lea rdx,[rel wgt_editor_get]
+    mov r15d,17
+    jmp .registered_type
+.scalar_type:
+    lea  rdx, [rel wgt_scalar_get]
+    jmp  .registered_type
+.overlay_type:
+    ; Public overlay is its exact current dynamic row, never any label container.
+    test dword [rbx + WGI_FLAGS], 1
+    jz   .bad
+    lea  rsi, [rel str_wt_overlay]
+    lea  rdx, [rel wgt_label_get]
+    mov  r15d, 7
+    jmp  .registered_type
+.tabstrip_type:
+    ; Narrow original public plain tabstrip value; never rendered TS_TITLES.
+    test dword [rbx + WGI_FLAGS], 1
+    jz   .bad
+    cmp  dword [rbx + WGI_LAYER], 0
+    jne  .bad
+    push rax
+    push rcx
+    mov  ecx, [rbx + WGI_WIN]
+    call wgt_overlay_host_shown       ; conservative original focused/unlocked host gate
+    pop  rcx
+    pop  rax                         ; CF and exact dynamic registration preserved
+    jc   .bad
+    lea  rsi, [rel str_wt_tabstrip]
+    lea  rdx, [rel wgt_label_get]
+    mov  r15d, 9
+    jmp  .registered_type
+.menu_type:
+    ; Original menus paint only when open in the visible, paint-safe overlay.
+    ; FLAGS alone is insufficient: the form loader creates closed menus.
+    test dword [rbx + WGI_FLAGS], 1
+    jz   .bad
+    cmp  dword [rbx + WGI_SEL_LO], 1
+    jne  .bad
+    cmp  dword [rbx + WGI_LAYER], 1
+    jne  .bad
+    push rax
+    mov  rax, rbx
+    call wgt_flyout_painted           ; pure original visibility/geometry gate
+    pop  rax                         ; retains CF and exact dynamic type index
+    jc   .bad
+    lea  rsi, [rel str_wt_menu]
+    lea  rdx, [rel wgt_menu_get]        ; menu7: the menu type's exact registered getter
+    mov  r15d, 8
+    jmp  .registered_type
+.image_type:
+    test dword [rbx + WGI_FLAGS], 1
+    jz   .bad
+    cmp  dword [rbx + WGI_LAYER], 0
+    jne  .bad
+    push rax
+    push rcx
+    mov  ecx, [rbx + WGI_WIN]
+    call wgt_overlay_host_shown
+    pop  rcx
+    pop  rax
+    jc   .bad
+    lea  rsi, [rel str_wt_image]
+    lea  rdx, [rel widget_image_get]    ; exact NULL getter identity, never called
+    mov  r15d, 10
+    jmp  .registered_type
+.grid_type:
+    ; Exact current registered grid; geometry uses no label getter/callback.
+    test dword [rbx + WGI_FLAGS], 1
+    jz   .bad
+    lea  rsi, [rel str_wt_grid]
+    lea  rdx, [rel wgt_label_get]
+    mov  r15d, 13
+    jmp  .registered_type
+.separator_type:
+    ; Exact registered separator; compare its null getter, never invoke it.
+    test dword [rbx + WGI_FLAGS], 1
+    jz   .bad
+    lea  rsi, [rel str_wt_separator]
+    lea  rdx, [rel wgt_scalar_null_get]
+    mov  r15d, 14
+    jmp  .registered_type
+.console_grid_type:
+    ; Widget rectangle only: no instance/scratch load, cell read or callback.
+    test dword [rbx + WGI_FLAGS], 1
+    jz   .bad
+    lea  rsi, [rel str_wt_console_grid]
+    lea  rdx, [rel console_grid_get]
+    mov  r15d, 15
+    jmp  .registered_type
+.secret_type:
+    ; Exact registered secret: name and getter compared, never invoked. Only
+    ; the rectangle and a fixed word follow; no VAL/VLEN/CARET/SEL, mask,
+    ; editor buffer, owner or revision is read on this path.
+    test dword [rbx + WGI_FLAGS], 1
+    jz   .bad
+    lea  rsi, [rel str_wgt_secret]
+    lea  rdx, [rel wgt_textfield_get]
+    mov  r15d, 16
+    jmp  .registered_type
+.status_type:
+    cmp  eax, [rel wgt_secret_type]
+    je   .secret_type
+    cmp  eax, [rel grid_type_id]
+    je   .console_grid_type
+    cmp  eax, [rel wgt_scalar_separator_type]
+    je   .separator_type
+    cmp  eax, [rel wgt_grid_type]
+    je   .grid_type
+    cmp  eax, [rel image_type_id]
+    je   .image_type
+    cmp  eax, [rel wgt_tabstrip_type]
+    je   .tabstrip_type
+    cmp  eax, [rel wgt_menu_type]
+    je   .menu_type
+    cmp  eax, [rel wgt_overlay_type]
+    je   .overlay_type
+    cmp  eax, [rel wgt_chart_type]
+    jne  .listview_type_check
+    ; Chart has no hook: call only its exact registered name/getter below.
+    test dword [rbx + WGI_FLAGS], 1
+    jz   .bad
+    lea  rsi, [rel str_wt_chart]
+    lea  rdx, [rel wgt_chart_get]
+    mov  r15d, 4
+    jmp  .registered_type
+.listview_type_check:
+    cmp  eax, [rel wgt_listview_type]
+    jne  .progress_type
+    ; Only the original known hook is safe for these two public uint32 fields.
+    ; naming_picker_get_hook handles items/items.N/selected, not selection/scroll.
+    mov  rdx, [rel wgt_listview_get_hook]
+    test rdx, rdx
+    jz   .listview_type
+    lea  rdi, [rel naming_picker_get_hook]
+    cmp  rdx, rdi
+    jne  .bad
+.listview_type:
+    test dword [rbx + WGI_FLAGS], 1
+    jz   .bad
+    lea  rsi, [rel str_wt_listview]
+    lea  rdx, [rel wgt_listview_get]
+    mov  r15d, 3                    ; disjoint from accepted status1/progress2
+    jmp  .registered_type
+.progress_type:
+    ; Registered progress and status also require current visibility.
+    test dword [rbx + WGI_FLAGS], 1
+    jz   .bad
+    ; Progress has no dedicated type-index global. Match its actual registered
+    ; getter and name; never assume the conventional progress stored type 5.
+    imul r10, rax, WT_SZ
+    lea  rdx, [rel wgt_types]
+    lea  rdi, [rel wgt_progress_get]
+    cmp  [rdx + r10 + WT_GET], rdi
+    jne  .status_text
+    lea  rsi, [rel str_wt_progress]
+    mov  rdx, rdi
+    mov  r15d, 2
+    jmp  .registered_type
+.status_text:
+    ; Shared label_get is insufficient: accept only exact public status/col/row names.
+    lea  rsi, [rel str_wt_status]
+    lea  rdx, [rel wgt_label_get]
+    mov  r15d, 1
+.registered_type:
+    imul rax, rax, WT_SZ
+    lea  r10, [rel wgt_types]
+    cmp  [r10 + rax + WT_GET], rdx
+    jne  .bad
+    mov  rdi, [r10 + rax + WT_NAME]
+    test rdi, rdi
+    jz   .bad
+    call strcmp
+    test rax, rax
+    jz   .public_text
+    ; Only this already-validated label_get branch may also name public col/row.
+    ; Row's painter fills geometry only; never expose its stored label as paint.
+    cmp  r15d, 1
+    jne  .bad
+    mov  eax, [rbx + WGI_TYPE]
+    dec  eax
+    imul rax, rax, WT_SZ
+    lea  r10, [rel wgt_types]
+    mov  rdi, [r10 + rax + WT_NAME]
+    lea  rsi, [rel str_wt_col]
+    call strcmp
+    test rax, rax
+    jz   .col_text
+    mov  eax, [rbx + WGI_TYPE]
+    dec  eax
+    imul rax, rax, WT_SZ
+    lea  r10, [rel wgt_types]
+    mov  rdi, [r10 + rax + WT_NAME]
+    lea  rsi, [rel str_wt_row]
+    call strcmp
+    test rax, rax
+    jnz  .bad
+    mov  r15d, 12                    ; exact registered row surface geometry
+    jmp  .public_text
+.col_text:
+    mov  r15d, 6                    ; exact registered public col text
+.public_text:
+    ; Match the shipped app_widget plain-text exclusion for native security text.
+    test dword [rbx + WGI_EDIT], WGT_EDIT_SECTEXT
+    jnz  .bad
+.supported:
+    ; Do not disclose even if a future configuration binds secret to this row.
+    ; Only the exact registered-secret geometry branch passes, and it emits no
+    ; value-derived byte, so its role is not consulted.
+    mov  eax, [rel wgt_secret_type]
+    inc  eax
+    cmp  eax, [rbx + WGI_TYPE]
+    jne  .not_secret
+    cmp  r15d, 16
+    jne  .bad
+    jmp  .public
+.not_secret:
+    mov  rdi, [rbx + WGI_ROLE]
+    test rdi, rdi
+    jz   .public
+    lea  rsi, [rel str_wgt_role_password]
+    call strcmp
+    test eax, eax
+    jz   .bad
+.public:
+    cmp  ebp, 2
+    jne  .successful_content
+    cmp  r15d, 10
+    jne  .bad
+    mov  edi, r12d
+    call widget_image_refused_state
+    test rax, rax
+    jz   .bad
+    mov  r15d, 11
+    xor  ebp, ebp
+    jmp  .existing_content
+.successful_content:
+    cmp  r15d, 10
+    jne  .existing_content
+    mov  edi, r12d
+    call widget_image_bound_state     ; passive original bind/birth proof only
+    test rax, rax
+    jz   .bad
+.existing_content:
+    test ebp, ebp
+    jz   .emit_identity
+    cmp  r15d, 4                       ; only the exact registered chart seam
+    jne  .bad
+    movzx ebp, byte [rbx + CHART_MODE]
+    cmp  ebp, CHART_MODE_BAR            ; getter otherwise fabricates sparkline
+    ja   .bad                         ; unknown raw mode is unsupported
+    mov  r15d, 5
+.emit_identity:
+    lea  rdi, [rel str_wct_start]
+    call wgt_out_str
+    mov  edi, r12d
+    call wgt_out_dec
+    lea  rdi, [rel str_wc_life]
+    call wgt_out_str
+    mov  rdi, r13
+    call wgt_out_dec
+    lea  rdi, [rel str_wo_win]
+    call wgt_out_str
+    mov  edi, [rbx + WGI_WIN]
+    call wgt_out_dec
+    cmp  dword [rbx + WGI_TYPE], WGT_TYPE_LABEL
+    jbe  .text_context
+    lea  rdi, [rel str_wc_type]
+    call wgt_out_str
+    mov  edi, [rbx + WGI_TYPE]
+    call wgt_out_dec
+    lea  rdi, [rel str_wct_secret_context]
+    cmp  r15d, 16
+    je   .context
+    lea  rdi, [rel str_wct_console_grid_context]
+    cmp  r15d, 15
+    je   .context
+    lea  rdi, [rel str_wct_separator_context]
+    cmp  r15d, 14
+    je   .context
+    lea rdi,[rel str_wed_context]
+    cmp r15d,17
+    je .context
+    lea  rdi, [rel str_wct_grid_context]
+    cmp  r15d, 13
+    je   .context
+    lea  rdi, [rel str_wct_row_context]
+    cmp  r15d, 12
+    je   .context
+    lea  rdi, [rel str_wct_image_refusal_context]
+    cmp  r15d, 11
+    je   .context
+    lea  rdi, [rel str_wct_image_context]
+    cmp  r15d, 10
+    je   .context
+    lea  rdi, [rel str_wct_tabstrip_context]
+    cmp  r15d, 9
+    je   .context
+    lea  rdi, [rel str_wct_menu_context]
+    cmp  r15d, 8
+    je   .context
+    lea  rdi, [rel str_wct_overlay_context]
+    cmp  r15d, 7
+    je   .context
+    lea  rdi, [rel str_wct_col_context]
+    cmp  r15d, 6
+    je   .context
+    lea  rdi, [rel str_wct_chart_mode_context]
+    cmp  r15d, 5
+    je   .context
+    lea  rdi, [rel str_wct_chart_context]
+    cmp  r15d, 4
+    je   .context
+    lea  rdi, [rel str_wct_listview_context]
+    cmp  r15d, 3
+    je   .context
+    lea  rdi, [rel str_wct_progress_context]
+    cmp  r15d, 2
+    je   .context
+    lea  rdi, [rel str_wct_status_context]
+    test r15d, r15d
+    jnz  .context
+    lea  rdi, [rel str_wct_toggle_context]
+    mov  eax, [rbx + WGI_TYPE]
+    dec  eax
+    cmp  eax, [rel wgt_scalar_slider_type]
+    je   .slider_context
+    cmp  eax, [rel wgt_scalar_numeric_type]
+    jne  .context
+    lea  rdi, [rel str_wct_numeric_context]
+    jmp  .context
+.slider_context:
+    lea  rdi, [rel str_wct_slider_context]
+    jmp  .context
+.text_context:
+    lea  rdi, [rel str_wct_context]
+    cmp  dword [rbx + WGI_TYPE], WGT_TYPE_LABEL
+    je   .label_context
+    cmp  dword [rbx + WGI_TYPE], WGT_TYPE_TEXTFIELD
+    jne  .context
+    lea  rdi, [rel str_wct_textfield_context]
+    jmp  .context
+.label_context:
+    lea  rdi, [rel str_wct_label_context]
+.context:
+    call wgt_out_str
+    mov  rdi, [r14 + REQ_SOURCE]
+    call wgt_out_dec
+    lea  rdi, [rel str_wct_principal]
+    call wgt_out_str
+    mov  rdi, [r14 + REQ_PRINCIPAL]
+    call wgt_out_dec
+    cmp r15d,17
+    jne .legacy_content
+    mov edi,r12d
+    call wgt_editor_content
+    jmp .out
+.legacy_content:
+    cmp  r15d, 16
+    je   .row_geometry
+    cmp  r15d, 15
+    je   .row_geometry
+    cmp  r15d, 14
+    je   .row_geometry
+    cmp  r15d, 13
+    je   .row_geometry
+    cmp  r15d, 12
+    je   .row_geometry
+    cmp  r15d, 11
+    je   .image_refusal_value
+    cmp  r15d, 10
+    je   .image_value
+    cmp  r15d, 5
+    je   .chart_mode_value
+    cmp  r15d, 4
+    je   .chart_value
+    cmp  r15d, 3
+    je   .listview_value
+    cmp  r15d, 2
+    je   .progress_value
+    test r15d, r15d
+    jnz  .text_value
+    cmp  dword [rbx + WGI_TYPE], WGT_TYPE_LABEL
+    ja   .toggle_value
+.text_value:
+    cmp  r15d, 8
+    jne  .text_bytes
+    lea  rdi, [rel str_wct_menu_open]
+    call wgt_out_str
+.text_bytes:
+    lea  rdi, [rel str_wct_text]
+    call wgt_out_str
+    mov  edi, r12d
+    lea  rsi, [rel str_wf_value]
+    test r15d, r15d
+    jnz  .label_value
+    cmp  dword [rbx + WGI_TYPE], WGT_TYPE_LABEL
+    je   .label_value
+    cmp  dword [rbx + WGI_TYPE], WGT_TYPE_TEXTFIELD
+    je   .textfield_value
+    call wgt_button_get                 ; exact stock getter, no app callback field
+    jmp  .value
+.label_value:
+    cmp  r15d, 8
+    jne  .label_stock
+    call wgt_menu_get                   ; a menu's whole text: over 31 B emits '-' and complete0, never a cut
+    jmp  .value
+.label_stock:
+    call wgt_label_get                  ; exact stock value/text getter, no callback
+    jmp  .value
+.textfield_value:
+    call wgt_textfield_get              ; exact value getter owns inline/long-buffer choice
+.value:
+    mov  rdi, rax
+    call wgt_census_hex                 ; preflight31; oversize emits no prefix
+    mov  r13d, eax
+    lea  rdi, [rel str_wct_complete]
+    call wgt_out_str
+    mov  edi, r13d
+    call wgt_out_dec
+    cmp  dword [rbx + WGI_TYPE], WGT_TYPE_TEXTFIELD
+    je   .textfield_fields
+    cmp  dword [rbx + WGI_TYPE], WGT_TYPE_BUTTON
+    jne  .label_end                     ; label/menu advertise no button state or mutation
+    lea  rdi, [rel str_wct_disabled]
+    call wgt_out_str
+    xor  edi, edi
+    test dword [rbx + WGI_EDIT], WGT_EDIT_DISABLED
+    setnz dil
+    call wgt_out_dec
+    lea  rdi, [rel str_wct_open]
+    call wgt_out_str
+    xor  edi, edi
+    test dword [rbx + WGI_EDIT], WGT_EDIT_OPEN
+    setnz dil
+    call wgt_out_dec
+    lea  rdi, [rel str_wct_end]
+    jmp  .emit_end
+.textfield_fields:
+    ; Existing stock getters only, behind the same public text guards. Emit
+    ; each scratch-buffer result before calling the next getter. No submit,
+    ; setter, callback or mutation-authority decision is performed here.
+    lea  rdi, [rel str_wct_disabled]
+    call wgt_out_str
+    mov  edi, r12d
+    lea  rsi, [rel str_wf_disabled]
+    call wgt_textfield_get
+    mov  rdi, rax
+    call wgt_out_str
+    lea  rdi, [rel str_wct_submits]
+    call wgt_out_str
+    mov  edi, r12d
+    lea  rsi, [rel str_wf_submits]
+    call wgt_textfield_get
+    mov  rdi, rax
+    call wgt_out_str
+    lea  rdi, [rel str_wct_textfield_end]
+    jmp  .emit_end
+.row_geometry:
+    ; Exactly the uint32 rectangle consumed by wgt_container_draw. No getter,
+    ; callback, text, child-list, layout or mutation-authority claim is added.
+    ; Exact grid also reports its immutable declared uint32 rows/cols below.
+    lea  rdi, [rel str_wct_row_x]
+    call wgt_out_str
+    mov  edi, [rbx + WGI_X]
+    call wgt_out_dec
+    lea  rdi, [rel str_wct_row_y]
+    call wgt_out_str
+    mov  edi, [rbx + WGI_Y]
+    call wgt_out_dec
+    lea  rdi, [rel str_wct_row_w]
+    call wgt_out_str
+    mov  edi, [rbx + WGI_W]
+    call wgt_out_dec
+    lea  rdi, [rel str_wct_row_h]
+    call wgt_out_str
+    mov  edi, [rbx + WGI_H]
+    call wgt_out_dec
+    cmp  r15d, 15                      ; exact registered console_grid only
+    jne  .declared_grid
+    mov  edi, r12d
+    call console_grid_content_state    ; passive existing instance, no allocation
+    test eax, eax
+    jz   .geometry_end                ; legacy rectangle remains incomplete
+    lea  rdi, [rel str_wct_console_grid_end]
+    jmp  .emit_end
+.declared_grid:
+    cmp  r15d, 16                      ; exact registered secret: fixed word only
+    jne  .not_secret_geometry
+    lea  rdi, [rel str_wct_secret_end]
+    jmp  .emit_end
+.not_secret_geometry:
+    cmp  r15d, 13                      ; only exact registered grid content
+    jne  .geometry_end
+    ; Original immutable declaration, already reported by TREE. No child
+    ; traversal, layout recomputation, callback or permission claim.
+    lea  rdi, [rel str_wct_grid_rows]
+    call wgt_out_str
+    mov  edi, [rbx + WGI_ROWS]
+    call wgt_out_dec
+    lea  rdi, [rel str_wct_grid_cols]
+    call wgt_out_str
+    mov  edi, [rbx + WGI_COLS]
+    call wgt_out_dec
+.geometry_end:
+    lea  rdi, [rel str_wct_row_end]
+    jmp  .emit_end
+.toggle_value:
+    lea  rdi, [rel str_wct_toggle_value]
+    call wgt_out_str
+    mov  edi, r12d
+    lea  rsi, [rel str_wf_value]
+    call wgt_scalar_get                 ; actual uint64 decimal getter, no setter/callback
+    mov  rdi, rax
+    call wgt_out_str
+    mov  eax, [rbx + WGI_TYPE]
+    dec  eax
+    cmp  eax, [rel wgt_scalar_slider_type]
+    je   .slider_range
+    cmp  eax, [rel wgt_scalar_numeric_type]
+    je   .slider_range
+    lea  rdi, [rel str_wct_toggle_end]
+    jmp  .emit_end
+.slider_range:
+    ; Read each uint64 through the original getter before its shared buffer is
+    ; reused. Report raw metadata, including invalid models; never clamp or set.
+    lea  rdi, [rel str_wct_slider_min]
+    call wgt_out_str
+    mov  edi, r12d
+    lea  rsi, [rel str_scalar_min]
+    call wgt_scalar_get
+    mov  rdi, rax
+    call wgt_out_str
+    lea  rdi, [rel str_wct_slider_max]
+    call wgt_out_str
+    mov  edi, r12d
+    lea  rsi, [rel str_scalar_max]
+    call wgt_scalar_get
+    mov  rdi, rax
+    call wgt_out_str
+    lea  rdi, [rel str_wct_slider_step]
+    call wgt_out_str
+    mov  edi, r12d
+    lea  rsi, [rel str_scalar_step]
+    call wgt_scalar_get
+    mov  rdi, rax
+    call wgt_out_str
+    lea  rdi, [rel str_wct_slider_end]
+    jmp  .emit_end
+.image_refusal_value:
+    lea  rdi, [rel str_wct_image_birth]
+    call wgt_out_str
+    mov  rdi, r13
+    call wgt_out_dec
+    lea  rdi, [rel str_wct_image_refusal]
+    call wgt_out_str
+    mov  edi, r12d
+    call widget_image_state_ptr
+    mov  edi, [rax + 12]
+    sub  edi, 0x100                    ; validated original IMG_E_* enum only
+    call wgt_out_dec
+    lea  rdi, [rel str_wct_image_refusal_end]
+    jmp  .emit_end
+.image_value:
+    ; The getter remains NULL. Read only the proven bound safe-state scalars;
+    ; no asset pointer/name, pixel, decoder/cache/painter or replacement getter.
+    lea  rdi, [rel str_wct_image_birth]
+    call wgt_out_str
+    mov  rdi, r13
+    call wgt_out_dec
+    lea  rdi, [rel str_wct_image_fit]
+    call wgt_out_str
+    mov  edi, r12d
+    call widget_image_state_ptr
+    mov  edi, [rax + 8]
+    call wgt_out_dec
+    lea  rdi, [rel str_wct_image_load]
+    call wgt_out_str
+    mov  edi, r12d
+    call widget_image_state_ptr
+    mov  edi, [rax + 12]
+    call wgt_out_dec
+    lea  rdi, [rel str_wct_image_natural_w]
+    call wgt_out_str
+    mov  edi, r12d
+    call widget_image_state_ptr
+    mov  edi, [rax + 16]
+    call wgt_out_dec
+    lea  rdi, [rel str_wct_image_natural_h]
+    call wgt_out_str
+    mov  edi, r12d
+    call widget_image_state_ptr
+    mov  edi, [rax + 20]
+    call wgt_out_dec
+    lea  rdi, [rel str_wct_image_output_w]
+    call wgt_out_str
+    mov  edi, r12d
+    call widget_image_state_ptr
+    mov  edi, [rax + 24]
+    call wgt_out_dec
+    lea  rdi, [rel str_wct_image_output_h]
+    call wgt_out_str
+    mov  edi, r12d
+    call widget_image_state_ptr
+    mov  edi, [rax + 28]
+    call wgt_out_dec
+    lea  rdi, [rel str_wct_image_end]
+    jmp  .emit_end
+.progress_value:
+    ; Original uint64 getter owns its shared decimal buffer. Emit each result
+    ; before the next read; no clamp, setter, job, painter or timer operation.
+    lea  rdi, [rel str_wct_toggle_value]
+    call wgt_out_str
+    mov  edi, r12d
+    lea  rsi, [rel str_pg_value]
+    call wgt_progress_get
+    mov  rdi, rax
+    call wgt_out_str
+    lea  rdi, [rel str_wct_slider_max]
+    call wgt_out_str
+    mov  edi, r12d
+    lea  rsi, [rel str_pg_max]
+    call wgt_progress_get
+    mov  rdi, rax
+    call wgt_out_str
+    lea  rdi, [rel str_wct_progress_text_mode]
+    call wgt_out_str
+    mov  edi, r12d
+    lea  rsi, [rel str_pg_text_mode]
+    call wgt_progress_get
+    mov  rdi, rax
+    call wgt_out_str
+    lea  rdi, [rel str_wct_progress_indeterminate]
+    call wgt_out_str
+    mov  edi, r12d
+    lea  rsi, [rel str_pg_indeterminate]
+    call wgt_progress_get
+    mov  rdi, rax
+    call wgt_out_str
+    lea  rdi, [rel str_wct_progress_cadence]
+    call wgt_out_str
+    mov  edi, r12d
+    lea  rsi, [rel str_pg_cadence]
+    call wgt_progress_get
+    mov  rdi, rax
+    call wgt_out_str
+    lea  rdi, [rel str_wct_progress_phase]
+    call wgt_out_str
+    mov  edi, r12d
+    lea  rsi, [rel str_pg_phase]
+    call wgt_progress_get
+    mov  rdi, rax
+    call wgt_out_str
+    lea  rdi, [rel str_wct_progress_ticks]
+    call wgt_out_str
+    mov  edi, r12d
+    lea  rsi, [rel str_pg_ticks]
+    call wgt_progress_get
+    mov  rdi, rax
+    call wgt_out_str
+    lea  rdi, [rel str_wct_progress_job_id]
+    call wgt_out_str
+    mov  edi, r12d
+    lea  rsi, [rel str_pg_job]
+    call wgt_progress_get
+    mov  rdi, rax
+    call wgt_out_str
+    lea  rdi, [rel str_wct_progress_end]
+    jmp  .emit_end
+.listview_value:
+    ; Exact original getters, each reply emitted before the shared buffer reuses.
+    lea  rdi, [rel str_wct_listview_selection]
+    call wgt_out_str
+    mov  edi, r12d
+    lea  rsi, [rel str_lv_selection]
+    call wgt_listview_get
+    mov  rdi, rax
+    call wgt_out_str
+    lea  rdi, [rel str_wct_listview_scroll]
+    call wgt_out_str
+    mov  edi, r12d
+    lea  rsi, [rel str_lv_scroll]
+    call wgt_listview_get
+    mov  rdi, rax
+    call wgt_out_str
+    lea  rdi, [rel str_wct_listview_end]
+    jmp  .emit_end
+.chart_mode_value:
+    ; Raw enum validated before any output/getter. No series, text or callback.
+    lea  rdi, [rel str_wct_chart_mode_raw]
+    call wgt_out_str
+    mov  edi, ebp
+    call wgt_out_dec
+    lea  rdi, [rel str_wct_chart_mode]
+    call wgt_out_str
+    mov  edi, r12d
+    lea  rsi, [rel str_chart_mode]
+    call wgt_chart_get
+    mov  rdi, rax
+    call wgt_out_str
+    lea  rdi, [rel str_wct_chart_mode_end]
+    jmp  .emit_end
+.chart_value:
+    ; Original count/scale plus a complete validated existing ring when bound.
+    ; The passive leaf never allocates, mutates or invokes an app callback.
+    ; Emit each shared decimal buffer before the next getter reuses it.
+    lea  rdi, [rel str_wct_chart_count]
+    call wgt_out_str
+    mov  edi, r12d
+    lea  rsi, [rel str_chart_count]
+    call wgt_chart_get
+    mov  rdi, rax
+    call wgt_out_str
+    lea  rdi, [rel str_wct_chart_scale]
+    call wgt_out_str
+    mov  edi, r12d
+    lea  rsi, [rel str_chart_scale]
+    call wgt_chart_get
+    mov  rdi, rax
+    call wgt_out_str
+    mov  edi, r12d
+    call wgt_chart_content_samples
+    test eax, eax
+    jz   .chart_legacy_end
+    lea  rdi, [rel str_wct_chart_samples_end]
+    jmp  .emit_end
+.chart_legacy_end:
+    lea  rdi, [rel str_wct_chart_end]
+    jmp  .emit_end
+.label_end:
+    lea  rdi, [rel str_wct_label_end]
+.emit_end:
+    call wgt_out_str
+    mov  eax, 1
+    jmp  .out
+.bad:
+    xor  eax, eax
+.out:
+    pop  r15
+    pop  r14
+    pop  r13
+    pop  r12
+    pop  rbx
+    pop  rbp
+    ret
+
+; EDI text -> EAX complete. At most31 public metadata bytes ->62 hex bytes.
+; Preflight before output: oversize emits '-' and complete0, no partial string.
+; The whole census is <384 bytes, below the native and hook output capacities.
+wgt_census_hex:
+    test rdi, rdi
+    jz   .absent
+    xor  ecx, ecx
+.length:
+    cmp  byte [rdi + rcx], 0
+    je   .known
+    cmp  ecx, 31
+    jae  .oversize
+    inc  ecx
+    jmp  .length
+.known:
+    test ecx, ecx
+    jz   .absent
+    mov  r8, [rel wgt_out_cur]
+    xor  edx, edx
+.hex:
+    movzx eax, byte [rdi + rdx]
+    mov  r9d, eax
+    shr  eax, 4
+    and  r9d, 15
+    lea  r10, [rel str_wc_digits]
+    mov  al, [r10 + rax]
+    mov  [r8], al
+    mov  al, [r10 + r9]
+    mov  [r8 + 1], al
+    add  r8, 2
+    inc  edx
+    cmp  edx, ecx
+    jb   .hex
+    mov  byte [r8], 0
+    mov  [rel wgt_out_cur], r8
+    mov  eax, 1
+    ret
+.oversize:
+    lea  rdi, [rel str_wc_absent]
+    call wgt_out_str
+    xor  eax, eax
+    ret
+.absent:
+    lea  rdi, [rel str_wc_absent]
+    call wgt_out_str
+    mov  eax, 1
+    ret
+
 ; wgt_secret_hidden(EDI=widget id, RSI=request or 0 for the in-flight frame)
 ; -> EAX 1 = this read must not return the widget's value: a secret-class
 ; widget (the kit's secret type, or role "password") read in a remote frame
@@ -5046,7 +6321,13 @@ cmd_verb_widgetlist:
     call wgt_secret_hidden
     mov  r8d, eax
     mov  rax, rbx
+    call wgt_menu_text_ptr             ; a live menu's whole text
+    lea  rcx, [rbx + WGI_VAL]
+    cmp  rax, rcx
+    jne  .val_have
+    mov  rax, rbx
     call wgt_tf_buf                    ; RCQ-38 L3c: a long field's value
+.val_have:
     mov  rdi, rax
     test r8d, r8d
     jz   .val
@@ -5576,6 +6857,7 @@ wgt_secret_bytes: times 128 db 0
 wgt_key_filter: dq 0
 wgt_click_hook: dq 0
 wgt_form_event_hook: dq 0              ; trusted data-event observer, independent of click chain
+wgt_button_paint_hook: dq 0             ; native cached button content, no guest setter
 wgt_text_paint_hook: dq 0               ; boot-installed public label/button adapter
 wgt_button_open_hook: dq 0
 wgt_button_get_hook: dq 0
@@ -5603,6 +6885,10 @@ wgt_capture_btn:  db 0                  ; button of the captured gesture: 0 left
 align 8
 wgt_tbl:       times (WGT_MAX * WGI_SZ) db 0
 wgt_count:      dd 0
+align 8
+wgt_birth_serial: times WGT_MAX dq 0
+wgt_menu_text:    times (WGT_MAX * WGT_MENU_ENTRY) db 0   ; per widget id; valid only at its live birth serial
+wgt_terminal_fill_op: dq 0
 wgt_alloc_next: dd -1                  ; WK-B7B: next id of an active form reservation, -1 = append
 align 8
 wgt_rz_tbl:     times (WGT_MAX * WRZ_SZ) db 0   ; per-widget resize anchor records (wgt_resize_window)
@@ -5642,6 +6928,89 @@ str_wf_role:      db "role", 0
 str_wf_intent:    db "intent", 0
 str_wf_intent_seq: db "intent_seq", 0
 str_wf_sel:       db "sel", 0
+str_wf_content: db "content", 0
+str_wf_content_mode: db "content_mode", 0
+str_wf_content_refusal: db "content_refusal", 0
+str_wct_image_refusal_context: db " kind=image_refusal source=",0
+str_wct_image_refusal: db " refusal=",0
+str_wct_image_refusal_end: db " read=bound_refusal set=unchecked authority=unchecked action=na end=1",0
+str_wct_start: db " widget content v=1 id=", 0
+str_wct_context: db " type=1 source=", 0
+str_wct_label_context: db " type=3 source=", 0
+str_wct_textfield_context: db " type=2 source=", 0
+str_wct_toggle_context: db " kind=toggle source=", 0
+str_wct_slider_context: db " kind=slider source=", 0
+str_wct_numeric_context: db " kind=numeric source=", 0
+
+str_wct_chart_mode_context: db " kind=chart_mode source=", 0
+str_wct_chart_mode_raw: db " mode_raw=", 0
+str_wct_chart_mode: db " mode=", 0
+str_wct_chart_mode_end: db " read=mode set=unchecked authority=unchecked action=na end=1", 0
+str_wct_chart_context: db " kind=chart source=", 0
+str_wct_chart_count: db " count=", 0
+str_wct_chart_scale: db " scale=", 0
+str_wct_chart_end: db " read=count,scale set=unchecked authority=unchecked action=na end=1", 0
+str_wct_chart_samples_end: db " read=count,scale,samples set=unchecked authority=unchecked action=na end=1", 0
+str_wct_listview_context: db " kind=listview source=", 0
+str_wct_listview_selection: db " selection=", 0
+str_wct_listview_scroll: db " scroll=", 0
+str_wct_listview_end: db " read=selection,scroll set=unchecked authority=unchecked action=na end=1", 0
+
+str_wct_tabstrip_context: db " kind=tabstrip source=", 0
+str_wct_menu_context: db " kind=menu source=", 0
+str_wct_menu_open: db " open=1", 0
+str_wct_overlay_context: db " kind=overlay source=", 0
+str_wct_col_context: db " kind=col source=", 0
+str_wct_secret_context: db " kind=secret source=", 0
+str_wct_secret_end: db " value=withheld read=geometry set=unchecked authority=unchecked action=na end=1", 0
+str_wct_console_grid_context: db " kind=console_grid source=", 0
+str_wct_console_grid_end: db " read=geometry,grid_handle,cols,rows set=unchecked authority=unchecked action=na end=1", 0
+str_wct_separator_context: db " kind=separator source=", 0
+str_wct_grid_context: db " kind=grid source=", 0
+str_wct_row_context: db " kind=row source=", 0
+str_wct_row_x: db " x=", 0
+str_wct_row_y: db " y=", 0
+str_wct_row_w: db " w=", 0
+str_wct_row_h: db " h=", 0
+str_wct_grid_rows: db " rows=", 0
+str_wct_grid_cols: db " cols=", 0
+str_wct_row_end: db " read=geometry set=unchecked authority=unchecked action=na end=1", 0
+str_wct_status_context: db " kind=status source=", 0
+str_wct_progress_context: db " kind=progress source=", 0
+str_wct_progress_text_mode: db " text_mode=", 0
+str_wct_progress_indeterminate: db " indeterminate=", 0
+str_wct_progress_cadence: db " cadence=", 0
+str_wct_progress_phase: db " phase=", 0
+str_wct_progress_ticks: db " ticks=", 0
+str_wct_progress_job_id: db " job_id=", 0
+str_wct_progress_end: db " read=value,max,text_mode,indeterminate,cadence,phase,ticks,job_id builtin_set=value,max,text_mode,indeterminate,cadence,job_id set=unchecked authority=unchecked action=na end=1", 0
+str_wct_slider_min: db " min=", 0
+str_wct_slider_max: db " max=", 0
+str_wct_slider_step: db " step=", 0
+str_wct_slider_end: db " read=value,min,max,step set=unchecked authority=unchecked action=na end=1", 0
+str_wct_toggle_value: db " value=", 0
+str_wct_toggle_end: db " read=value set=unchecked authority=unchecked action=na end=1", 0
+str_wct_principal: db " principal=", 0
+str_wct_text: db " text_hex=", 0
+str_wct_complete: db " text_complete=", 0
+str_wct_disabled: db " disabled=", 0
+str_wct_submits: db " submits=", 0
+str_wct_textfield_end: db " read=value,text,disabled,submits builtin_set=value,text,disabled set=unchecked authority=unchecked action=na end=1", 0
+str_wct_open: db " open=", 0
+str_wct_end: db " read=value,disabled,open set=value,disabled authority=unchecked action=na end=1", 0
+str_wct_label_end: db " read=value,text set=unchecked authority=unchecked action=na end=1", 0
+str_wf_census:    db "census", 0
+str_wc_start: db " widget census v=1 id=", 0
+str_wc_life: db " life=", 0
+str_wc_type: db " type=", 0
+str_wc_flags: db " flags=", 0
+str_wc_role: db " role_hex=", 0
+str_wc_role_complete: db " role_complete=", 0
+str_wc_label: db " label_hex=", 0
+str_wc_label_complete: db " label_complete=", 0
+str_wc_end: db " content=withheld read=census set=unchecked end=1", 0
+str_wc_digits: db "0123456789abcdef", 0
+str_wc_absent: db "-", 0
 str_wf_submits:   db "submits", 0
 str_wt_demo_ok:   db "OK", 0
 str_wt_demo_ready: db "ready", 0
@@ -5656,6 +7025,7 @@ str_verb_catalog:     db "CATALOG", 0
 
 ; --- staged reply fragments ---
 str_wo_types:   db " widget types:", 0
+str_wf_guard_state: db "guard_state",0
 str_wgt_withheld: db "withheld", 0  ; F2b: a secret field's value, caret and mask
 str_wgt_role_password: db "password", 0
 str_wgt_set_text_refused: db "[PAOS64] wgt_set_text refused id=", 0      ; STM-02: + serial_hex64 of the id
@@ -5691,7 +7061,7 @@ str_wo_cat_vacant: db "-", 0
 str_wo_cat_end: db " end=1", 0
 str_wo_e_type:  db " widget new=ERR bad_type expected=button|textfield|label", 0
 str_wo_e_win:   db " widget new=ERR bad_win max=8", 0
-str_wo_e_full:  db " widget new=ERR full max=48", 0
+str_wo_e_full:  db " widget new=ERR full max=128", 0
 str_wo_e_id:    db " widget op=ERR bad_id (WIDGETLIST enumerates live ids)", 0
 str_wo_e_field: db " widget op=ERR bad_field expected=value|text|label|role|sel", 0
 str_wo_e_size:  db " widget set=ERR oversize max=31", 0
@@ -5728,3 +7098,23 @@ wgt_long_owner:    resq WGT_LONG_N      ; the owning slot's address, 0 = free
 wgt_long_pool:     resb WGT_LONG_N * (WGT_LONG_MAX + 1)
 %endmacro
 WDATA_BSS_DEFER WDATA_BSS_gui_widget_long
+
+str_wct_image_context: db " kind=image source=",0
+str_wct_image_birth: db " bound_life=",0
+str_wct_image_fit: db " fit=",0
+str_wct_image_load: db " load=",0
+str_wct_image_natural_w: db " natural_w=",0
+str_wct_image_natural_h: db " natural_h=",0
+str_wct_image_output_w: db " output_w=",0
+str_wct_image_output_h: db " output_h=",0
+str_wct_image_end: db " read=bound_state set=unchecked authority=unchecked action=na end=1",0
+
+%include "gui/widget_toggle_change.inc"
+%include "gui/widget_guard.inc"
+
+%include "gui/widget_provider.inc"
+
+%include "gui/widget_access.inc"
+%include "gui/widget_sensitive.inc"
+
+%include "gui/widget_editor.inc"

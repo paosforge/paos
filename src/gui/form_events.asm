@@ -1,7 +1,7 @@
 ;; MODULE gui/form_events
 ;; LAYER 6
-;; EXPORTS form_events_declare, form_events_name_valid, form_events_bind, form_events_reset, form_events_click, form_events_wait, form_events_cmd, form_events_configure_guest, form_events_lifetime, form_events_first_begin
-;; IMPORTS gui/widget, gui/window, gui/window_mgmt, gui/chat_app, sec/session, sec/principal, hv/guest_request, svc/command, core/time, core/lib/str, core/lib/mem
+;; EXPORTS form_events_observe, form_events_observe_begin, form_events_declare, form_events_name_valid, form_events_bind, form_events_reset, form_events_click, form_events_wait, form_events_cmd, form_events_configure_guest, form_events_lifetime, form_events_slot_lifetime, form_events_first_begin
+;; IMPORTS gui/wm_pointer, gui/widget, gui/window, gui/window_mgmt, gui/chat_app, sec/session, sec/principal, hv/guest_request, svc/command, core/time, core/lib/str, core/lib/mem
 ;; CAPS
 ;; OWNER saga:gui_foundation_ladder
 ;
@@ -321,6 +321,23 @@ form_events_configure_guest:
     xor  eax, eax
     ret
 
+; Native observation for live scopes and exact closed-action receipts. The
+; existing saturating reset serial never aliases after the 24-bit WM wrap.
+; EDI slot -> RAX serial+1, or0 if unavailable/exhausted. No authority grant.
+form_events_slot_lifetime:
+    cmp edi,WM_MAX
+    jae .bad
+    lea rax,[rel form_events_reset]
+    cmp [rel wmx_owner_reset_op],rax
+    jne .bad
+    lea rax,[rel fe_reset_serial]
+    mov rax,[rax+rdi*8]
+    inc rax
+    ret
+.bad:
+    xor eax,eax
+    ret
+
 ; Native metadata only, no authority: exact window ID -> reset lifetime or0.
 ; Zero-initialized counter denotes lifetime1. Every synchronous reset advances
 ; it, including same-owner stamps and raw generation aliases; never wraps.
@@ -458,6 +475,19 @@ form_events_click:
     lea  rdi, [r12 + 48]
     mov  rsi, [r14 + WGI_ID]
     call fe_copy_name
+    mov eax,[r14+WGI_WIN]
+    shl eax,7
+    lea rdi,[rel fe_origins]
+    add rdi,rax
+    mov eax,r15d
+    dec eax                         ; row cursor before publication increment
+    and eax,FE_RING-1
+    shl eax,4
+    add rdi,rax
+    movzx eax,byte [rel wm_pointer_origin]
+    mov [rdi],rax
+    movzx eax,byte [rel wm_pointer_gesture_origin]
+    mov [rdi+8],rax
     mov  [rbx + FE_SEQ], r15            ; publish only after the row is complete
 .out:
     pop  r15
@@ -636,6 +666,10 @@ fe_wait_common:
     jc   .bad
     cmp  qword [rel fe_next_token], -1
     je   .bad
+    cmp  qword [rsp + 168], 0
+    je   .token_time_done
+    mov  [rel fe_begin_time], rax        ; actual admission clock, not a later poll
+.token_time_done:
     inc  qword [rel fe_next_token]
     mov  r8, [rel fe_next_token]
     cmp  qword [rsp + 168], 0
@@ -676,6 +710,64 @@ fe_wait_common:
     ja   .timeout
     mov  r9, [r10]
     mov  edx, FE_EVENT
+    cmp qword [rsp+168],0
+    je .complete
+    ; Only a successfully resolved/revalidated original GUEST delivery.
+    ; Preserve every result register: this is a receipt, never a second WAIT.
+    push rax
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    mov qword [rel fe_receipt],0
+    lea rsi,[rsp+5*8]
+    lea rdi,[rel fe_receipt+8]
+    mov rax,[rsi+8]
+    stosq                              ; PID
+    mov rax,[rsi+24]
+    stosq                              ; START
+    mov rax,[rsi+32]
+    stosq                              ; retirement
+    mov rax,[rsi+40]
+    stosq                              ; epoch
+    mov rax,[rsi+56]
+    stosq                              ; window
+    mov rax,[rsi+64]
+    stosq                              ; full raw generation
+    mov rax,[rsi+72]
+    stosq                              ; reset lifetime
+    mov rax,[rsi+160]
+    stosq                              ; policy generation
+    mov rax,[rsi+128]
+    stosq                              ; original guest request sequence
+    mov rax,[r10]
+    stosq                              ; cursor
+    mov rax,[r10+8]
+    stosq                              ; actual event time
+    mov eax,r15d
+    and eax,255
+    shl eax,7
+    lea rsi,[rel fe_origins]
+    add rsi,rax
+    mov rax,[r10]
+    dec eax
+    and eax,FE_RING-1
+    shl eax,4
+    add rsi,rax
+    movsq
+    movsq
+    lea rsi,[r10+16]
+    mov ecx,8
+    rep movsq                          ; canonical action32 + widget32
+    mov ecx,4
+    lea rdi,[rel fe_receipt_digest]
+    lea rsi,[rsp+5*8+88]
+    rep movsq
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rax
     jmp  .complete
 .clock:
     call fe_now
@@ -696,6 +788,67 @@ fe_wait_common:
     xor  r8d, r8d
     mov  edx, FE_BUSY
 .ok:
+    cmp  qword [rsp + 168], 0
+    je   .result
+    cmp  r12d, 1
+    jne  .result
+    cmp  edx, FE_BUSY
+    je   .result
+    ; Stage the original admitted BEGIN, preserving every WAIT result. The
+    ; maintained capture below alone publishes it; a failed capture keeps the
+    ; previous historical receipt and cannot manufacture a new successful one.
+    push rax
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    lea rsi,[rsp+5*8]
+    lea rdi,[rel fe_begin_pending]
+    xor eax,eax
+    stosq
+    mov rax,[rsi+8]
+    stosq                              ; PID
+    mov rax,[rsi+24]
+    stosq                              ; START
+    mov rax,[rsi+32]
+    stosq                              ; retirement
+    mov rax,[rsi+40]
+    stosq                              ; epoch
+    mov rax,[rsi+56]
+    stosq                              ; exact packed window
+    mov rax,[rsi+64]
+    stosq                              ; full raw generation
+    mov rax,[rsi+72]
+    stosq                              ; original reset lifetime
+    mov rax,[rsi+160]
+    stosq                              ; policy generation
+    mov rax,[rsi+128]
+    stosq                              ; original request sequence
+    mov rax,[rel fe_begin_time]
+    stosq
+    mov rax,r8
+    stosq                              ; admitted token
+    mov rax,[rbx+FE_CURSOR]
+    stosq                              ; original input cursor
+    mov rax,[rbx+FE_DEADLINE]
+    stosq
+    mov rax,rdx
+    stosq                              ; actual returned state
+    mov rax,r9
+    stosq                              ; actual returned cursor
+    xor eax,eax
+    mov ecx,6
+    rep stosq
+    lea rdi,[rel fe_begin_pending_digest]
+    add rsi,88
+    mov ecx,4
+    rep movsq
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rax
+.result:
     xor  eax, eax
     jmp  .out
 .bad:
@@ -715,6 +868,66 @@ fe_wait_common:
     pop  r13
     pop  r12
     pop  rbx
+    ret
+
+ ; One native owner-only observer, two read-only receipt entries. Both use
+ ; target32/output176, caller-zeroed. The original event ABI is unchanged.
+form_events_observe:
+    push r13
+    push r14
+    lea r13,[rel fe_receipt]
+    lea r14,[rel fe_receipt_digest]
+    jmp fe_observe_common
+form_events_observe_begin:
+    push r13
+    push r14
+    lea r13,[rel fe_begin_receipt]
+    lea r14,[rel fe_begin_digest]
+    ; A retired/recycled window cannot export its old BEGIN as current.
+    push rdi
+    push rsi
+    mov edi,[r13+5*8]
+    call form_events_lifetime
+    pop rsi
+    pop rdi
+    test rax,rax
+    jz fe_observe_ret
+    cmp rax,[r13+7*8]
+    jne fe_observe_ret
+    movzx eax,byte [r13+5*8]
+    lea rdx,[rel wm_owner]
+    mov rdx,[rdx+rax*8]
+    cmp rdx,[r13+8]
+    jne fe_observe_ret
+    lea rdx,[rel wm_gen]
+    mov eax,[rdx+rax*4]
+    cmp rax,[r13+6*8]
+    jne fe_observe_ret
+fe_observe_common:
+    push rbx
+    push r12
+    mov rbx,rdi
+    mov r12,rsi
+    call session_shell_local_authority
+    cmp rax,PRIN_OWNER
+    jne .out
+    cmp rdx,[r13+32]
+    jne .out
+    mov rdi,rbx
+    mov rsi,r14
+    mov ecx,4
+    repe cmpsq
+    jne .out
+    mov rdi,r12
+    mov rsi,r13
+    mov ecx,22
+    rep movsq
+.out:
+    pop r12
+    pop rbx
+fe_observe_ret:
+    pop r14
+    pop r13
     ret
 
 ; Parse a canonical unsigned decimal at RSI, to whitespace/end. EAX status,
@@ -912,6 +1125,25 @@ form_events_cmd:
     jnz  .capture_refused
     mov  rax, [rsp + 24]
     mov  [r13 + RSP_VAL], rax
+    cmp r14d,1                         ; only a newly admitted BEGIN
+    jne .event_receipt
+    cmp eax,FE_BUSY
+    je .event_receipt
+    push rax
+    lea rsi,[rel fe_begin_pending]
+    lea rdi,[rel fe_begin_receipt]
+    mov ecx,22
+    rep movsq
+    lea rsi,[rel fe_begin_pending_digest]
+    lea rdi,[rel fe_begin_digest]
+    mov ecx,4
+    rep movsq
+    mov qword [rel fe_begin_receipt],1   ; maintained capture already accepted
+    pop rax
+.event_receipt:
+    cmp eax,FE_EVENT
+    jne .out
+    mov qword [rel fe_receipt],1     ; only after maintained capture accepted
     jmp  .out
 .capture_refused:
     mov  qword [r13 + RSP_CODE], CMDE_AUTHDENY
@@ -944,6 +1176,14 @@ fe_next_token: resq 1
 fe_guest_resolver: resq 1
 fe_reset_serial: resq WM_MAX
 fe_guest_keys: resb (WM_MAX * FE_KEY_SZ)
+fe_origins: resb (WM_MAX * FE_RING * 16)
+fe_begin_time: resq 1
+fe_begin_pending: resb 176
+fe_begin_pending_digest: resb 32
+fe_begin_receipt: resb 176
+fe_begin_digest: resb 32
+fe_receipt: resb 176
+fe_receipt_digest: resb 32
 fe_windows: resb (WM_MAX * FE_SZ)
 fe_bindings: resb (WGT_MAX * 64)
 %endmacro

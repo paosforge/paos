@@ -436,6 +436,8 @@ img_cache_bind:
 ; with stride 0. Paint-safe: no decode, no allocation. -> EAX 0 painted, 1 refused
 ; (no scratch, too wide, or a rect outside the output); the caller paints its fill.
 img_cache_nat_blit:
+    mov  byte [rel img_nb_over], 0
+.entry:
     mov  [rel img_nb_sy0], eax
     push rbx
     push rcx
@@ -553,7 +555,13 @@ img_cache_nat_blit:
     add  r9d, ebp
     mov  r10d, [rel img_nb_w]
     mov  r11d, r15d
+    cmp  byte [rel img_nb_over], 0
+    jne  .blit_over
     call fb_blit_rgba
+    jmp  .blitted
+.blit_over:
+    call fb_blit_rgba_over
+.blitted:
     add  ebp, r15d
     jmp  .row
 .done:
@@ -577,6 +585,13 @@ img_cache_nat_blit:
     pop  rcx
     pop  rbx
     ret
+
+; img_cache_nat_blit_over: img_cache_nat_blit, composing through fb_blit_rgba_over
+; (widgets-01 A5 image widgets); wallpaper and every other caller keep the opaque
+; entry above. Placed after it so cuts that end at img_cache_nat_blit: are unchanged.
+img_cache_nat_blit_over:
+    mov  byte [rel img_nb_over], 1
+    jmp  img_cache_nat_blit.entry
 
 cmd_verb_imgcache:
     call cmd_handler_prologue
@@ -785,6 +800,7 @@ img_nb_w: dd 0
 img_nb_h: dd 0
 img_cache_ret_nat: db 0
 img_cache_build_nat: db 0
+img_nb_over: db 0                       ; A5: 1 = this nat blit composes alpha
 
 str_verb_imgcache: db "IMGCACHE",0
 str_imgcache_head: db " IMGCACHE n=",0

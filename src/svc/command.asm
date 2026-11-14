@@ -135,6 +135,9 @@ CMDE_DESKTOP_LOCKED equ 7 ; remote request needs the local desktop session, whic
                           ; every desktop/lock refusal over SSH exits non-zero (7). The UDP lean
                           ; envelope only branches on RSP_CODE for DIAGRING, so UDP reply bytes
                           ; are unchanged.
+; 8 is unassigned. 9 is the value gui/app_widget already returns as AWG_BUSY.
+CMDE_BUSY     equ 9      ; refused in the current state or capacity (a full table, a display
+                          ; not available now); nothing changed and nothing is queued (A2-1 G-11)
 
 ; --- arg-type self-description tags (§9.4 b), carried in VERB_ARGT and read back by
 ;   CATALOG + every projection so arg marshalling is registry-driven, never hardcoded ---
@@ -394,6 +397,102 @@ command_verb_destr:
 ;   invoke the handler THROUGH the table ptr (the indirection); (5) clear guard.
 ;   A path that mutates state without coming through here is the lint smell this
 ;   model forbids. clobbers: caller-saved; preserves RBX, R12-R14.
+; T5-15.4 one-shot (SEC 89584). Explorer names the exact request and verb from a
+; latched HUMAN gesture, immediately before its own dispatch. The next dispatch of
+; any kind spends it, so a stale, foreign or second request cannot use it. It holds
+; no authority until command_local_human_take has re-checked the frame.
+; command_local_human_set(RDI=req, RSI=verb id). Touches memory only.
+command_local_human_set:
+    mov  [rel cmd_local_human_req], rdi
+    mov  [rel cmd_local_human_verb], rsi
+    ret
+
+; RDI=req, preserved. Clobbers RAX, RCX.
+command_local_human_note:
+    mov  byte [rel cmd_local_human_match], 0
+    mov  rax, [rel cmd_local_human_req]
+    mov  rcx, [rel cmd_local_human_verb]
+    mov  qword [rel cmd_local_human_req], 0
+    mov  qword [rel cmd_local_human_verb], 0
+    test rax, rax
+    jz   .out
+    cmp  rax, rdi
+    jne  .out
+    cmp  rcx, [rdi + REQ_VERB]
+    jne  .out
+    mov  byte [rel cmd_local_human_match], 1
+.out:
+    ret
+
+; RDI=req, RSI=verb entry -> EAX 1 only for a matched console OWNER request on an
+; unlocked session, with no remote frame or injected line, naming an FS mutating verb.
+; FSWRITE is not on the list. Clobbers RAX, RCX.
+command_local_human_take:
+    xor  eax, eax
+    cmp  byte [rel cmd_local_human_match], 1
+    mov  byte [rel cmd_local_human_match], 0
+    jne  .out
+    cmp  qword [rdi + REQ_SOURCE], CMD_SOURCE_CONSOLE
+    jne  .out
+    cmp  qword [rdi + REQ_PRINCIPAL], CMD_PRINCIPAL_OWNER
+    jne  .out
+    cmp  byte [rel command_auth_remote_active], 0
+    jne  .out
+    cmp  qword [rel keyprov_active_taint], 0
+    jne  .out
+    cmp  byte [rel session_locked], SESSION_UNLOCKED
+    jne  .out
+    mov  rcx, [rsi + VERB_HANDLER]
+    push rdx
+    lea  rdx, [rel cmd_verb_fsnew]
+    cmp  rcx, rdx
+    je   .yes
+    lea  rdx, [rel cmd_verb_fsdel]
+    cmp  rcx, rdx
+    je   .yes
+    lea  rdx, [rel cmd_verb_fsren]
+    cmp  rcx, rdx
+    je   .yes
+    lea  rdx, [rel cmd_verb_fsmkdir]
+    cmp  rcx, rdx
+    je   .yes
+    lea  rdx, [rel cmd_verb_fsrmdir]
+    cmp  rcx, rdx
+    je   .yes
+    lea  rdx, [rel cmd_verb_fscopy]
+    cmp  rcx, rdx
+    jne  .pop
+.yes:
+    mov  eax, 1
+.pop:
+    pop  rdx
+.out:
+    ret
+
+; RDI=req, RSI=verb entry -> RAX the outer frame's opaque token. Under the bit, the selected
+; removable mount is armed first; the handler's own gates still decide.
+command_local_human_enter:
+    call command_local_human_take
+    mov  edi, eax
+    call storage_access_request_local_swap
+    push rax
+    call storage_access_request_local
+    cmp  eax, 1
+    jne  .out
+    call fs_local_removable_arm
+.out:
+    pop  rax
+    ret
+
+; RDI = the outer frame's opaque token, with its original generation.
+command_local_human_leave:
+    jmp  storage_access_request_local_restore
+
+; Every dispatch exit. Touches memory only: RAX carries the result.
+command_local_human_end:
+    mov  byte [rel cmd_local_human_match], 0
+    ret
+
 command_dispatch:
     push rbx
     push r12
@@ -409,6 +508,7 @@ command_dispatch:
     mov  [rel cmd_dispatch_proposer], rax
     mov  qword [rel cmd_card_proposer_arm], 0
 .proposer_kept:
+    call command_local_human_note         ; every dispatch spends the one-shot
     mov  r12, rdi                         ; req
     mov  r13, rsi                         ; resp
     ; RCQ-10 reply ownership: a top-level in-process request (console, AI hook,
@@ -487,7 +587,10 @@ command_dispatch:
     test rax, rax
     jz   .authdeny
     cmp  qword [rax + AUTH_T_STATE], AUTH_TS_GUEST
+    je   .native_guest_ticket
+    cmp  qword [rax + AUTH_T_STATE], AUTH_TS_TERMINAL
     jne  .authdeny
+.native_guest_ticket:
     mov  rdi, [r14 + VERB_NAME]
     mov  rsi, [r14 + VERB_CAP]
     mov  rdx, [r14 + VERB_DESTR]
@@ -574,6 +677,11 @@ command_dispatch:
     push rcx
     push rax
     mov  byte [rel cmd_desktop_refused], 0
+    mov  rdi, r12
+    mov  rsi, r14
+    call command_local_human_enter        ; T5-15.4 -> the outer frame's 64-bit token
+    push rax
+    push rax
 %if PAOS_LAB_D4_IFON_STALL
     ; The original startup intent covers one authenticated UDP C7HEALTH.
     ; Public discovery/security reads and signer AUTHSTAT must reach handlers
@@ -615,6 +723,9 @@ command_dispatch:
     ; (5) clear the guard
     mov  byte [rel cmd_in_dispatch], 0
     pop  rdi
+    pop  rdi
+    call command_local_human_leave        ; restore only its original generation
+    pop  rdi
     call storage_access_request_owner_swap ; the outer frame's OWNER bit again
     movzx ecx, byte [rel cmd_desktop_refused]
     pop  rax
@@ -635,6 +746,7 @@ command_dispatch:
 .code:
     mov  rax, [r13 + RSP_CODE]
 .out:
+    call command_local_human_end
     dec  dword [rel cmd_dispatch_depth]
     jnz  .out_nested
     mov  qword [rel cmd_dispatch_proposer], 0
@@ -1768,6 +1880,9 @@ cmd_desktop_refused: resb 1               ; per-dispatch-frame: a desktop handle
 alignb 8
 cmd_dispatch_proposer: resq 1             ; RCQ-40 J2a: the card's proposer while its dispatch runs, else 0
 cmd_card_proposer_arm: resq 1             ; written non-zero only by command_dispatch_card
+cmd_local_human_req:   resq 1
+cmd_local_human_verb:  resq 1
+cmd_local_human_match: resb 1
 cmd_dispatch_depth: resd 1                ; registry dispatch nesting (cmd_in_dispatch is a 0/1 flag)
 alignb 16
 verb_table:         resb (VERB_MAX * VERB_ENT_SZ)

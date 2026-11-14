@@ -1,7 +1,7 @@
 ;; MODULE gui/session_restore
 ;; LAYER 6
-;; EXPORTS session_ram_checkpoint_build, session_ram_checkpoint_export, session_ram_checkpoint_install, session_declare, session_restore, session_clear_fresh_windows, session_persist_selftest
-;; IMPORTS boot/serial, fs/blockdev, fs/storage_access, dev/blk/ahci, gui/chat_app, gui/window_mgmt, sec/principal, sec/session, svc/command
+;; EXPORTS sess_recovery_console_title, session_ram_checkpoint_build, session_ram_checkpoint_export, session_ram_checkpoint_install, session_declare, session_restore, session_clear_fresh_windows, session_persist_selftest
+;; IMPORTS gui/console_app, boot/serial, fs/blockdev, fs/storage_access, dev/blk/ahci, gui/chat_app, gui/window_mgmt, sec/principal, sec/session, svc/command
 ;; CAPS
 ;; OWNER saga:gui
 ; ============================================================================
@@ -1004,6 +1004,11 @@ session_restore:
     call sess_focus_keyboard_owner
     mov  eax, -1
 .out:
+    push rax
+    push rdx
+    call console_observe_unlock
+    pop rdx
+    pop rax
     pop  r15
     pop  r14
     pop  r13
@@ -1430,14 +1435,16 @@ cmd_verb_winopen:
     call chat_out_reset
     lea  rdi, [rel str_wo_full]         ; " winopen=ERR no_free_slot"
     call chat_put_str
-    jmp  .stage
+    mov  qword [r13 + RSP_CODE], CMDE_BUSY  ; G-11: a refusal is never OK; the text is unchanged
+    jmp  .staged
 .locked:
     call chat_out_reset
     lea  rdi, [rel str_sess_gate_locked]
     call chat_put_str
 .stage:
-    mov  byte [rel chat_out_ready], 1
     mov  qword [r13 + RSP_CODE], CMDE_OK
+.staged:
+    mov  byte [rel chat_out_ready], 1
     mov  qword [r13 + RSP_VAL], 0
     pop  r14
     pop  r13
@@ -1595,14 +1602,18 @@ cmd_verb_winclose:
     call chat_out_reset
     lea  rdi, [rel str_wc_bad]          ; " winclose=ERR not_found"
     call chat_put_str
-    jmp  .stage
+    ; G-11: no such title among the windows this principal may act on. Another principal's
+    ; window reads as absent, so both cases share BADSEL and the code leaks nothing more.
+    mov  qword [r13 + RSP_CODE], CMDE_BADSEL
+    jmp  .staged
 .locked:
     call chat_out_reset
     lea  rdi, [rel str_sess_gate_locked]
     call chat_put_str
 .stage:
-    mov  byte [rel chat_out_ready], 1
     mov  qword [r13 + RSP_CODE], CMDE_OK
+.staged:
+    mov  byte [rel chat_out_ready], 1
     mov  qword [r13 + RSP_VAL], 0
     pop  r14
     pop  r13

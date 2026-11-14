@@ -544,11 +544,11 @@ ac_format:
 
 align 8
 ac_operations: dq ac_status-ac_operations, ac_begin-ac_operations, ac_poll-ac_operations, ac_cancel-ac_operations
-ac_status: db 'WAIT STATUS',0
-ac_begin: db 'WAIT BEGIN',0
-ac_poll: db 'WAIT POLL',0
-ac_cancel: db 'WAIT CANCEL',0
-ac_title: db 'Guest WAIT approval',0
+ac_status: db 'view waits.',0
+ac_begin: db 'start waiting.',0
+ac_poll: db 'check a wait.',0
+ac_cancel: db 'stop waiting.',0
+ac_title: db 'Allow this?',0
 ac_note: db 'Once only; 30s. Tab then Enter',0
 ac_deny: db 'Deny',0
 ac_confirm: db 'Confirm once',0
@@ -556,15 +556,15 @@ ac_hex: db '0123456789abcdef'
 ac_offsets: db 8,16,88,96,104,112,120,56,48,64,128,136,144,40,24,32,72,80
 align 8
 ac_labels: dq ac_label_0-ac_labels,ac_label_1-ac_labels,ac_label_2-ac_labels,ac_label_3-ac_labels,ac_label_4-ac_labels,ac_label_5-ac_labels,ac_label_6-ac_labels,ac_label_7-ac_labels,ac_label_8-ac_labels,ac_label_9-ac_labels,ac_label_10-ac_labels,ac_label_11-ac_labels,ac_label_12-ac_labels,ac_label_13-ac_labels,ac_label_14-ac_labels,ac_label_15-ac_labels,ac_label_16-ac_labels,ac_label_17-ac_labels
-ac_label_0: db 'Principal: ',0
+ac_label_0: db 'App principal: ',0
 ac_label_1: db 'Instance: ',0
-ac_label_2: db 'Bundle 1: ',0
-ac_label_3: db 'Bundle 2: ',0
-ac_label_4: db 'Bundle 3: ',0
-ac_label_5: db 'Bundle 4: ',0
-ac_label_6: db 'Operation: ',0
+ac_label_2: db 'App hash 1: ',0
+ac_label_3: db 'App hash 2: ',0
+ac_label_4: db 'App hash 3: ',0
+ac_label_5: db 'App hash 4: ',0
+ac_label_6: db 'This app asks to ',0
 ac_label_7: db 'Window: ',0
-ac_label_8: db 'Owner: ',0
+ac_label_8: db 'Window owner: ',0
 ac_label_9: db 'Generation: ',0
 ac_label_10: db 'Request: ',0
 ac_label_11: db 'Cursor: ',0
@@ -573,7 +573,7 @@ ac_label_13: db 'Epoch: ',0
 ac_label_14: db 'Start: ',0
 ac_label_15: db 'Retire: ',0
 ac_label_16: db 'Reset: ',0
-ac_label_17: db 'Bundle inst: ',0
+ac_label_17: db 'App instance: ',0
 
 %include "core/abi/wdata.inc"
 %macro WDATA_app_confirm 0

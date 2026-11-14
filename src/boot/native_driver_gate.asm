@@ -8,7 +8,9 @@
 ; Preserves every GPR, including RAX and original inputs; only flags change.
 ; No hardware, allocation, logging, lock acquisition, polling or policy mutation.
 ; Counts are boot-local census, not evidence of ownership or successful probes.
-; Unknown kinds contribute to final slot10 and remain denied in boot_only.
+; USB NET and unknown kinds share final slot10 for the fixed eleven-slot ABI.
+; Unknown kinds remain denied in boot_only/network_guest; admission uses the
+; original full-width class before the counter index is bounded.
 native_driver_gate:
     push rax
     push rcx

@@ -17,6 +17,9 @@ fs_mutation_reason:
     lea rdx, [rel ext_op_mutate_path]
     cmp rax, rdx
     je .ext
+    lea rdx, [rel exf_a_mutate_path]
+    cmp rax, rdx
+    je .exfat
     lea rdx, [rel nt_op_mutate_path]
     cmp rax, rdx
     jne .unknown
@@ -29,6 +32,27 @@ fs_mutation_reason:
     je .out
     lea rdi, [rel fs_tx_missing]
     cmp eax, NT_PATH_MISSING
+    je .out
+    jmp .unknown
+.exfat:
+    ; Only the selected, completed native callback's unambiguous facts.
+    ; An unarmed mount or backend READONLY error is not proof of read-only
+    ; media. Authority, stale identity and uncertain I/O retain the fallback.
+    mov eax, [rel exfat_disk_last_error]
+    lea rdi, [rel fs_tx_missing]
+    cmp eax, EXF_E_NOTFOUND
+    je .out
+    lea rdi, [rel fs_tx_full]
+    cmp eax, EXF_E_NOSPACE
+    je .out
+    lea rdi, [rel fs_tx_exists]
+    cmp eax, EXF_E_EXISTS
+    je .out
+    lea rdi, [rel fs_tx_name]
+    cmp eax, EXF_E_NAME_INVALID
+    je .out
+    lea rdi, [rel fs_tx_path_long]
+    cmp eax, EXF_E_PATH_LONG
     je .out
     jmp .unknown
 .ext:
@@ -63,8 +87,9 @@ fs_mutation_reason:
     ret
 
 ; A zero operation slot or absent arm is not proof of read-only media. Only
-; the actual FSFATRO registered table/context, still current and with the same
-; request authority as selection, earns this observation. No hardware write.
+; the actual FSFATRO registered table/context or current exFAT block RO flag,
+; with the same request authority as selection, earns this observation.
+; No hardware write, descriptor setter or new authority.
 fs_mutation_mount_reason:
     call storage_access_request_owner
     cmp eax, 1
@@ -78,7 +103,7 @@ fs_mutation_mount_reason:
     jz .exact
     lea rdx, [rel fd_selected_ops]
     cmp [rax + fsmount.ops], rdx
-    jne .exact
+    jne .exfat
     lea rdi, [rel fd_selected_ctx]
     cmp [rax + fsmount.priv], rdi
     jne .exact
@@ -87,6 +112,13 @@ fs_mutation_mount_reason:
     call fd_selected_current
     test rax, rax
     jnz .exact
+    lea rdi, [rel fs_tx_read_only]
+    ret
+.exfat:
+    mov rdi, rax
+    call exfat_disk_mount_readonly
+    cmp eax, 1
+    jne .exact
     lea rdi, [rel fs_tx_read_only]
     ret
 .exact:
@@ -100,6 +132,10 @@ fs_fat_mutation_reason:
     jne  .not_allow
     lea  rdi, [rel fs_tx_allow]
 .not_allow:
+    cmp  eax, FD_ERR_VOLUME_RO
+    jne  .not_volume
+    lea  rdi, [rel fs_tx_volume]
+.not_volume:
     cmp  eax, FD_ERR_BAD_ARG
     jne  .not_name
     lea  rdi, [rel fs_tx_name]

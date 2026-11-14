@@ -246,3 +246,150 @@ generated closure change. Source-map revision 14 supersedes its preceding revisi
 
 The Explorer Start entry (root 91027) changed src/gui/form_loader.asm; its source hash and its 210 matching row hashes now bind that source at 0cd84b322.
 Accepted catalog payloads, six-locale translations, IDs and eligibility are unchanged. Source-map revision 15 supersedes its preceding revision.
+
+## Current integration correction (2026-10-31)
+
+REMOVE UI for Settings Apps: start_programs.asm and settings_apps.frm changed; no catalog text; source a65ce8bdd72ec6eb33f960201066b1bfea1a03c4.
+The hashes of src/gui/start_programs.asm and their 21 matching row hashes now bind that source.
+Accepted catalog payloads, six-locale
+translations, IDs and eligibility are unchanged; only source provenance and its
+generated closure change. Source-map revision 16 supersedes its preceding revision.
+
+## Current integration correction (2026-10-31)
+
+REMOVE UI: start_programs.asm arm-row helper; no catalog text; source 3a2d22e81f64f9add4eacc19efccd1b507843566.
+The hashes of src/gui/start_programs.asm and their 21 matching row hashes now bind that source.
+Accepted catalog payloads, six-locale
+translations, IDs and eligibility are unchanged; only source provenance and its
+generated closure change. Source-map revision 17 supersedes its preceding revision.
+
+Decision42 (2026-11-02, Codex / rc-input-claude): source_sites revision18
+refreshes only form_loader.asm current source and matching row pins for the
+Allow this? inline consent title. Active catalog meanings, IDs, eligibility and
+six-locale translations are unchanged. New form names and consent literals
+remain untranslated English fallback; see docs/USER_FACING_NAMES.md. This does
+not claim translated coverage or native-language review for those surfaces.
+
+Command catalog (2026-11-02, Codex / rc-input-claude): source-sites revision19
+refreshes help_view.asm and terminal_app.asm provenance after the shared Commands
+page and native HELP operand route. Existing active messages, stable IDs, glyphs,
+eligibility and six-locale meanings are unchanged. The generated Commands page
+uses bounded escaped English metadata from tools/commands/commands.json; no
+translated coverage or native-language review is claimed for this new surface.
+
+## Help navigation source binding (2026-11-10)
+
+The accepted Help navigation lifetime change bdab6695a refreshed the maintained
+Help source hashes without rebinding the catalog schema. This repair binds the
+catalog to that exact accepted site map and synchronizes the public catalog and
+site map. The existing adjudication projection and generated catalog include
+are refreshed, together with the input, manifest, recipe and output pins.
+All 92 active messages, stable IDs, six-locale text, eligibility, glyph bytes
+and compiler algorithms are unchanged. PCAT1 schema and artifact expectations
+change with source provenance. Every source admission check remains in force.
+This closes the Help binding regression; unrelated source-pin freshness and
+native image/runtime localization evidence remain separate work.
+
+## Offline Try guide (2026-11-10)
+
+The two Help declarations append a Try section to First boot, with English messages
+6045-6049 from the current Try/session, Console and installer sources at
+9382d0d9e58632ffd5bcdc0a37901cc6f6c7027c. Existing eight page ordinals,
+all earlier messages and translations, UI catalogs and glyph cells are preserved.
+Other locales use the existing English fallback for these new instructions.
+The guide describes temporary local Try, reading Help without a network,
+standard raw/dd USB preparation, and the absent native OS-install action.
+It does not claim that install inputs or an offline installation were exercised.
+The source, recipe, manifest and generated include pins are refreshed through
+the unchanged compiler and source admission checks.
+
+## Current source snapshot refresh (2026-11-10)
+
+ROOT ledger112511: accepted source-map revision20 now binds all 138 source files
+to exact integration fe118066216e1f370944f07ede32ca6cd9899e5c. The 121 stale
+file pins and matching row pins are refreshed with the accepted-map mode of
+rcq38_adjudicate.py. Historical inventory, stable IDs, English, six-locale
+texts, decisions, anchor statuses and eligibility are unchanged. The report,
+catalog site digest, public source closure and generated catalog expectations
+are rebound together; glyph bytes and compiler algorithms are unchanged.
+This is source snapshot provenance, with no new literal adjudication, image
+binding, native-language review or runtime localization claim.
+
+## Accepted source snapshot refresh
+
+ROOT112511 / reviewed tool112603: revision 21 binds exact accepted source snapshot 95b33ab7709d950b43171868496e093a3d99854b. Refreshed 3 file pins and their row pins; accepted IDs, English, translations, decisions, anchor statuses and eligibility are unchanged. Generated digests follow that snapshot; no runtime or new translation claim.
+
+## Accepted source snapshot refresh
+
+ROOT112511 / reviewed tool112603: revision 22 binds exact accepted source snapshot 5beca6416ae78b37670e031e00172601cb47309e. Refreshed 5 file pins and their row pins; accepted IDs, English, translations, decisions, anchor statuses and eligibility are unchanged. Generated digests follow that snapshot; no runtime or new translation claim.
+
+## Current Help source binding (2026-11-11)
+
+The public UI catalog and source-site map now copy the maintained declarations
+accepted in integration f13857d9d (REL Help source binding). The Help source file
+and literal row bind the accepted current Help implementation; stable message
+IDs, English, translations and eligibility stay unchanged. The unchanged public
+compiler reproduces the already accepted native catalog include byte for byte.
+SOURCES.json and the manifest, recipe and output pins are refreshed together.
+This repairs public regeneration; it adds no runtime or translation claim.
+
+## Bounded desktop power failure labels (2026-11-11)
+
+The public catalog and source-site map include fifteen critical English cause
+labels (message IDs 4610-4624) for the bounded desktop power refusal mapper.
+Seven raw power reason strings remain machine contracts and are ineligible for
+translation. Existing message IDs, English and translations are retained.
+The fifteen new labels use the existing English fallback in other locales;
+this source change supplies no new translations or localized runtime evidence.
+
+The catalog and source-site SHA-256 entries in SOURCES.json, the manifest and
+recipe pins, and the generated catalog expectation are refreshed together.
+The unchanged public compiler reproduces the accepted catalog include and all
+six PCAT1 files from these admitted inputs. Glyph bytes, Unicode and font
+inputs, licenses, helper algorithms and all other manifest entries are unchanged.
+
+## Managed shutdown dialog outcome freshness (2026-11-11)
+
+The source-site current hashes now cover the read-only managed shutdown
+terminal status consumer in Start and its bounded label projection. Existing
+message IDs, decisions, English, translations, widths and glyphs are unchanged.
+The site digest, public mirrors, manifest and recipe pins and generated catalog
+are refreshed together by the unchanged compiler. This supplies no translation,
+widget rendering, hardware recovery or power-transition observation.
+
+## Explorer occupied-volume refusal source freshness (2026-11-11)
+
+The current source hash now covers the accepted Explorer occupied NTFS volume
+refusal in form_loader.asm. Existing message IDs, decisions, English,
+translations, widths and glyphs are unchanged. The source-site digest, public
+mirrors, manifest and recipe pins and generated catalog are refreshed together
+by the unchanged compiler. This supplies no translation, widget rendering,
+storage recovery or runtime observation.
+
+## Managed terminal cause freshness (2026-11-11)
+
+The source-site current hashes now cover the read-only managed terminal
+pre-commit cause projection in power_exec. Existing
+message IDs, decisions, English, translations, widths and glyphs are unchanged.
+The site digest, public mirrors, manifest and recipe pins and generated catalog
+are refreshed together by the unchanged compiler. This supplies no translation,
+widget rendering, hardware recovery or power-transition observation.
+
+## Managed desktop cancellation freshness (2026-11-11)
+
+The source-site current hashes now cover original watched Start cancellation
+and the same-owner/full64 pre-commit boundary in power_exec. Existing
+message IDs, decisions, English, translations, widths and glyphs are unchanged.
+The site digest, public mirrors, manifest and recipe pins and generated catalog
+are refreshed together by the unchanged compiler. This supplies no translation,
+widget rendering, hardware recovery or power-transition observation.
+
+## Restart refusal offline state (2026-11-12)
+
+The current source-site hash covers the original restart refusal paths and
+one additive machine-contract wire token for an actually offline NVMe disk.
+Its historical-inventory anchor is source_drift; it is not runtime eligible.
+All existing IDs, English, translations, widths and glyphs remain unchanged.
+The existing public Disk offline until restart message is reused. The site
+digest, mirrors, manifest/recipe pins and generated catalog are refreshed by
+the unchanged compiler. This supplies no physical power or recovery proof.

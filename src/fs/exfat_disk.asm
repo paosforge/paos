@@ -1,7 +1,8 @@
 ;; MODULE fs/exfat_disk
 ;; LAYER 4
-;; EXPORTS exfat_disk_source_device, exfat_disk_source_bind, exfat_disk_source_token, exfat_disk_source_current, exfat_disk_source_stat, exfat_disk_source_read, exfat_disk_replace_state, exfat_disk_move_state, exfat_disk_move_destination_attempted, exfat_disk_move_destination_confirmed, exfat_disk_move_source_attempted, exfat_disk_move_source_confirmed, exfat_disk_arm, exfat_disk_disarm, exfat_disk_write_reclaimed, exfat_disk_write_reclaim_attempted, exfat_disk_write_reclaim_state, exfat_disk_write_allocation, exfat_disk_write_reserved, exfat_disk_write_reservation_attempted, exfat_disk_write_stage, exfat_disk_write_published, exfat_disk_write_dirty, exfat_disk_write_zeroed, exfat_disk_write_zero_attempted, exfat_disk_write_confirmed, exfat_disk_write_attempted, exfat_disk_register, exfat_disk_handle, exfat_disk_last_error, exfat_disk_mount_count, exfat_disk_part_type, exfat_disk_source_mtime, exfat_disk_format_ops
-;; IMPORTS fs/blockdev, fs/storage_access, fs/vfs, core/lib/mem, core/heap, core/time, boot/serial
+;; EXPORTS exfat_disk_select_removable_gpt_ro, exfat_disk_mount_readonly
+;; EXPORTS exfat_disk_select_removable_mbr_ro, exfat_refusal_reset, exfat_refusal_record, exfat_refusal_lookup, exfat_refusal_epoch, exfat_refusal_overflow, exfat_refusal_conflict, exfat_refusal_scan_limited, exfat_disk_copy_snapshot, exfat_disk_copy_read_begin, exfat_disk_copy_device, exfat_disk_copy_stat, exfat_disk_source_device, exfat_disk_source_bind, exfat_disk_source_token, exfat_disk_source_current, exfat_disk_source_stat, exfat_disk_source_read, exfat_disk_replace_state, exfat_disk_move_state, exfat_disk_move_destination_attempted, exfat_disk_move_destination_confirmed, exfat_disk_move_source_attempted, exfat_disk_move_source_confirmed, exfat_disk_arm, exfat_disk_disarm, exfat_disk_write_reclaimed, exfat_disk_write_reclaim_attempted, exfat_disk_write_reclaim_state, exfat_disk_write_allocation, exfat_disk_write_reserved, exfat_disk_write_reservation_attempted, exfat_disk_write_stage, exfat_disk_write_published, exfat_disk_write_dirty, exfat_disk_write_zeroed, exfat_disk_write_zero_attempted, exfat_disk_write_confirmed, exfat_disk_write_attempted, exfat_disk_register, exfat_disk_handle, exfat_disk_last_error, exfat_disk_mount_count, exfat_disk_part_type, exfat_disk_source_mtime, exfat_disk_format_ops
+;; IMPORTS fs/small_copy, fs/fs_identify, fs/blockdev, fs/storage_access, fs/vfs, core/lib/mem, core/heap, core/time, boot/serial
 ;; CAPS CAP_BLOCK_READ, CAP_BLOCK_WRITE
 ;; OWNER saga:rcq20_filesystems
 ;; CONTEXT: bsp_only
@@ -10,7 +11,7 @@
 ; (RCQ-20-format-inventory-exfat-ro-S1, RC spec §7.5 additional formats).
 ; Media only through the blk device handle in each mount's private context:
 ; no controller symbol, no module-global "current mount".
-; Registered namespace mutation: canonical FSW scratch trees (<=4 components),
+; Registered namespace mutation: canonical 8.3 trees (<=4 components),
 ; one-cluster initialized NoFatChain ancestor directories, armed OWNER/SPECIAL.
 ; Whole-file replacement (FS_MUT_UPDATE/existing update slot) stages a new run,
 ; publishes a verified stream, then retires old allocation; names/attrs/times
@@ -180,6 +181,8 @@ EXF_E_VERIFY         equ 12
 EXF_E_FLUSH          equ 13
 EXF_E_NOSPACE        equ 14
 EXF_E_EXISTS         equ 15
+EXF_E_NAME_INVALID   equ 16                  ; actual forbidden mutation-name unit
+EXF_E_PATH_LONG      equ 17                  ; existing63-byte mutation path bound
 EXF_E_RANGE          equ 5
 EXF_E_NOTDIR         equ 6
 EXF_E_BADPATH        equ 7
@@ -291,6 +294,7 @@ exfat_disk_register:
     mov  dword [rel exfat_disk_mount_count], 0
     mov  qword [rel exf_src_contexts], 0
     mov  qword [rel exf_src_contexts + 8], 0
+    call exfat_refusal_reset
     call exf_build_ops
     xor  r13d, r13d                      ; previous dev*
 .dev:
@@ -321,6 +325,256 @@ exfat_disk_register:
     pop  r13
     pop  r12
     pop  rbx
+    ret
+
+; exfat_disk_select_removable_mbr_ro(RDI=opaque row dev*) -> handle / -1,
+; -2 busy. BSP only, non-reentrant, after boot registration. The Explorer caller
+; owns its local owner/focus/frame gates. This helper only reads: no request
+; authority, arm, recovery, write or flush. Append one uniquely identified 0x07
+; MBR primary without resetting any existing exFAT context. GPT uses its own entry.
+; Separate GPT entry: same original eligibility/validator/publication path,
+; strict shared GPT BASIC DATA query, independent complete96-byte recheck.
+exfat_disk_select_removable_gpt_ro:
+    mov byte [rel exf_sel_gpt],1
+    jmp exf_sel_begin
+exfat_disk_select_removable_mbr_ro:
+    mov byte [rel exf_sel_gpt],0
+exf_sel_begin:
+    push rbx
+    push r12
+    push r13
+    mov rbx,rdi
+    mov al,[rel hv_linux_running]
+    or al,[rel hv_linux_start_active]
+    or al,[rel hv_linux_run_req]
+    or al,[rel vtd_owner_guest]
+    test al,al
+    jnz .busy
+    call vfs_copy_busy
+    test eax,eax
+    jnz .busy
+    call storage_access_binding_busy
+    test eax,eax
+    jnz .busy
+    cmp dword [rel exfat_disk_mount_count],EXF_MAX_MOUNTS
+    jae .no
+    ; Resolve the opaque row before dereferencing it, even on refusal.
+    mov rdi,rbx
+    call exf_sel_member
+    test rax,rax
+    jz .no
+    mov rdi,rbx
+    call exfat_disk_device_mounted
+    test eax,eax
+    jnz .no
+    mov rdi,rbx
+    call guest_volume_native_allowed
+    test rax,rax
+    jnz .no
+    mov rax,[rbx+dev.info]
+    mov [rel exf_sel_identity],rax
+    mov rdx,[rbx+dev.ops]
+    mov [rel exf_sel_identity+8],rdx
+    mov rdx,[rbx+dev.priv]
+    mov [rel exf_sel_identity+16],rdx
+    mov rdx,[rax+blk_info.media_generation]
+    test rdx,rdx
+    jz .no
+    mov [rel exf_sel_identity+24],rdx
+    mov rdx,[rax+blk_info.lba_max]
+    mov [rel exf_sel_identity+32],rdx
+    mov [rel exf_sel_device],rbx
+    mov byte [rel exf_sel_reading],1
+    call exf_sel_current
+    test rax,rax
+    jnz .no
+    mov rdi,rbx
+    xor esi,esi
+    xor edx,edx
+    lea rcx,[rel exf_sel_primary]
+    lea r8,[rel exf_sel_current]
+    call exf_sel_query
+    test rax,rax
+    jnz .no
+    call exf_sel_current
+    test rax,rax
+    jnz .no
+    mov rdi,rbx
+    mov rsi,[rel exf_sel_primary+16]
+    mov edx,1
+    lea rcx,[rel exf_sel_vbr]
+    call exf_raw_read
+    test rax,rax
+    jnz .no
+    mov rax,'EXFAT   '
+    cmp [rel exf_sel_vbr+EBS_NAME],rax
+    jne .no
+    lea rdi,[rel exf_boot_buf]
+    lea rsi,[rel exf_sel_vbr]
+    mov edx,512
+    call memcpy
+    mov r13d,[rel exfat_disk_mount_count]
+    test r13d,r13d
+    jnz .ops_ready
+    call exf_build_ops
+.ops_ready:
+    mov rdi,rbx
+    mov rsi,[rel exf_sel_primary+16]
+    mov rdx,[rel exf_sel_primary+24]
+    mov ecx,[rel exf_sel_primary+36]
+    lea r8,[rel exf_sel_recheck]
+    mov byte [rel exf_sel_reading],1
+    call exf_try_mount_checked
+    mov byte [rel exf_sel_reading],0
+    mov eax,[rel exfat_disk_mount_count]
+    sub eax,r13d
+    cmp eax,1
+    jne .no
+    lea rax,[rel exf_src_contexts]
+    mov r12,[rax+r13*8]
+    mov eax,[r12+exf_ctx.handle]
+    mov [rel vfs_disk_handle],eax
+    jmp .out
+.busy:
+    mov rax,-2
+    jmp .out
+.no:
+    mov rax,-1
+.out:
+    mov byte [rel exf_sel_reading],0
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RCX is caller-owned out96 (MBR uses original48 only). All original
+; identity/eligibility checks remain in exf_sel_current. No fallback from GPT.
+exf_sel_query:
+    cmp byte [rel exf_sel_gpt],0
+    je .mbr
+    mov esi,1
+    jmp fs_identify_single_gpt_checked
+.mbr:
+    push rcx
+    call fs_identify_primary_checked
+    pop rcx
+    test rax,rax
+    jnz .out
+    cmp dword [rcx+36],FS_SCHEME_MBR
+    jne .no
+    cmp dword [rcx+40],0x07
+    jne .no
+.out:
+    ret
+.no:
+    mov rax,-1
+    ret
+
+; Opaque dev -> current native readable removable dev / 0. No media I/O.
+exf_sel_member:
+    push rbx
+    push r12
+    mov r12,rdi
+    xor ebx,ebx
+.next:
+    mov rdi,rbx
+    mov esi,BLKCAP_READ
+    xor edx,edx
+    call blk_iter_after
+    test rax,rax
+    jz .out
+    mov rbx,rax
+    cmp rax,r12
+    jne .next
+    mov rdx,[rax+dev.info]
+    cmp byte [rdx+blk_info.removable],0
+    jne .out
+    test dword [rdx+blk_info.flags],BLKF_REMOVABLE
+    jnz .out
+    xor eax,eax
+.out:
+    pop r12
+    pop rbx
+    ret
+
+; Compare original registry incarnation before following captured info/ops.
+exf_sel_current:
+    mov rdi,[rel exf_sel_device]
+    call exf_sel_member
+    test rax,rax
+    jz .no
+    mov rdx,[rax+dev.info]
+    cmp rdx,[rel exf_sel_identity]
+    jne .no
+    mov rcx,[rax+dev.ops]
+    cmp rcx,[rel exf_sel_identity+8]
+    jne .no
+    mov rcx,[rax+dev.priv]
+    cmp rcx,[rel exf_sel_identity+16]
+    jne .no
+    mov rcx,[rdx+blk_info.media_generation]
+    cmp rcx,[rel exf_sel_identity+24]
+    jne .no
+    mov rcx,[rdx+blk_info.lba_max]
+    cmp rcx,[rel exf_sel_identity+32]
+    jne .no
+    cmp dword [rdx+blk_info.sector_size],512
+    jne .no
+    cmp dword [rdx+blk_info.logical_sector_bytes],512
+    jne .no
+    mov rdi,rax
+    call guest_volume_native_allowed
+    test rax,rax
+    jnz .no
+    xor eax,eax
+    ret
+.no:
+    mov rax,-1
+    ret
+
+; Candidate is fully parsed but not published. Re-discover independently, then
+; compare the original48 MBR or complete96 GPT tuple and original VBR. No partial mount
+; is visible if any parser-time device/table/boot identity changed.
+exf_sel_recheck:
+    call exf_sel_current
+    test rax,rax
+    jnz .out
+    mov rdi,[rel exf_sel_device]
+    xor esi,esi
+    xor edx,edx
+    lea rcx,[rel exf_sel_again]
+    lea r8,[rel exf_sel_current]
+    call exf_sel_query
+    test rax,rax
+    jnz .out
+    lea rdi,[rel exf_sel_primary]
+    lea rsi,[rel exf_sel_again]
+    mov ecx,6
+    cmp byte [rel exf_sel_gpt],0
+    je .compare
+    mov ecx,12
+.compare:
+    repe cmpsq
+    jne .no
+    call exf_sel_current
+    test rax,rax
+    jnz .out
+    mov rdi,[rel exf_sel_device]
+    mov rsi,[rel exf_sel_primary+16]
+    mov edx,1
+    lea rcx,[rel exf_sel_vbr_again]
+    call exf_raw_read
+    test rax,rax
+    jnz .out
+    lea rdi,[rel exf_sel_vbr]
+    lea rsi,[rel exf_sel_vbr_again]
+    mov ecx,64
+    repe cmpsq
+    jne .no
+    jmp exf_sel_current
+.no:
+    mov rax,-1
+.out:
     ret
 
 ; exf_scan_device(RDI=dev*): superfloppy, MBR primaries, GPT entries.
@@ -529,11 +783,23 @@ exf_probe:
 ; exf_boot_buf. Mounts + registers, or emits the refusal. A refused context is
 ; kept as the spare for the next candidate (the heap is a bump allocator).
 exf_try_mount:
+    xor r8d,r8d                       ; ordinary boot scan has no late selector
+; Internal R8=optional pre-publication read-only validator. R12=candidate.
+exf_try_mount_checked:
     push rbx
     push r12
     push r13
     push r14
     push r15
+    sub  rsp, 32                        ; original identity + optional validator
+    mov [rsp+24],r8
+    mov  rax, [rdi + dev.info]
+    mov  [rsp], rax
+    mov  rax, [rdi + dev.ops]
+    mov  [rsp + 8], rax
+    mov  rax, [rdi + dev.info]
+    mov  rax, [rax + blk_info.media_generation]
+    mov  [rsp + 16], rax
     mov  r13, rdi
     mov  r14, rsi
     mov  r15, rdx
@@ -548,6 +814,9 @@ exf_try_mount:
     mov  rdi, r13
     mov  rsi, r14
     mov  edx, EXF_R_NOMEM
+    mov  rcx, r15                       ; exact candidate extent, not reused spare ctx
+    lea  r8, [rsp]                      ; [info identity, ops identity, original generation]
+    call exfat_refusal_record
     call exf_emit_refused
     jmp  .out
 .alloc_ok:
@@ -594,9 +863,19 @@ exf_try_mount:
     mov  rdi, r13
     mov  rsi, r14
     mov  edx, eax
+    mov  rcx, r15                       ; exact candidate extent, not reused spare ctx
+    lea  r8, [rsp]                      ; [info identity, ops identity, original generation]
+    call exfat_refusal_record
     call exf_emit_refused
     jmp  .out
 .mounted:
+    mov rax,[rsp+24]
+    test rax,rax
+    jz .identity
+    call rax
+    test rax,rax
+    jnz .out                           ; private spare remains unpublished
+.identity:
     mov  rax, [r13 + dev.info]
     mov  [r12 + exf_ctx.info_identity], rax
     mov  rax, [rax + blk_info.media_generation]
@@ -618,6 +897,9 @@ exf_try_mount:
     mov  rdi, r13
     mov  rsi, r14
     mov  edx, EXF_R_NOMOUNT
+    mov  rcx, r15                       ; exact candidate extent, not reused spare ctx
+    lea  r8, [rsp]                      ; [info identity, ops identity, original generation]
+    call exfat_refusal_record
     call exf_emit_refused
     jmp  .out
 .registered:
@@ -635,6 +917,7 @@ exf_try_mount:
     mov  qword [rel exf_spare_ctx], 0
     call exf_emit_mounted
 .out:
+    add  rsp, 32
     pop  r15
     pop  r14
     pop  r13
@@ -1103,6 +1386,9 @@ exf_raw_read:
     mov  r12, rsi
     mov  r13, rdx
     mov  r14, rcx
+    call exf_sel_guard
+    test rax,rax
+    jnz .fail
     call exf_src_guard
     test rax, rax
     jnz  .fail
@@ -1140,7 +1426,7 @@ exf_raw_read:
     mov  rsi, r12
     mov  rdx, r15
     mov  rcx, r14
-    call exf_src_block_read
+    call exf_sel_block_read
     test rax, rax
     jz   .advance
     mov  rdi, rbx
@@ -1156,7 +1442,7 @@ exf_raw_read:
     mov  rsi, r12
     mov  edx, 1
     mov  rcx, r14
-    call exf_src_block_read
+    call exf_sel_block_read
     test rax, rax
     jnz  .fail
     inc  r12
@@ -1185,6 +1471,38 @@ exf_raw_read:
     pop  r13
     pop  r12
     pop  rbx
+    ret
+
+; Late selection guard around each native parser transfer, including fallback.
+; Ordinary reads retain their existing guard and budget. Preserve IO arguments.
+exf_sel_guard:
+    cmp byte [rel exf_sel_reading],0
+    je .ordinary
+    push rdi
+    push rsi
+    push rdx
+    push rcx
+    call exf_sel_current
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    ret
+.ordinary:
+    xor eax,eax
+    ret
+exf_sel_block_read:
+    call exf_sel_guard
+    test rax,rax
+    jnz .out
+    call exf_src_block_read
+    push rax
+    call exf_sel_guard
+    test rax,rax
+    pop rax
+    jz .out
+    mov rax,-1
+.out:
     ret
 
 ; exf_read_fs(R12=ctx, RSI=filesystem sector, RDX=count, RCX=buf) -> RAX 0/-1.
@@ -2462,6 +2780,10 @@ exf_file_read:
 ; ---------------------------------------------------------------------------
 exf_build_ops:
     lea  rdi, [rel exf_ops]
+    lea  rax, [rel small_copy]
+    mov  [rdi + fs_ops.copy], rax
+    lea  rax, [rel small_copy_between]
+    mov  [rdi + fs_ops.copy_between], rax
     lea  rax, [rel exf_a_mutate_path]
     mov  [rdi + fs_ops.mutate_path], rax
     lea  rax, [rel exf_a_mutate_armed]
@@ -3368,6 +3690,9 @@ exf_w_gate:
     call exf_w_live
     test rax, rax
     jnz  .ret
+    call exf_volume_pin                  ; after live: reads the device the context still owns
+    test rax, rax
+    jnz  .ret
     cmp  dword [rel exf_m_gate_active], 0
     je   .move_bound
     call exf_m_binding                  ; fresh reads BEFORE current arm/owner/grant
@@ -3399,7 +3724,8 @@ exf_w_gate:
     call storage_access_request_owner
     cmp  eax, [rel exf_w_owner]
     jne  .no
-    call storage_access_request_intent
+    mov  rdi, [r12 + exf_ctx.dev]
+    call storage_access_intent_for_dev
     cmp  eax, [rel exf_w_intent]
     jne  .no
     mov  rdi, [r12 + exf_ctx.dev]
@@ -4006,6 +4332,17 @@ exf_i_publish:
     cmp  dword [rel exf_g_bitmap_count], 0
     je   .identity_ready
     mov  byte [r12 + exf_ctx.boot_identity + EBS_PCT_USE], 0xff
+    ; The verified clean commit changed precisely PercentInUse. Keep the
+    ; original registration identity for copy readers, updating only that byte;
+    ; re-registering here would bless unrelated context/route/upcase churn.
+    lea  rdx, [rel exf_src_metadata]
+    cmp  r12, [rel exf_src_contexts]
+    je   .source_percent
+    cmp  r12, [rel exf_src_contexts + 8]
+    jne  .identity_ready
+    add  rdx, EXF_SRC_META_BYTES
+.source_percent:
+    mov  byte [rdx + 80 + exf_ctx.boot_identity - exf_ctx.clus_count + EBS_PCT_USE], 0xff
 .identity_ready:
     cmp  dword [rel exf_a_inflight], 0
     je   .arm_identity_ready
@@ -4144,6 +4481,50 @@ exfat_disk_arm:
     pop  rbx
     ret
 
+; RDI=dev -> EAX 1 when an exFAT mount views it. No I/O.
+exfat_disk_device_mounted:
+    push rbx
+    push r12
+    mov  r12, rdi
+    xor  ebx, ebx
+.next:
+    cmp  ebx, VFS_MAX_MOUNTS
+    jae  .no
+    mov  edi, ebx
+    inc  ebx
+    call exf_a_ctx_of
+    test rax, rax
+    jz   .next
+    cmp  r12, [rax + exf_ctx.dev]
+    jne  .next
+    mov  eax, 1
+    jmp  .out
+.no:
+    xor  eax, eax
+.out:
+    pop  r12
+    pop  rbx
+    ret
+
+; T5-15.4 local arm (V-C7). EDI=handle -> RAX 0 / -1. No verb: dispatch calls it under
+; the local bit. Same exact arm, on the context's own serial; ends on swap as ever.
+exfat_disk_local_arm:
+    push rdi
+    call exf_a_ctx_of
+    pop  rdi
+    test rax, rax
+    jz   .no
+    cmp  dword [rax + exf_ctx.armed], 1
+    je   .done
+    mov  esi, [rax + exf_ctx.serial]
+    jmp  exfat_disk_arm
+.done:
+    xor  eax, eax
+    ret
+.no:
+    mov  rax, -1
+    ret
+
 exfat_disk_disarm:
     push r12
     call exf_a_ctx_of
@@ -4209,6 +4590,26 @@ exf_public_media_gate:
     ret
 %endif
 
+; T5-15.4: exFAT is never the MSI's reserved partition.
+exf_volume_pin:
+    push rdi
+    push rsi
+    push rdx
+    push rcx
+    push r8
+    mov  rdi, [r12 + exf_ctx.dev]
+    xor  esi, esi
+    xor  edx, edx
+    xor  ecx, ecx
+    xor  r8d, r8d
+    call volume_pin_admits
+    pop  r8
+    pop  rcx
+    pop  rdx
+    pop  rsi
+    pop  rdi
+    ret
+
 exf_a_authority:
 %if EXF_PUBLIC_MEDIA_GATE
     call exf_public_media_gate
@@ -4218,12 +4619,16 @@ exf_a_authority:
     call storage_access_request_owner
     cmp  eax, 1
     jne  .no
-    call storage_access_request_intent
+    mov  rdi, [r12 + exf_ctx.dev]
+    call storage_access_intent_for_dev
     cmp  eax, SA_INTENT_SPECIAL
     jne  .no
     call exf_w_live
     test rax, rax
     jnz  .out
+    call exf_volume_pin
+    test rax, rax
+    jnz  .no
     mov  rdi, [r12 + exf_ctx.dev]
     mov  rsi, [r12 + exf_ctx.part_lba]
     mov  rdx, [r12 + exf_ctx.part_sectors]
@@ -4345,8 +4750,10 @@ exf_a_ctx_check:
     xor  eax, eax
     ret
 
-; Existing VFS path mutation ABI. Canonical protected FSW scratch trees,
-; including same-media cross-parent rename. FSWRITE retains its write_at route.
+; Existing VFS path mutation ABI. Canonical 8.3 trees under the volume rule,
+; including same-media cross-parent rename. CREATE additionally admits a bounded
+; package leaf using the SAME single-name entry set; no alias or authority change.
+; FSWRITE retains its write_at route.
 exf_a_mutate_path:
     push rbx
     push r12
@@ -4393,6 +4800,10 @@ exf_a_mutate_path:
     lea  rdi, [rel exf_n_old_path]
     lea  rdx, [rel exf_a_old11]
     xor  r8d, r8d                       ; file leaf
+    cmp  ebx, FS_MUT_CREATE
+    jne  .not_create_kind
+    mov  r8d, 3                         ; 8.3 or bounded .PAOSAPP create-only leaf
+.not_create_kind:
     cmp  ebx, FS_MUT_RENAME
     jne  .not_rename_kind
     mov  r8d, 2                         ; typed file or directory leaf
@@ -4406,7 +4817,7 @@ exf_a_mutate_path:
 .parse_old:
     call exf_t_path
     test rax, rax
-    jnz  .unsupported
+    jnz  .path_refused
     mov  [rel exf_n_old_len], edx
     mov  [rel exf_t_old_leaf], r9d
     mov  [rel exf_t_kind], ecx
@@ -4418,7 +4829,7 @@ exf_a_mutate_path:
     mov  r8d, [rel exf_t_kind]
     call exf_t_path
     test rax, rax
-    jnz  .unsupported
+    jnz  .path_refused
     mov  [rel exf_n_new_len], edx
     mov  [rel exf_t_new_leaf], r9d
     cmp  r9d, [rel exf_t_old_leaf]
@@ -4483,6 +4894,16 @@ exf_a_mutate_path:
 .ok:
     xor  eax, eax
     jmp  .out
+.path_refused:
+    ; Only this synchronous parser's explicit causes earn typed observations.
+    ; Other unsupported grammar remains distinct from invalid exFAT names.
+    cmp  rax, EXF_E_NAME_INVALID
+    je   .path_cause
+    cmp  rax, EXF_E_PATH_LONG
+    jne  .unsupported
+.path_cause:
+    mov  [rel exfat_disk_last_error], eax
+    jmp  .fail
 .auth:
     mov  dword [rel exfat_disk_last_error], EXF_E_AUTH
     jmp  .fail
@@ -4498,8 +4919,8 @@ exf_a_mutate_path:
     pop  rbx
     ret
 
-; RSI=root absolute Z path -> RDI=name11. Bounded and canonical ASCII8.3;
-; preserve the registered scratch floor independently (/FSW*.TST only).
+; RSI=root absolute Z path -> RDI=name11. Bounded and canonical ASCII 8.3. T5-15.4:
+; the volume rule decides where; this decides only what a name may be.
 exf_a_path11:
     push rbx
     mov  rbx, rdi
@@ -4516,7 +4937,7 @@ exf_a_path11:
     inc  ecx
     jmp  .length
 .sized:
-    cmp  ecx, 8
+    cmp  ecx, 2
     jb   .no
     mov  dword [rbx], 0x20202020
     mov  dword [rbx + 4], 0x20202020
@@ -4538,6 +4959,10 @@ exf_a_path11:
     sub  al, 32
 .upper:
     cmp  al, '_'
+    je   .valid
+    cmp  al, '-'
+    je   .valid
+    cmp  al, '~'
     je   .valid
     cmp  al, '0'
     jb   .no
@@ -4571,16 +4996,13 @@ exf_a_path11:
     inc  edx
     jmp  .char
 .done:
-    cmp  r8d, 11
-    jne  .no
-    cmp  word [rbx], 'FS'
-    jne  .no
-    cmp  byte [rbx + 2], 'W'
-    jne  .no
-    cmp  word [rbx + 8], 'TS'
-    jne  .no
-    cmp  byte [rbx + 10], 'T'
-    jne  .no
+    test r8d, r8d
+    jz   .no
+    test r9d, r9d
+    jz   .named                          ; no extension
+    cmp  r8d, 8
+    je   .no                             ; "NAME." is not canonical
+.named:
     xor  eax, eax
     pop  rbx
     ret
@@ -4590,8 +5012,10 @@ exf_a_path11:
     ret
 
 ; Bounded scratch tree parser. RSI=Z path,RDI=64B canonical output,RDX=name11,
-; R8D=0 file/1 dir/2 either -> RAX0/-1,EDX=len,ECX=kind,R9D=leaf offset.
-; At most4 components, each ancestor /FSWDIR[0..2], last ordinary scratch file
+; R8D=0 file/1 dir/2 either/3 create -> RAX0/-1 or explicit EXF_E_NAME_INVALID/
+; EXF_E_PATH_LONG; EDX=len,ECX=kind,R9D=leaf offset on success.
+; Explicit causes observe existing refusals only; they grant no new grammar.
+; At most4 components, each ancestor a canonical directory name, last an 8.3 file
 ; or directory. No command classifier result, dot/escape or native alias is trusted.
 exf_t_path:
     push rbx
@@ -4614,7 +5038,12 @@ exf_t_path:
     test eax, eax
     jz   .copied
     cmp  r14d, 63
-    jae  .no
+    jae  .path_long
+    cmp  al, '/'                         ; path delimiter, never a name unit
+    je   .copy_unit
+    call exf_unit_forbidden              ; same native name rule as the reader
+    jc   .name_invalid
+.copy_unit:
     cmp  al, 'a'
     jb   .upper
     cmp  al, 'z'
@@ -4639,8 +5068,17 @@ exf_t_path:
     mov  edx, ebx
     sub  edx, r15d
     jz   .no
+    cmp  dword [rsp], 3
+    jne  .short_component
+    cmp  ebx, r14d
+    jne  .short_component              ; ancestors retain the exact old grammar
+    cmp  edx, 15                        ; one UTF16 name entry, no set growth
+    ja   .no
+    jmp  .component_size_ok
+.short_component:
     cmp  edx, 12
     ja   .no
+.component_size_ok:
     inc  dword [rsp + 4]
     cmp  dword [rsp + 4], 4
     ja   .no
@@ -4666,9 +5104,35 @@ exf_t_path:
     mov  rdi, r12
     cmp  dword [rsp], 1
     je   .directory
+    cmp  dword [rsp], 2                 ; rename: a leaf with no dot is a directory
+    jne  .file_leaf
+    push rsi
+    mov  rax, rsi
+.dot_scan:
+    cmp  byte [rax], 0
+    je   .dotless
+    cmp  byte [rax], '.'
+    je   .dotted
+    inc  rax
+    jmp  .dot_scan
+.dotless:
+    pop  rsi
+    jmp  .directory
+.dotted:
+    pop  rsi
+.file_leaf:
     call exf_a_path11
     test rax, rax
     jz   .file
+    cmp  dword [rsp], 3
+    jne  .not_package
+    lea  rsi, [rel exf_t_component]
+    call exf_p_leaf
+    test rax, rax
+    jnz  .no
+    mov  ecx, 3                         ; private parsed kind, not caller authority
+    jmp  .ok
+.not_package:
     cmp  dword [rsp], 2
     jne  .no
     lea  rsi, [rel exf_t_component]
@@ -4686,6 +5150,12 @@ exf_t_path:
     mov  r9d, r15d
     xor  eax, eax
     jmp  .out
+.name_invalid:
+    mov  eax, EXF_E_NAME_INVALID
+    jmp  .out
+.path_long:
+    mov  eax, EXF_E_PATH_LONG
+    jmp  .out
 .no:
     mov  rax, -1
 .out:
@@ -4695,6 +5165,53 @@ exf_t_path:
     pop  r13
     pop  r12
     pop  rbx
+    ret
+
+; Canonical leaf /<1..7 [A-Z0-9_]>.PAOSAPP, already folded by exf_t_path.
+; One name entry holds exactly15 UTF16 units. This is only a CREATE parser:
+; UPDATE/DELETE/RENAME and root name11 APIs retain their old admitted operands.
+; No name11 alias is emitted or later used as the destination.
+exf_p_leaf:
+    xor  ecx, ecx
+.base:
+    movzx eax, byte [rsi + rcx + 1]
+    cmp  al, '.'
+    je   .suffix
+    cmp  ecx, 7
+    jae  .no
+    cmp  al, '_'
+    je   .char
+    cmp  al, '0'
+    jb   .no
+    cmp  al, '9'
+    jbe  .char
+    cmp  al, 'A'
+    jb   .no
+    cmp  al, 'Z'
+    ja   .no
+.char:
+    inc  ecx
+    jmp  .base
+.suffix:
+    test ecx, ecx
+    jz   .no
+    lea  rdx, [rsi + rcx + 2]
+    ; Bytewise, stopping at the first mismatch (including a short NUL).
+    lea  rdi, [rel exf_p_suffix]
+    xor  ecx, ecx
+.match:
+    mov  al, [rdi + rcx]
+    cmp  al, [rdx + rcx]
+    jne  .no
+    test al, al
+    jz   .ok
+    inc  ecx
+    jmp  .match
+.ok:
+    xor  eax, eax
+    ret
+.no:
+    mov  rax, -1
     ret
 
 ; Strict lookup while a registered tree transaction is active. Scan the complete
@@ -4886,8 +5403,8 @@ exf_t_parent:
     pop  rbx
     ret
 
-; Directory scratch names are root /FSWDIR plus0..2 canonical ASCII suffix
-; characters, no extension or subpath. Independent of the command classifier.
+; Directory names are 1..8 canonical ASCII characters, no extension or subpath.
+; Independent of the command layer.
 exf_d_path11:
     push rbx
     mov  rbx, rdi
@@ -4914,6 +5431,10 @@ exf_d_path11:
 .upper:
     cmp  al, '_'
     je   .valid
+    cmp  al, '-'
+    je   .valid
+    cmp  al, '~'
+    je   .valid
     cmp  al, '0'
     jb   .no
     cmp  al, '9'
@@ -4927,12 +5448,8 @@ exf_d_path11:
     inc  ecx
     jmp  .char
 .end:
-    cmp  ecx, 6
-    jb   .no
-    cmp  dword [rbx], 'FSWD'
-    jne  .no
-    cmp  word [rbx + 4], 'IR'
-    jne  .no
+    test ecx, ecx
+    jz   .no
     xor  eax, eax
     pop  rbx
     ret
@@ -5045,7 +5562,8 @@ exf_n_operation:
 .names_ready:
     call storage_access_request_owner
     mov  [rel exf_w_owner], eax
-    call storage_access_request_intent
+    mov  rdi, [r12 + exf_ctx.dev]
+    call storage_access_intent_for_dev
     mov  [rel exf_w_intent], eax
     call exf_w_live
     test rax, rax
@@ -6559,6 +7077,21 @@ exf_c_operation:
     add  rax, rcx
     jc   .range
 .buffer_ok:
+    ; A package leaf exists only after this synchronous CREATE adapter parsed
+    ; the original absolute path. It has no name11 representation. Bypass only
+    ; that legacy encoding check, never the live volume/OWNER/storage gates.
+    cmp  dword [rel exf_t_active], 1
+    jne  .short_name
+    cmp  dword [rel exf_t_kind], 3
+    jne  .short_name
+    cmp  dword [rel exf_a_inflight], 1
+    jne  .range
+    cmp  dword [rel exf_c_mode], 1
+    jne  .range
+    cmp  dword [rel exf_r_active], 0
+    jne  .range
+    jmp  .tree_path
+.short_name:
     ; Reject embedded spaces and lowercase/ambiguous name11 encodings.
     xor  ebx, ebx
     xor  r13d, r13d
@@ -6599,6 +7132,7 @@ exf_c_operation:
     mov  [rel exf_w_path_len], edx
     cmp  dword [rel exf_t_active], 0
     je   .path_ready
+.tree_path:
     lea  rax, [rel exf_n_old_path]
     mov  [rel exf_w_path], rax
     mov  eax, [rel exf_n_old_len]
@@ -6606,7 +7140,8 @@ exf_c_operation:
 .path_ready:
     call storage_access_request_owner
     mov  [rel exf_w_owner], eax
-    call storage_access_request_intent
+    mov  rdi, [r12 + exf_ctx.dev]
+    call storage_access_intent_for_dev
     mov  [rel exf_w_intent], eax
     call exf_w_live
     test rax, rax
@@ -7860,7 +8395,8 @@ exf_op_write_at_path:
 .bufferok:
     call storage_access_request_owner
     mov  [rel exf_w_owner], eax
-    call storage_access_request_intent
+    mov  rdi, [r12 + exf_ctx.dev]
+    call storage_access_intent_for_dev
     mov  [rel exf_w_intent], eax
     call exf_w_live
     test rax, rax
@@ -8443,6 +8979,7 @@ exf_emit_dev_name:
 
 ; ---- read-only data ----
 exf_c_month_days:    db 31,28,31,30,31,30,31,31,30,31,30,31
+exf_p_suffix:        db 'PAOSAPP', 0
 ; Canonical read-only token identity for the bounded PARTLS type union.
 exfat_disk_part_type:
 str_exf_backend:     db "exfat", 0
@@ -8575,7 +9112,7 @@ exf_t_active: resd 1
 exf_t_kind: resd 1
 exf_t_old_leaf: resd 1
 exf_t_new_leaf: resd 1
-exf_t_component: resb 16
+exf_t_component: resb 17                ; '/' +15units +NUL
 exf_t_component11: resb 11
 exf_t_ancestors: resb 3 * 104          ; exact physical location +96-byte set per ancestor
 exf_t_find_count: resd 1
@@ -8664,6 +9201,15 @@ exf_list_names_used:    resd 1
 exf_up_len:             resq 1
 exf_list_ptr:           resq 1
 exf_list_result:        resq 1
+exf_sel_gpt:            resb 1
+exf_sel_reading:        resb 1
+alignb 8
+exf_sel_device:         resq 1
+exf_sel_identity:       resq 5
+exf_sel_primary:        resb 96
+exf_sel_again:          resb 96
+exf_sel_vbr:            resb 512
+exf_sel_vbr_again:      resb 512
 exf_spare_ctx:          resq 1
 exf_rd_fallback:        resq 1
 exf_rd_piece:           resq 1
@@ -8746,6 +9292,122 @@ exfat_disk_source_device:
 .out:
     pop  rdx
     pop  rdi
+    ret
+
+; Copy admission must compare the original immutable context BEFORE following
+; its device/info/cache pointers. Pure, preserving every register except RAX.
+exfat_disk_copy_device:
+    push r12
+    push rdi
+    push rsi
+    push rdx
+    push rcx
+    push r8
+    push r9
+    push r10
+    push r11
+    call exfat_disk_source_device
+    test rax, rax
+    jz   .out
+    mov  r12, [rdi + fsmount.priv]
+    lea  rdi, [rel exf_src_metadata]
+    cmp  r12, [rel exf_src_contexts]
+    je   .check
+    add  rdi, EXF_SRC_META_BYTES
+.check:
+    xor  ecx, ecx
+    call exf_src_metadata_check
+    test rax, rax
+    jnz  .bad
+    mov  rax, [r12 + exf_ctx.dev]
+    jmp  .out
+.bad:
+    xor  eax, eax
+.out:
+    pop  r11
+    pop  r10
+    pop  r9
+    pop  r8
+    pop  rcx
+    pop  rdx
+    pop  rsi
+    pop  rdi
+    pop  r12
+    ret
+
+; RDI=fsmount -> RAX=1 only for an exact, current, healthy registered mount
+; whose actual block descriptor says RO. Pure: no I/O, arm, grant or setters;
+; preserves every register except RAX. An absent arm is never an RO fact.
+exfat_disk_mount_readonly:
+    push rdx
+    test rdi, rdi
+    jz .no
+    call exfat_disk_copy_device          ; immutable mount/context/device/info + generation
+    test rax, rax
+    jz .out
+    cmp dword [rax + dev.health], HEALTH_OK
+    jne .no
+    mov rdx, [rax + dev.info]            ; verified non-null by the currentness check
+    mov edx, [rdx + blk_info.flags]
+    or edx, [rax + dev.flags]
+    test edx, BLKF_RO
+    setnz al
+    movzx eax, al
+    jmp .out
+.no:
+    xor eax, eax
+.out:
+    pop rdx
+    ret
+
+; RDI=mount, RSI=2048B zeroed native token -> RAX=dev*/0, RDX=epoch.
+; Keep the exFAT layout private: other filesystem-only HOST compositions need
+; only these callbacks, rather than duplicating this context's field offsets.
+%if 64 + exf_ctx.dir - exf_ctx.clus_count > 1024
+ %error "exFAT copy token geometry overlaps incarnation"
+%endif
+exfat_disk_copy_snapshot:
+    push rbx
+    push r12
+    mov  rbx, rsi
+    call exfat_disk_copy_device
+    test rax, rax
+    jz   .out
+    mov  r12, [rdi + fsmount.priv]
+    push rax
+    mov  rdi, rbx
+    mov  rsi, r12
+    mov  edx, 64
+    call memcpy
+    lea  rdi, [rbx + 64]
+    lea  rsi, [r12 + exf_ctx.clus_count]
+    mov  edx, exf_ctx.dir - exf_ctx.clus_count
+    call memcpy
+    ; Original registry + fresh boot authenticate the verified percentage.
+    mov  byte [rbx + 64 + exf_ctx.boot_identity - exf_ctx.clus_count + EBS_PCT_USE], 0
+    mov  rax, [r12 + exf_ctx.incarnation]
+    mov  [rbx + 1024], rax
+    mov  rdx, [r12 + exf_ctx.media_gen]
+    pop  rax
+.out:
+    pop  r12
+    pop  rbx
+    ret
+
+; Enter the original per-transfer read guard for this bound copy mount.
+; sc_io_end always clears the flag before any mutation or other device read.
+exfat_disk_copy_read_begin:
+    call exfat_disk_source_current
+    test rax, rax
+    jnz  .out
+    push r12
+    mov  r12, [rel exf_src_mount]
+    mov  r12, [r12 + fsmount.priv]
+    mov  qword [r12 + exf_ctx.sec_tag], -1
+    mov  qword [r12 + exf_ctx.fat_tag], -1
+    mov  qword [rel exf_src_reading], 1
+    pop  r12
+.out:
     ret
 
 ; R12=ctx, RDI=registered snapshot, ECX=save(1)/compare(0).
@@ -8987,15 +9649,27 @@ exf_src_trace:
     mov  rax, [rel exf_src_cursor]
     add  rax, rdx
     jc   .bad
+    mov  rdi, [rel exf_src_trace_target]
+    test rdi, rdi
+    jz   .ordinary
+    cmp  rax, EXF_COPY_TRACE_MAX
+    ja   .bad
+    jmp  .bounded
+.ordinary:
     cmp  rax, EXF_SRC_TRACE_MAX
     ja   .bad
+.bounded:
     cmp  dword [rel exf_src_binding], 0
     jne  .save
     cmp  rax, [rel exf_src_length]
     ja   .bad
 .save:
     push rax
+    mov  rdi, [rel exf_src_trace_target]
+    test rdi, rdi
+    jnz  .target
     lea  rdi, [rel exf_src_trace_buf]
+.target:
     add  rdi, [rel exf_src_cursor]
     cmp  dword [rel exf_src_binding], 0
     je   .compare
@@ -9147,6 +9821,30 @@ exfat_disk_source_stat:
     pop  rbx
     ret
 
+; Bounded copy stat: RSI/EDX=path, R8=1024B identity -> size/-1.
+; Reuse the ORIGINAL complete ordered resolver transcript, with a separate
+; caller-owned slot for each file. Overflow refuses, never truncates. Restore
+; the ordinary source adapter's retained length/target on every outcome.
+EXF_COPY_TRACE_MAX equ 1016
+exfat_disk_copy_stat:
+    push rbx
+    push qword [rel exf_src_trace_target]
+    push qword [rel exf_src_length]
+    mov  rbx, r8
+    lea  rax, [r8 + 8]
+    mov  [rel exf_src_trace_target], rax
+    mov  ecx, 1
+    call exfat_disk_source_stat
+    test rax, rax
+    js   .out
+    mov  rdx, [rel exf_src_length]
+    mov  [rbx], rdx
+.out:
+    pop  qword [rel exf_src_length]
+    pop  qword [rel exf_src_trace_target]
+    pop  rbx
+    ret
+
 ; exfat_disk_source_mtime -> RAX = the bound source file's modification time as Unix UTC seconds, EDX =
 ;   nanoseconds; CF=1 unknown (no stamp, a field out of range, a 10 ms increment past 199, or local time
 ;   with no PaOS clock zone). E2t (root 2026-10-17 21:04:41). The File entry's LastModified timestamp
@@ -9264,6 +9962,7 @@ exf_src_links: resd 1
 exf_src_components: resd 1
 exf_src_link_pair: resb 8
 exf_src_vbr: resb 512
+exf_src_trace_target: resq 1
 exf_src_trace_buf: resb EXF_SRC_TRACE_MAX
 %endmacro
 WDATA_BSS_DEFER WDATA_fs_exfat_copy_source_bss
@@ -9272,3 +9971,126 @@ WDATA_BSS_DEFER WDATA_fs_exfat_copy_source_bss
 exfat_disk_format_ops:
     lea  rax, [rel exf_ops]
     ret
+
+; Bounded observations of actual discovery refusals, not authority or a rescan.
+; Each 56-byte record: dev*, LBA, extent, original generation, info*, ops*, reason.
+EXF_REFUSAL_MAX equ 16
+exfat_refusal_reset:
+    mov dword [rel exfat_refusal_count],0
+    mov byte [rel exfat_refusal_overflow],0
+    ; Discovery skips extended containers and stops at bounded mount/GPT limits.
+    ; No value from this cache, including a miss, certifies filesystem absence.
+    mov byte [rel exfat_refusal_scan_limited],1
+    inc qword [rel exfat_refusal_epoch]
+    jnz .epoch
+    mov byte [rel exfat_refusal_epoch_wrapped],1
+.epoch:
+    mov al,[rel exfat_refusal_epoch_wrapped]
+    mov [rel exfat_refusal_conflict],al    ; wrap remains poisoned until reboot
+    ret
+
+; RDI actual dev, RSI LBA, EDX reason, RCX extent, R8 -> original info/ops/gen.
+; Caller-volatile scratch only; preserves RDI/RSI/RDX for the existing serial rail.
+; No IO, allocation, context pointer retention, mount or writer state change.
+exfat_refusal_record:
+    test rdi,rdi
+    jz .invalid
+    test r8,r8
+    jz .invalid
+    test rcx,rcx
+    jz .invalid
+    test edx,edx
+    jz .invalid
+    cmp edx,EXF_R_NOMOUNT
+    ja .invalid
+    cmp qword [r8],0
+    je .invalid
+    cmp qword [r8+8],0
+    je .invalid
+    cmp qword [r8+16],0
+    je .invalid
+    lea r9,[rel exfat_refusal_records]
+    xor r10d,r10d
+.find:
+    cmp r10d,[rel exfat_refusal_count]
+    jae .append
+    cmp r10d,EXF_REFUSAL_MAX
+    jae .full
+    cmp [r9],rdi
+    jne .next
+    cmp [r9+8],rsi
+    jne .next
+    cmp [r9+16],rcx
+    jne .invalid
+    mov r11,[r8+16]
+    cmp [r9+24],r11
+    jne .invalid
+    mov r11,[r8]
+    cmp [r9+32],r11
+    jne .invalid
+    mov r11,[r8+8]
+    cmp [r9+40],r11
+    jne .invalid
+    cmp [r9+48],edx
+    jne .invalid
+    ret
+.next:
+    add r9,56
+    inc r10d
+    jmp .find
+.append:
+    cmp r10d,EXF_REFUSAL_MAX
+    jae .full
+    mov [r9],rdi
+    mov [r9+8],rsi
+    mov [r9+16],rcx
+    mov r11,[r8+16]
+    mov [r9+24],r11
+    mov r11,[r8]
+    mov [r9+32],r11
+    mov r11,[r8+8]
+    mov [r9+40],r11
+    mov [r9+48],edx
+    mov dword [r9+52],0
+    inc dword [rel exfat_refusal_count]
+    ret
+.full:
+    mov byte [rel exfat_refusal_overflow],1
+    ret
+.invalid:
+    mov byte [rel exfat_refusal_conflict],1
+    ret
+
+; RDI actual dev, RSI exact LBA -> RAX original record or zero. Never refreshes.
+exfat_refusal_lookup:
+    lea rax,[rel exfat_refusal_records]
+    xor ecx,ecx
+.next:
+    cmp ecx,[rel exfat_refusal_count]
+    jae .missing
+    cmp ecx,EXF_REFUSAL_MAX
+    jae .missing
+    cmp [rax],rdi
+    jne .advance
+    cmp [rax+8],rsi
+    je .done
+.advance:
+    add rax,56
+    inc ecx
+    jmp .next
+.missing:
+    xor eax,eax
+.done:
+    ret
+
+%macro WDATA_BSS_exfat_refusal 0
+alignb 8
+exfat_refusal_epoch: resq 1
+exfat_refusal_count: resd 1
+exfat_refusal_overflow: resb 1
+exfat_refusal_conflict: resb 1
+exfat_refusal_epoch_wrapped: resb 1
+exfat_refusal_scan_limited: resb 1
+exfat_refusal_records: resb EXF_REFUSAL_MAX*56
+%endmacro
+WDATA_BSS_DEFER WDATA_BSS_exfat_refusal

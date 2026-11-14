@@ -1,8 +1,8 @@
 ;; MODULE svc/command_auth
 %include "core/abi/build_profile.inc"
 ;; LAYER 5
-;; EXPORTS net_audit_verb_name, net_audit_reason_name, net_audit_refusal_meta, command_auth_ssh_active, command_auth_owner_request, command_auth_owner_envelope, command_auth_injection_gate, command_session_sync_active, command_auth_parse_hex64, command_auth_init, command_publicity_udp_init, command_auth_legacy_read_kat_cap, command_auth_remote_begin, command_auth_remote_end, command_auth_ticket_owner, command_auth_unwrap_line, command_auth_gate, command_auth_consume_public, command_auth_required_cap, command_auth_register_intercept, command_auth_route_gate, command_auth_refuse, command_auth_note_aihook_proof, command_auth_note_serial_proof, command_auth_stage_refusal, command_auth_stage_ai_probe, command_auth_out_buf, command_auth_out_ready, command_auth_refusal_ready, command_auth_ticket_size, command_auth_message, command_auth_last_sequence, pbm_sb_secureboot, command_session_allow_op, command_session_sync_op, command_dispatch, command_auth_node_id_ensure, command_auth_node_hex
-;; IMPORTS sec/platform_key_health, svc/lab_return, boot/smbios, boot/rescue0_snp, core/lib/mem, core/lib/sha256, core/lib/str, core/lib/fmt, core/time, core/lock, core/capability, boot/header, boot/paging, boot/boot_v2_handoff, bootmgr/rsa2048_verify, data/crypto_envelope, sec/job_receipt, sec/node_identity, sec/principal, svc/command, svc/command_udp, svc/command_guestcpu, svc/command_web, svc/command_fs, svc/command_backup, svc/push_auth, web/structured_kat, svc/command_privacy, security/sensitive_classifier, fs/storage_access, boot/nvram_access, sec/session, svc/command_card, sec/owner_store, sec/replay_floor
+;; EXPORTS command_catalog_block_count, command_catalog_block_text, net_audit_verb_name, net_audit_reason_name, net_audit_refusal_meta, command_auth_ssh_active, command_auth_owner_request, command_auth_owner_envelope, command_auth_owner_consumed_for, command_auth_injection_gate, command_session_sync_active, command_auth_parse_hex64, command_auth_init, command_publicity_udp_init, command_auth_legacy_read_kat_cap, command_auth_remote_begin, command_auth_remote_end, command_auth_ticket_owner, command_auth_unwrap_line, command_auth_gate, command_auth_consume_public, command_auth_required_cap, command_auth_register_intercept, command_auth_route_gate, command_auth_refuse, command_auth_note_aihook_proof, command_auth_note_serial_proof, command_auth_stage_refusal, command_auth_stage_ai_probe, command_auth_out_buf, command_auth_out_ready, command_auth_refusal_ready, command_auth_ticket_size, command_auth_message, command_auth_last_sequence, pbm_sb_secureboot, secureboot_try_current_admit, command_session_allow_op, command_session_sync_op, command_dispatch, command_auth_node_id_ensure, command_auth_node_hex, command_auth_node_id_derive
+;; IMPORTS sec/terminal_command, sec/platform_key_health, svc/lab_return, boot/smbios, boot/rescue0_snp, core/lib/mem, core/lib/sha256, core/lib/str, core/lib/fmt, core/time, core/lock, core/capability, boot/header, boot/paging, boot/boot_v2_handoff, bootmgr/rsa2048_verify, data/crypto_envelope, sec/job_receipt, sec/node_identity, sec/principal, svc/command, svc/command_udp, svc/command_guestcpu, svc/command_web, svc/command_fs, svc/command_backup, svc/push_auth, web/structured_kat, svc/command_privacy, security/sensitive_classifier, fs/storage_access, boot/nvram_access, sec/session, svc/command_card, sec/owner_store, sec/replay_floor
 ;; CAPS CAP_BLOCK_WRITE
 ;; OWNER saga:secure_boot
 ;; LOCK: command_auth_lock PROTECTS command_auth_last_sequence, command_auth_accept_count, command_auth_deny_count, command_auth_replay_state, command_auth_replay_record, command_auth_reserved_through, command_auth_resv_state, command_auth_resv_error, command_auth_seal
@@ -43,7 +43,8 @@ AUTH_T_EXPIRES   equ 24
 AUTH_T_COMMAND   equ 32
 AUTH_T_STATE     equ 40
 AUTH_T_PRINCIPAL equ 48
-AUTH_T_SIZE      equ 56
+AUTH_T_SIGNER_ID equ 56                ; immutable verified SPKI pointer, or zero; never a replay domain
+AUTH_T_SIZE      equ 64
 command_auth_ticket_size equ AUTH_T_SIZE
 
 ; Shared identity ABI must exist before command_aihook allocates its bind
@@ -85,6 +86,7 @@ AUTH_TS_WRONG_NODE equ 8               ; AUTH2 node_id missing, malformed or not
 ; SSH-bound principal; never owner intent, never consumable.
 AUTH_TS_INJECTED equ 9
 AUTH_TS_GUEST    equ 10                ; native guest_request ticket; no wire credentials
+AUTH_TS_TERMINAL equ 11                ; exact native Terminal policy ticket; never OWNER
 
 AUTHR_UNSIGNED   equ 1
 AUTHR_MALFORMED  equ 2
@@ -278,7 +280,11 @@ command_auth_replay_load:
     jne  .out
     cmp  word [rel command_auth_replay_record + AUTH_REPLAY_SIZE_OFF], AUTH_REPLAY_SIZE
     jne  .out
+%ifdef BOOT_V2_COMMAND_PAIR_ABI
+    lea  rbx, [rel boot_v2_command_replay_domain_id]
+%else
     lea  rbx, [rel command_auth_owner_key_id]
+%endif
     mov  rax, [rbx]
     cmp  [rel command_auth_replay_record + AUTH_REPLAY_KEY_ID_OFF], rax
     jne  .out
@@ -373,7 +379,11 @@ command_auth_replay_persist:
     mov  word [rel command_auth_replay_record + AUTH_REPLAY_VERSION_OFF], AUTH_REPLAY_VERSION
     mov  word [rel command_auth_replay_record + AUTH_REPLAY_SIZE_OFF], AUTH_REPLAY_SIZE
     lea  rdi, [rel command_auth_replay_record + AUTH_REPLAY_KEY_ID_OFF]
+%ifdef BOOT_V2_COMMAND_PAIR_ABI
+    lea  rsi, [rel boot_v2_command_replay_domain_id]
+%else
     lea  rsi, [rel command_auth_owner_key_id]
+%endif
     mov  edx, 32
     call memcpy
     mov  [rel command_auth_replay_record + AUTH_REPLAY_SEQ_OFF], r13
@@ -497,7 +507,7 @@ command_auth_init:
     ; HELP and AUTHSTAT are ordinary read-only registry verbs.  Their output is
     ; generated from the live registry and live intercept table at request time.
     lea  rdi, [rel str_auth_verb_help]
-    lea  rsi, [rel command_auth_status_verb]
+    lea  rsi, [rel command_catalog_help_verb]
     xor  edx, edx
     mov  ecx, ARGT_TEXT
     xor  r8, r8
@@ -1174,22 +1184,36 @@ command_auth_unwrap_line:
     mov  rdx, r15
     call command_auth_build_message
 
+%ifdef BOOT_V2_COMMAND_PAIR_ABI
+    lea  rdi, [rel command_auth_signature]
+    lea  rsi, [rel command_auth_message]
+    lea  rdx, [r15 + AUTH_MSG_HDR]
+    call command_auth_verify_pair
+    mov  ebx, eax
+    ; The returned pointer belongs to immutable BOOT trust data. Keep it on
+    ; THIS ticket, never in global last-success state. Failed verification
+    ; returns zero, including after a prior successful request.
+    mov  [r13 + AUTH_T_SIGNER_ID], rdx
+    call command_auth_scrub_verifier
+    test ebx, ebx
+    jnz  .wrong_key
+    mov  rax, [r13 + AUTH_T_SIGNER_ID]
+%else
     lea  rdi, [rel command_auth_signature]
     lea  rsi, [rel command_auth_message]
     lea  rdx, [r15 + AUTH_MSG_HDR]
     lea  rcx, [rel command_auth_owner_modulus]
     call rsa2048_verify_sha256
-    ; w045 secret hygiene: the signed message copy (and the one-shot SHA-256
-    ; block/schedule that hashed it) hold the inner command, which may carry a
-    ; credential. Nothing reads them after the verdict: wipe on EVERY outcome
-    ; before a forged/expired/replayed envelope can leave them resident.
+    ; Wipe canonical plaintext and SHA block/schedule on every RSA verdict.
     mov  ebx, eax
     call command_auth_scrub_verifier
     test ebx, ebx
     jnz  .wrong_key
-    ; The verified method selects the principal. The caller's asserted PID is
-    ; deliberately zero/non-authoritative; authenticate_bind returns the PID.
     lea  rax, [rel command_auth_owner_key_id]
+    mov  [r13 + AUTH_T_SIGNER_ID], rax
+%endif
+    ; The verified method selects the principal. Asserted PID stays zero;
+    ; credential is the actual signer, never the stable replay-domain label.
     mov  [rel command_auth_bind_ctx + AUTH_CTX_CREDENTIAL], rax
     mov  qword [rel command_auth_bind_ctx + AUTH_CTX_CRED_LEN], 32
     mov  qword [rel command_auth_bind_ctx + AUTH_CTX_ASSERTED_PID], 0
@@ -1236,6 +1260,72 @@ command_auth_unwrap_line:
     pop  r12
     pop  rbx
     ret
+
+; command_auth_verify_pair(signature, canonical message, length)
+; -> EAX=0 and RDX=actual immutable SPKI pointer, else EAX=1/RDX=0.
+; Only BOOT's authenticated command-role accessor supplies public keys. The
+; bounded count is checked before any accessor; there is no legacy fallback
+; in explicit pair mode. Preserves RBX/R12-R15; caller scrubs canonical/SHA
+; scratch after the final verdict, before binding or any refusal.
+command_auth_verify_pair:
+%ifdef BOOT_V2_COMMAND_PAIR_ABI
+%if BOOT_V2_COMMAND_PAIR_ABI != 1
+    %error "unsupported command authority pair ABI"
+%endif
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov  r12, rdi
+    mov  r13, rsi
+    mov  r14, rdx
+    xor  r15d, r15d
+    mov  eax, [rel boot_v2_command_pair_count]
+    dec  eax
+    cmp  eax, 1
+    ja   .bad
+.next:
+    mov  edi, r15d
+    call boot_v2_command_pair_get
+    test rax, rax
+    jz   .skip
+    test rdx, rdx
+    jz   .bad
+    mov  rbx, rdx
+    mov  rcx, rax
+    mov  rdi, r12
+    mov  rsi, r13
+    mov  rdx, r14
+    call rsa2048_verify_sha256
+    test eax, eax
+    jz   .verified
+.skip:
+    inc  r15d
+    cmp  r15d, 2
+    jae  .bad
+    cmp  r15d, [rel boot_v2_command_pair_count]
+    jb   .next
+.bad:
+    mov  eax, 1
+    xor  edx, edx
+    jmp  .out
+.verified:
+    mov  rdx, rbx
+    xor  eax, eax
+.out:
+    pop  r15
+    pop  r14
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+%else
+    ; This entry is unused by legacy unwrap; keep a total refusal if called.
+    mov  eax, 1
+    xor  edx, edx
+    ret
+%endif
 
 ; command_auth_parse_node_id(RDI=text) -> exactly 32 hex digits into
 ;   command_auth_wire_node[16]; RDX = next pointer, CF clear on success, CF set
@@ -1604,12 +1694,10 @@ command_auth_node_id_ensure:
     xor  eax, eax
     ret
 
-; command_auth_scrub_verifier — wipe the AUTH1 verifier workspace after the
-; RSA verdict. command_auth_message holds domain||ticket||inner command; the
-; shared one-shot SHA-256 context (block tail) and its message schedule
-; (byte-swapped block words) still hold the last message bytes it hashed.
-; A zero-length sha256_hash rewrites the whole 64-byte block (0x80 pad + zero
-; + length) and all 64 schedule words through the module's own API.
+; command_auth_scrub_verifier — wipe canonical AUTH2 plaintext after the
+; final RSA verdict. The shared one-shot SHA context still holds its partial
+; block; hashing the empty message rewrites it with public padding/zeroes.
+; sha256_transform owns and wipes its private stack schedule/round scratch.
 ; Preserves RBX/R12-R15. clobbers: caller-saved.
 command_auth_scrub_verifier:
     sub  rsp, 40
@@ -2867,6 +2955,8 @@ command_auth_authorize:
     je   .expired
     cmp  eax, AUTH_TS_CONSUMED
     je   .consumed
+    cmp  eax, AUTH_TS_TERMINAL
+    je   .terminal_principal
     cmp  eax, AUTH_TS_GUEST
     je   .guest_principal
     cmp  eax, AUTH_TS_SSH
@@ -2878,6 +2968,16 @@ command_auth_authorize:
     cmp  eax, AUTH_TS_WRONG_NODE
     je   .wrong_node
     jmp  .malformed
+.terminal_principal:
+    ; SEC owns exact native pointer/inflight/frozen policy validation. Keep the
+    ; original Terminal principal; no OWNER, static-cap or wire-ticket fallback.
+    mov  rdi, r12
+    mov  rsi, r13
+    mov  rdx, r14
+    call terminal_policy_authorize
+    test eax, eax
+    jnz  .principal_denied
+    jmp  .out
 .guest_principal:
     ; No static guest capability row, OWNER credential, or SSH projection.
     ; Only the adapter's exact in-flight native ticket can reach its grant hook.
@@ -3213,6 +3313,56 @@ command_auth_prefix_equal:
     xor  eax, eax
     ret
 
+; command_auth_owner_consumed_for(RDI=verb name, NUL-terminated) -> EAX 1 when the request in flight is a
+;   remote frame (command_auth_remote_active 1, command_session_sync_active 0, keyprov_active_taint 0) whose
+;   own ticket is PRIN_OWNER and AUTH_TS_CONSUMED (the gate verified its signature and spent its sequence for
+;   this frame) and whose command's first word is exactly RDI; else 0. A VALID ticket the gate did not consume
+;   (the floor hand-off, a replayable envelope) and an SSH ticket (a revocable enrolled key) are 0. SEC106668
+;   R1: the one caller is fs_copy_carry_stage's FAT-scratch branch (census-pinned). Preserves RDI; clobbers
+;   RAX, RCX, RDX.
+command_auth_owner_consumed_for:
+    xor  eax, eax
+    cmp  byte [rel command_auth_remote_active], 1
+    jne  .out
+    cmp  byte [rel command_session_sync_active], 0
+    jne  .out                            ; a sync-dispatched frame is a console frame
+    cmp  qword [rel keyprov_active_taint], 0
+    jne  .out                            ; an injected line is never the owner's
+    mov  rdx, [rel command_auth_remote_ticket]
+    test rdx, rdx
+    jz   .out
+    cmp  qword [rdx + AUTH_T_PRINCIPAL], PRIN_OWNER
+    jne  .out
+    cmp  qword [rdx + AUTH_T_STATE], AUTH_TS_CONSUMED
+    jne  .out                            ; consumed by the gate: never VALID-unconsumed, never SSH
+    mov  rdx, [rdx + AUTH_T_COMMAND]
+    test rdx, rdx
+    jz   .out
+    xor  ecx, ecx
+.word:
+    mov  al, [rdi + rcx]
+    test al, al
+    jz   .word_end
+    cmp  al, [rdx + rcx]
+    jne  .no                             ; the ticket names another verb
+    inc  ecx
+    cmp  ecx, 32
+    jb   .word
+    jmp  .no
+.word_end:
+    mov  al, [rdx + rcx]
+    test al, al
+    jz   .yes
+    cmp  al, ' '
+    je   .yes
+.no:
+    xor  eax, eax
+    ret
+.yes:
+    mov  eax, 1
+.out:
+    ret
+
 ; Public helper for parser failures before routing.
 ; RDI=AUTHR_*, RSI=verb (or outer line), RDX=ticket.
 command_auth_refuse:
@@ -3269,6 +3419,10 @@ command_auth_stage_refusal:
     lea  rdi, [rel str_auth_zero_effect]
     call command_auth_put_str
     call command_auth_put_owner_key_id
+%ifdef BOOT_V2_COMMAND_PAIR_ABI
+    mov  rdi, rbx
+    call command_auth_put_request_signer
+%endif
 
     ; The node identity signs the exact refusal receipt accumulated so far.  It
     ; authenticates PaOS's response without exposing the node seed.
@@ -3399,6 +3553,7 @@ command_auth_reason_ptr:
 ;   Leaf: entry RSP mod16==8, sub 40 -> mod16==0 at the firmware call.
 ;   clobbers rax,rcx,rdx,r8,r9,r10
 sb_getvar_byte:
+    mov qword [rel sb_snap_status],-1
     mov  r10, [rel runtime_services]
     mov  qword [rel sb_snap_size], 1
     mov  byte  [rel sb_snap_databuf], 0
@@ -3418,8 +3573,11 @@ sb_getvar_byte:
 %endif
     call [r10 + 0x48]                    ; EFI_RUNTIME_SERVICES.GetVariable
     add  rsp, 40
+    mov [rel sb_snap_status],rax
     test rax, rax
     jnz  .miss
+    cmp qword [rel sb_snap_size],1
+    jne .miss
     movzx eax, byte [rel sb_snap_databuf]
     mov  edx, 1
     ret
@@ -3468,6 +3626,10 @@ secureboot_snapshot:
     call smbios_identity_snapshot
     call platform_key_health_snapshot
     mov  byte [rel pbm_sb_snapshot_valid], 0
+    mov byte [rel pbm_sb_secureboot],0xFF
+    mov byte [rel pbm_sb_setupmode],0xFF
+    mov byte [rel pbm_sb_mok_present],0xFF
+    mov byte [rel pbm_sb_shimstate],0xFF
     mov  rax, [rel runtime_services]
     test rax, rax
     jz   .marker
@@ -3487,6 +3649,17 @@ secureboot_snapshot:
     lea  rsi, [rel sb_moklist_guid]
     call sb_getvar_present
     mov  [rel pbm_sb_mok_present], al
+    lea rdi,[rel sb_name_shimstate]
+    lea rsi,[rel sb_moklist_guid]
+    call sb_getvar_byte
+    test edx,edx
+    jnz .shim_byte
+    mov rax,0x800000000000000E
+    cmp [rel sb_snap_status],rax
+    jne .marker                       ; unreadable stays unknown
+    xor eax,eax                       ; observed absence is shim secure default
+.shim_byte:
+    mov [rel pbm_sb_shimstate],al
 .marker:
     lea  rdi, [rel str_sb_snap_pre]
     call serial_string
@@ -3658,6 +3831,30 @@ r0stat_stage:
     pop  rbx
     ret
 
+; Connected consumer of current Manager admission + fresh native pre-EBS
+; observations. A saved observation/imported flag cannot open the Try session.
+secureboot_try_current_admit:
+    xor eax,eax
+    cmp byte [rel pbm_try_media],1
+    jne .done
+    cmp byte [rel pbm_manager_launch],1
+    jne .done
+    cmp byte [rel pbm_try_current],1
+    jne .done
+    cmp qword [rel pbm_attempt_nonce],0
+    je .done
+    cmp byte [rel pbm_sb_snapshot_valid],1
+    jne .done
+    cmp byte [rel pbm_sb_secureboot],1
+    jne .done
+    cmp byte [rel pbm_sb_setupmode],0
+    jne .done
+    cmp byte [rel pbm_sb_shimstate],0
+    jne .done
+    mov eax,1
+.done:
+    ret
+
 secureboot_stage:
     call command_auth_out_reset
     lea  rdi, [rel str_sb_pre]
@@ -3676,6 +3873,24 @@ secureboot_stage:
     call command_auth_put_str
     movzx edi, byte [rel pbm_sb_mok_present]
     call command_auth_put_dec
+    lea rdi,[rel str_sb_shimstate]
+    call command_auth_put_str
+    movzx edi,byte [rel pbm_sb_shimstate]
+    call command_auth_put_dec
+    lea rdi,[rel str_sb_try_current]
+    call command_auth_put_str
+    call secureboot_try_current_admit
+    mov edi,eax
+    call command_auth_put_dec
+    lea rdi,[rel str_sb_try_cert]
+    call command_auth_put_str
+    lea rdi,[rel pbm_try_cert_sha]
+    mov esi,32
+    call command_auth_put_bytes
+    lea rdi,[rel str_sb_try_nonce]
+    call command_auth_put_str
+    mov rdi,[rel pbm_attempt_nonce]
+    call command_auth_put_hex16
     lea  rdi, [rel str_sb_pk_health]
     call command_auth_put_str
     movzx edi, byte [rel platform_key_health_state]
@@ -3691,11 +3906,31 @@ secureboot_stage:
     mov  byte [rel command_auth_out_ready], 1
     ret
 
+command_catalog_block_count:
+    jmp cc_block_count
+command_catalog_block_text:
+    jmp cc_block_text
+
+%include "svc/command_catalog.inc"
+
 command_auth_status_verb:
     call cmd_handler_prologue
     push rdi
     push rsi
+%ifdef BOOT_V2_COMMAND_PAIR_ABI
+    mov  rax, [rdi + REQ_ARG]
+    test rax, rax
+    jz   .ordinary
+    cmp  dword [rax], 'PAIR'
+    jne  .ordinary
+    cmp  byte [rax + 4], 0
+    jne  .ordinary
+    call command_auth_pair_inventory_stage
+    jmp  .staged
+.ordinary:
+%endif
     call command_auth_inventory_stage
+.staged:
     pop  rsi
     pop  rdi
     mov  rax, [rdi + REQ_ARG]
@@ -4584,6 +4819,84 @@ command_auth_put_hex16:
     lea  rdi, [rel command_auth_num_buf]
     jmp  command_auth_put_str
 
+; Request attribution is meaningful only for a signature verified on this
+; ticket. Non-RSA tickets and malformed/forged requests render "none".
+command_auth_put_request_signer:
+%ifdef BOOT_V2_COMMAND_PAIR_ABI
+    push rbx
+    mov  rbx, rdi
+    lea  rdi, [rel str_auth_pair_signer]
+    call command_auth_put_str
+    test rbx, rbx
+    jz   .none
+    mov  rdi, [rbx + AUTH_T_SIGNER_ID]
+    test rdi, rdi
+    jz   .none
+    mov  esi, 32
+    call command_auth_put_bytes
+    jmp  .out
+.none:
+    lea  rdi, [rel str_auth_pair_none]
+    call command_auth_put_str
+.out:
+    pop  rbx
+%endif
+    ret
+
+; Separate bounded read through the existing public AUTHSTAT registry row.
+; Default AUTHSTAT, its signer discovery and sequence fields retain their
+; existing shape; pair-aware callers explicitly request "AUTHSTAT PAIR".
+command_auth_pair_inventory_stage:
+%ifdef BOOT_V2_COMMAND_PAIR_ABI
+    call command_auth_out_reset
+    lea  rdi, [rel str_auth_pair_pre]
+    call command_auth_put_str
+    call command_auth_put_owner_key_id
+    lea  rdi, [rel str_auth_pair_domain]
+    call command_auth_put_str
+    lea  rdi, [rel boot_v2_command_replay_domain_id]
+    mov  esi, 32
+    call command_auth_put_bytes
+    lea  rdi, [rel str_auth_pair_epoch]
+    call command_auth_put_str
+    mov  rdi, [rel boot_v2_command_pair_epoch]
+    call command_auth_put_dec
+    lea  rdi, [rel str_auth_pair_digest]
+    call command_auth_put_str
+    lea  rdi, [rel boot_v2_command_pair_digest]
+    mov  esi, 32
+    call command_auth_put_bytes
+    lea  rdi, [rel str_auth_pair_primary]
+    call command_auth_put_str
+    xor  edi, edi
+    call boot_v2_command_pair_get
+    mov  rdi, rdx
+    call command_auth_put_pair_member
+    lea  rdi, [rel str_auth_pair_backup]
+    call command_auth_put_str
+    mov  edi, 1
+    call boot_v2_command_pair_get
+    mov  rdi, rdx
+    call command_auth_put_pair_member
+    mov  rdi, [rel command_auth_remote_ticket]
+    call command_auth_put_request_signer
+    mov  byte [rel command_auth_out_ready], 1
+%endif
+    ret
+
+command_auth_put_pair_member:
+%ifdef BOOT_V2_COMMAND_PAIR_ABI
+    test rdi, rdi
+    jz   .none
+    mov  esi, 32
+    jmp  command_auth_put_bytes
+.none:
+    lea  rdi, [rel str_auth_pair_none]
+    jmp  command_auth_put_str
+%else
+    ret
+%endif
+
 ; Append the compiled owner key identity through one production seam.  The
 ; underlying helper bounds every write against AUTH_OUT_MAX and renders only
 ; through command_auth_hex_digits, so both operator paths stay lowercase and
@@ -4668,6 +4981,17 @@ command_auth_owner_key_id:
                                             ; boot_v2_owner_modulus from BOOT_V2_OWNER_PUBLIC_KEY
     times -((($ - command_auth_owner_key_id) - 32) * (($ - command_auth_owner_key_id) - 32)) db 0  ; exactly 32 B
 
+%ifdef BOOT_V2_COMMAND_PAIR_ABI
+str_auth_pair_pre: db "AUTHPAIR command_pair_abi=1 owner_key_id=",0
+str_auth_pair_domain: db " replay_domain_id=",0
+str_auth_pair_epoch: db " trust_epoch=",0
+str_auth_pair_digest: db " pair_digest=",0
+str_auth_pair_primary: db " primary_key_id=",0
+str_auth_pair_backup: db " backup_key_id=",0
+str_auth_pair_signer: db " request_signer_key_id=",0
+str_auth_pair_none: db "none",0
+%endif
+
 command_auth_domain: db "PAOS-CMD-AUTH2",0,0
 command_auth_hex_digits: db "0123456789abcdef"
 
@@ -4691,7 +5015,9 @@ sb_moklist_guid:                          ; MOK RT 605dab50-e046-4300-abb6-3dd81
     db 0xab,0xb6,0x3d,0xd8,0x10,0xdd,0x8b,0x23
 sb_name_secureboot: dw 'S','e','c','u','r','e','B','o','o','t',0
 sb_name_setupmode:  dw 'S','e','t','u','p','M','o','d','e',0
+sb_name_shimstate: dw 'M','o','k','S','B','S','t','a','t','e','R','T',0
 sb_name_moklistrt:  dw 'M','o','k','L','i','s','t','R','T',0
+sb_snap_status: dq 0
 sb_snap_attrs:      dd 0
 sb_snap_size:       dq 0
 sb_snap_databuf:    times 8 db 0
@@ -4699,6 +5025,7 @@ sb_num_buf:         times 24 db 0
 pbm_sb_snapshot_valid: db 0               ; 1 = SecureBoot GetVariable value captured successfully
 pbm_sb_secureboot:     db 0xFF            ; 0=off 1=on 0xFF=unread
 pbm_sb_setupmode:      db 0xFF            ; 0=user-mode 1=setup-mode 0xFF=unread
+pbm_sb_shimstate:      db 0xFF
 pbm_sb_mok_present:    db 0xFF            ; 1=MokListRT present at runtime 0xFF=unread
 str_verb_secureboot: db "SECUREBOOT",0
 str_verb_authfloor: db "AUTHFLOOR",0
@@ -4718,6 +5045,10 @@ str_r0stat_bad:      db "R0STAT REFUSED bad_nonce",0
 str_sb_pre:        db "SECUREBOOT snapshot=",0
 str_sb_secureboot: db " secureboot=",0
 str_sb_setupmode:  db " setupmode=",0
+str_sb_shimstate: db " shimstate=",0
+str_sb_try_current: db " try_current=",0
+str_sb_try_cert: db " try_cert=",0
+str_sb_try_nonce: db " try_nonce=",0
 str_sb_mok:        db " mok_present=",0
 str_sb_pk_health: db " pk_health=",0
 str_sb_rtmap:      db " runtime_mapped=",0

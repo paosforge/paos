@@ -2131,182 +2131,11 @@ state_valid:
     pop  rbx
     ret
 
-; manifest_struct_valid(RDI=exact 1024-byte manifest) -> EAX=1/0.
-; Signature and compiled-key identity are checked separately.
-manifest_struct_valid:
-    push rbx
-    push r12
-    push r13
-    push r14
-    mov  r12, rdi
-    cmp  dword [r12], PBM_MANIFEST_MAGIC
-    jne  .bad
-    cmp  word [r12 + 4], PBM_MANIFEST_VERSION
-    jne  .bad
-    cmp  word [r12 + 6], PBM_MANIFEST_SIZE
-    jne  .bad
-    cmp  qword [r12 + 8], 0
-    je   .bad
-    cmp  word [r12 + 16], 1
-    jne  .bad
-    movzx r13d, byte [r12 + 18]
-    cmp  r13d, 3
-    jb   .bad
-    cmp  r13d, PBM_MANIFEST_ENTRY_MAX
-    ja   .bad
-    movzx eax, byte [r12 + 19]
-    cmp  eax, PBM_ENTRY_PAOS_A
-    je   .default_ok
-    cmp  eax, PBM_ENTRY_PAOS_B
-    jne  .bad
-.default_ok:
-    movzx eax, byte [r12 + 20]
-    cmp  eax, PBM_MENU_TIMEOUT_MIN
-    jb   .bad
-    cmp  eax, PBM_MENU_TIMEOUT_MAX
-    ja   .bad
-    cmp  byte [r12 + 21], 0
-    jne  .bad
-    lea  rsi, [r12 + 64]
-    mov  ecx, 64
-.header_zero:
-    cmp  byte [rsi], 0
-    jne  .bad
-    inc  rsi
-    dec  ecx
-    jnz  .header_zero
-
-    xor  ebx, ebx                    ; unique-entry bit mask
-    lea  r14, [r12 + PBM_MANIFEST_ENTRY_OFF]
-.entry:
-    movzx eax, byte [r14]
-    cmp  eax, PBM_ENTRY_PAOS_A
-    jb   .bad
-    cmp  eax, PBM_ENTRY_MAX
-    ja   .bad
-    mov  edx, 1
-    mov  ecx, eax
-    shl  edx, cl
-    test ebx, edx
-    jnz  .bad
-    or   ebx, edx
-    movzx edx, byte [r14 + 1]
-    test edx, 0xFFFFFFF8
-    jnz  .bad
-    test edx, 2                    ; every v1 entry is explicitly bootable
-    jz   .bad
-    cmp  eax, PBM_ENTRY_RESCUE
-    ja   .not_required
-    test edx, 4
-    jz   .bad
-.not_required:
-    cmp  byte [r14 + 3], 0
-    jne  .bad
-    mov  edx, [r14 + 4]
-    cmp  edx, 512
-    jb   .bad
-    cmp  edx, 64 * 1024 * 1024
-    ja   .bad
-    cmp  eax, PBM_ENTRY_PAOS_B
-    jbe  .paos_profile
-    cmp  eax, PBM_ENTRY_RESCUE
-    je   .rescue_profile
-    cmp  byte [r14 + 2], 8
-    jne  .bad
-    jmp  .profile_ok
-.paos_profile:
-    cmp  byte [r14 + 2], 3
-    jne  .bad
-    jmp  .profile_ok
-.rescue_profile:
-    cmp  byte [r14 + 2], 4
-    jne  .bad
-.profile_ok:
-    xor  edx, edx
-    xor  ecx, ecx
-.digest_nonzero:
-    or   dl, [r14 + 16 + rcx]
-    inc  ecx
-    cmp  ecx, 32
-    jb   .digest_nonzero
-    test dl, dl
-    jz   .bad
-    movzx edx, word [r14 + 48]
-    cmp  edx, 1
-    jb   .bad
-    cmp  edx, 37
-    ja   .bad
-    cmp  word [r14 + 50], 10
-    jne  .bad
-    cmp  word [r14 + 52], '\'
-    jne  .bad
-    xor  ecx, ecx
-.path:
-    movzx eax, word [r14 + 52 + rcx*2]
-    cmp  ecx, edx
-    je   .path_nul
-    test ah, ah
-    jnz  .bad
-    cmp  al, 0x20
-    jb   .bad
-    cmp  al, 0x7E
-    ja   .bad
-    cmp  al, '/'
-    je   .bad
-    cmp  al, '.'
-    jne  .path_next
-    mov  esi, ecx
-    inc  esi
-    cmp  esi, edx
-    jae  .path_next
-    cmp  word [r14 + 52 + rsi*2], '.'
-    je   .bad
-.path_next:
-    inc  ecx
-    jmp  .path
-.path_nul:
-    test eax, eax
-    jnz  .bad
-    inc  ecx
-.path_padding:
-    cmp  ecx, 38
-    jae  .entry_ok
-    cmp  word [r14 + 52 + rcx*2], 0
-    jne  .bad
-    inc  ecx
-    jmp  .path_padding
-.entry_ok:
-    add  r14, PBM_MANIFEST_ENTRY_SIZE
-    dec  r13d
-    jnz  .entry
-    mov  eax, ebx
-    and  eax, 0x0E                  ; A, B, Rescue must all exist
-    cmp  eax, 0x0E
-    jne  .bad
-    mov  eax, PBM_MANIFEST_ENTRY_MAX
-    movzx ecx, byte [r12 + 18]
-    sub  eax, ecx
-    imul eax, PBM_MANIFEST_ENTRY_SIZE
-    mov  ecx, eax
-    test ecx, ecx
-    jz   .good
-.unused_zero:
-    cmp  byte [r14], 0
-    jne  .bad
-    inc  r14
-    dec  ecx
-    jnz  .unused_zero
-.good:
-    mov  eax, 1
-    jmp  .out
-.bad:
-    xor  eax, eax
-.out:
-    pop  r14
-    pop  r13
-    pop  r12
-    pop  rbx
-    ret
+; Share the actual parser and anchored verification with native update readers.
+; The standalone Manager keeps its existing independent crypto lock domain.
+%define PBM_MANIFEST_RSA_VERIFY pbm_rsa2048_verify_sha256_locked
+%include "bootmgr/pbm_manifest_verify.inc"
+%undef PBM_MANIFEST_RSA_VERIFY
 
 ; recovery_descriptor_struct_valid(RDI=exact 512-byte descriptor) -> EAX=1/0.
 ; The signature and enrolled-key identity are checked separately.  The one
@@ -2448,22 +2277,12 @@ load_verify_manifest:
     test eax, eax
     jnz  .bad
     lea  rdi, [rel manifest]
-    call manifest_struct_valid
+    mov  esi, PBM_MANIFEST_SIZE
+    lea  rdx, [rel pbm_owner_key_id]
+    lea  rcx, [rel pbm_owner_modulus]
+    call pbm_manifest_verify_anchored
     test eax, eax
     jz   .bad
-    lea  rdi, [rel manifest + 32]
-    lea  rsi, [rel pbm_owner_key_id]
-    mov  edx, 32
-    call pbm_bytes_differ
-    test eax, eax
-    jnz  .bad
-    lea  rdi, [rel manifest + PBM_MANIFEST_SIGNATURE_OFF]
-    lea  rsi, [rel manifest]
-    mov  edx, PBM_MANIFEST_SIGNED_SIZE
-    lea  rcx, [rel pbm_owner_modulus]
-    call pbm_rsa2048_verify_sha256_locked
-    test eax, eax
-    jnz  .bad
     lea  rdi, [rel verified_manifest_sha]
     lea  rsi, [rel manifest]
     mov  edx, PBM_MANIFEST_SIZE
@@ -4395,6 +4214,7 @@ arm_selected_attempt:
 %ifdef PBM_FEATURE_FULL_POLICY
 %ifdef PBM_OWNER_KEY
     call r5_manager_bind_grant
+    call dd_oracle_bind                ; U4b: PDS1 in this same attempt commit, or nothing
 %endif
 %endif
     PBM_STAGE 0x10E                    ; about to commit the attempt
@@ -7811,6 +7631,8 @@ launch_mutable_sequence:
 ; carries no Rescue shim).  try_media_boot makes try_payload skip the durable
 ; attempt and prepare_handoff send TRY_MEDIA without MUTABLE_ATTEMPT/TRIAL,
 ; which also keeps PaOS's runtime-services publishers unmapped.
+%include "bootmgr/try_current_boot.inc"
+
 try_media_launch:
     ; G2: honoured only from the media itself (USB / removable), never from an
     ; internal ESP that a copied TRY manifest would turn into an untracked boot.
@@ -7832,12 +7654,12 @@ try_media_launch:
     mov  byte [rel fallback_entry], PBM_ENTRY_NONE
     movzx edi, byte [rel manifest + 19]  ; signed default: A or B (manifest_struct_valid)
     mov  [rel selected_entry], dil
-    call launch_entry
+    call try_current_launch_entry
     cmp  byte [rel fatal_policy_failure], 1
     je   manager_stop
     movzx edi, byte [rel selected_entry]
     xor  edi, PBM_ENTRY_PAOS_A ^ PBM_ENTRY_PAOS_B
-    call launch_entry
+    call try_current_launch_entry
     jmp  manager_stop
 .not_removable:                          ; a manifest refusal: nothing launched
     lea  rdi, [rel str_try_not_removable]
@@ -8151,6 +7973,11 @@ try_payload:
     jnz  .pax1_discard
 .pax1_handoff_ready:
 %endif
+%ifdef PBM_FEATURE_FULL_POLICY
+%ifdef PBM_OWNER_KEY
+    call dd_oracle_publish            ; U4b: PDH1 for the validated PBH1; never fails
+%endif
+%endif
     lea  rdi, [rel str_start]
     call serial_string
     lea  rdi, [rel str_pax1_direct]
@@ -8363,6 +8190,11 @@ try_payload:
     mov  dword [rax + 48], PBM_HANDOFF_SIZE
     lea  rbx, [rel handoff]
     mov  [rax + 56], rbx              ; LoadOptions pointer
+%ifdef PBM_FEATURE_FULL_POLICY
+%ifdef PBM_OWNER_KEY
+    call dd_oracle_publish            ; U4b: PDH1 for the validated PBH1; never fails
+%endif
+%endif
     jmp  .start_child
 %ifdef PBM_FEATURE_MANIFEST
 .rescue_load_options:
@@ -8483,6 +8315,13 @@ try_payload:
 %endif
 %endif
 .free:
+%ifdef PBM_FEATURE_FULL_POLICY
+%ifdef PBM_OWNER_KEY
+    push rax
+    call dd_oracle_withdraw           ; U4b: no PDH1 outlives a launch that did not enter PaOS
+    pop  rax
+%endif
+%endif
 %ifdef PBM_FEATURE_MANIFEST
     call direct_rescue_cleanup
     test rax, rax
@@ -8588,6 +8427,11 @@ prepare_handoff:
     mov  al, [rel mfloor_state]
     mov  [rel handoff + PBM_HANDOFF_MFLOOR_OFF], al
     mov byte [rel handoff + PBM_HANDOFF_INIT_READER_OFF],PBM_INIT_GRAPH_VERSION
+%ifdef PBM_FEATURE_MANIFEST
+%ifdef PBM_FEATURE_FULL_POLICY
+    call try_current_handoff
+%endif
+%endif
     lea  rdi, [rel handoff]
     mov  ecx, PBM_HANDOFF_CRC32
     call crc32
@@ -8983,6 +8827,7 @@ manager_hp_platform_valid:
 %ifdef PBM_FEATURE_FULL_POLICY
 %ifdef PBM_OWNER_KEY
 %include "bootmgr/recovery_controller.inc"
+%include "bootmgr/dd_oracle.inc"
 %include "bootmgr/silent_recovery_witness.inc"
 %include "bootmgr/recovery_gesture_witness.inc"
 %endif
@@ -9007,6 +8852,11 @@ times text_file_size - text_size db 0
 ; ascending .text/.rdata/.data/.sbat section order.
 %macro PBM_MUTABLE_DATA 0
 PBM_IMAGE_REFUSAL_DATA
+%ifdef PBM_FEATURE_MANIFEST
+%ifdef PBM_FEATURE_FULL_POLICY
+PBM_TRY_CURRENT_DATA
+%endif
+%endif
 %ifdef PBM_RESCUE_CAPTURE_NONCE
 PBM_CAPTURE_DATA
 %endif
@@ -9229,6 +9079,11 @@ section .pbmrdat align=16
 rdata_start:
 
 PBM_CRYPTO_RDATA
+%ifdef PBM_FEATURE_MANIFEST
+%ifdef PBM_FEATURE_FULL_POLICY
+PBM_TRY_CURRENT_RDATA
+%endif
+%endif
 SBPROBE_RDATA
 
 %ifdef PBM_OWNER_KEY
@@ -10081,6 +9936,7 @@ R5_ROUTE_DATA
 r5_manager_event: dq 0
 r5_manager_active: db 0
 r5_manager_consumed: db 0
+DD_ORACLE_DATA
 %endif
 %endif
 %ifdef PBM_FEATURE_MANIFEST

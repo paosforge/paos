@@ -384,12 +384,19 @@ diag_failure_exhaustion_control:
     jb .unavailable
     cmp rax, [rel heap_end]
     ja .unavailable
+    mov rcx, [rel heap_stat_calls]
+    cmp rcx, -1
+    je .unavailable                     ; exact single-call delta cannot wrap
     mov byte [rel diag_failure_control_used], 1
     push rbp
     mov rbp, rsp
     and rsp, -16
     push rbx
     push r12
+    push r13
+    push r14
+    mov r13, rax                        ; validated pre-control heap cursor
+    mov r14, rcx                        ; original allocator call count
     mov rbx, [rel heap_stat_oom]
     mov r12, [rel heap_end]
     call kmalloc                        ; exactly one real call; request > total capacity
@@ -399,12 +406,30 @@ diag_failure_exhaustion_control:
     jne .failed
     cmp rbx, [rel heap_stat_oom]
     jae .failed                         ; counter must advance without wrapping
+    ; A refused request must not consume heap. Global activity cannot identify
+    ; its cause, so cursor/counter drift is unavailable, never clean or blamed
+    ; on this call. The consumed control is not retried or repaired here.
+    cmp r13, [rel heap_next]
+    jne .unqualified
+    mov rax, [rel heap_stat_calls]
+    sub rax, r14
+    cmp rax, 1
+    jne .unqualified
+    mov rax, [rel heap_stat_oom]
+    sub rax, rbx
+    cmp rax, 1
+    jne .unqualified
     call diag_failure_poll              ; existing one-attempt/readback gate unchanged
     xor eax, eax
+    jmp .out
+.unqualified:
+    mov eax, 1
     jmp .out
 .failed:
     mov eax, 3
 .out:
+    pop r14
+    pop r13
     pop r12
     pop rbx
     mov rsp, rbp

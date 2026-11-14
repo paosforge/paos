@@ -1,10 +1,10 @@
 form settings_apps spec=v1
-window title=Apps w=500 h=350 x=720 y=80 resizable=0 min_w=500 min_h=350 chrome=standard restore=fresh
+window title=Apps w=500 h=590 x=720 y=80 resizable=0 min_w=500 min_h=590 chrome=standard restore=fresh
 widget type=label id=installed x=24 y=48 w=196 h=24 text=Installed role=label
 widget type=label id=inst0 x=24 y=80 w=196 h=24 text=Terminal role=label
 widget type=label id=inst1 x=24 y=108 w=196 h=24 text=File_Explorer role=label
 widget type=label id=inst2 x=24 y=136 w=196 h=24 text=Settings role=label
-widget type=label id=inst3 x=24 y=164 w=196 h=24 text=System_Properties role=label
+widget type=label id=inst3 x=24 y=164 w=196 h=24 text=About_this_PC role=label
 widget type=label id=inst4 x=24 y=192 w=196 h=24 text=Text_Viewer role=label
 widget type=label id=inst5 x=24 y=220 w=196 h=24 text=Wi-Fi role=label
 widget type=label id=inst6 x=24 y=248 w=196 h=24 text=Help role=label
@@ -16,4 +16,34 @@ widget type=button id=row2 x=232 y=152 w=244 h=30 text=0.2_Documents role=button
 widget type=button id=row3 x=232 y=188 w=244 h=30 text=0.2_Task_Manager role=button
 widget type=button id=row4 x=232 y=224 w=244 h=30 text=0.2_Media_Player role=button
 widget type=button id=row5 x=232 y=260 w=244 h=30 text=Later_Email role=button
-widget type=label id=entry x=24 y=312 w=452 h=24 text=Press_a_row_for_its_Roadmap role=status_text
+widget type=label id=entry x=232 y=312 w=244 h=24 text=Press_a_row_for_its_Roadmap role=status_text
+widget type=label id=added x=24 y=344 w=452 h=24 text=Added_apps role=label
+widget type=button id=add0 x=24 y=372 w=156 h=30 text=Remove role=button
+widget type=button id=add1 x=252 y=372 w=156 h=30 text=Remove role=button
+widget type=button id=add2 x=24 y=406 w=156 h=30 text=Remove role=button
+widget type=button id=add3 x=252 y=406 w=156 h=30 text=Remove role=button
+widget type=button id=add4 x=24 y=440 w=156 h=30 text=Remove role=button
+widget type=button id=add5 x=252 y=440 w=156 h=30 text=Remove role=button
+widget type=button id=add6 x=24 y=474 w=156 h=30 text=Remove role=button
+widget type=button id=add7 x=252 y=474 w=156 h=30 text=Remove role=button
+widget type=label id=ask x=24 y=510 w=300 h=24 text=Remove role=status_text
+widget type=label id=name1 x=24 y=534 w=300 h=20 text=App role=label
+widget type=label id=name2 x=24 y=556 w=300 h=20 text=App role=label
+widget type=button id=yes x=332 y=514 w=70 h=30 text=Remove role=button
+widget type=button id=no x=408 y=514 w=68 h=30 text=Cancel role=button
+widget type=button id=share0 x=184 y=372 w=64 h=30 text=Share role=button
+widget type=button id=share1 x=412 y=372 w=64 h=30 text=Share role=button
+widget type=button id=share2 x=184 y=406 w=64 h=30 text=Share role=button
+widget type=button id=share3 x=412 y=406 w=64 h=30 text=Share role=button
+widget type=button id=share4 x=184 y=440 w=64 h=30 text=Share role=button
+widget type=button id=share5 x=412 y=440 w=64 h=30 text=Share role=button
+widget type=button id=share6 x=184 y=474 w=64 h=30 text=Share role=button
+widget type=button id=share7 x=412 y=474 w=64 h=30 text=Share role=button
+widget type=label id=dest x=232 y=48 w=244 h=24 text=Share_to_removable_drive role=label
+widget type=button id=drive x=232 y=80 w=244 h=30 text=Choose_drive role=button
+widget type=label id=volume x=232 y=116 w=244 h=20 text=Volume role=label
+widget type=label id=device x=232 y=140 w=244 h=20 text=Device role=label
+widget type=label id=filelabel x=232 y=166 w=244 h=20 text=File_name role=label
+widget type=textfield id=filename x=232 y=190 w=244 h=30 text=_ role=textbox
+widget type=label id=sharehint x=232 y=230 w=244 h=24 text=1-7_letters_then_.paosapp role=label
+widget type=button id=account x=24 y=306 w=196 h=30 text=Running_app_account role=button

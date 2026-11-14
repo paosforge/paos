@@ -1,6 +1,6 @@
 {
  "schema": "paos.rescue-sysroot-lock.v1",
- "purpose": "Pinned, vendored inputs for the Rescue image so a host package update can neither change nor break it (ADMIN 18:56: the 2026-10-01 04:18 unattended libssl3t64/libssl-dev 3.0.13-0ubuntu3.15 -> .16 update changed the host libcrypto.so.3 and libcrypto.a). Runtime: sbverify + its direct ELF dependencies for the initramfs trust preflight. Link time: the OpenSSL headers + static libcrypto.a for paos-rescue-controller. The runtime file hashes equal the pins the build carried before this change. Every .deb is verified against Ubuntu's archive-key-signed index (InRelease -> Packages.xz -> .deb SHA-256) at the recorded snapshot. A version bump is a deliberate edit of this file (new .deb, snapshot, hashes), never a copy of whatever the host has. Still host-supplied (recorded per build in BUILDINFO, follow-up = pinned build chroot): gcc, libc6-dev (libc.a), libblkid-dev (libblkid.a), static busybox.",
+ "purpose": "Pinned, vendored inputs for the Rescue image so a host package update can neither change nor break it (ADMIN 18:56: the 2026-10-01 04:18 unattended libssl3t64/libssl-dev 3.0.13-0ubuntu3.15 -> .16 update changed the host libcrypto.so.3 and libcrypto.a). Runtime: sbverify + its direct ELF dependencies for the initramfs trust preflight. Link time: the OpenSSL headers + static libcrypto.a for paos-rescue-controller. The runtime file hashes equal the pins the build carried before this change. Every .deb is verified against Ubuntu's archive-key-signed index (InRelease -> Packages.xz -> .deb SHA-256) at the recorded snapshot. A version bump is a deliberate edit of this file (new .deb, snapshot, hashes), never a copy of whatever the host has. Still host-supplied (recorded per build in BUILDINFO, follow-up = pinned build chroot): gcc, libc6-dev (libc.a), libblkid-dev (libblkid.a), static busybox. HTTPS update transport additionally links the same pinned libssl-dev static libssl.a. Endpoint trust is explicit installed-channel CA bytes, never host or default CA files.",
  "cache_default": "build/rescue-sysroot",
  "archive_keyring": "/usr/share/keyrings/ubuntu-archive-keyring.gpg",
  "debs": [
@@ -35,7 +35,9 @@
   {"deb": "libc6", "member": "usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2", "ramfs": "lib64/ld-linux-x86-64.so.2", "mode": "0755",
    "sha256": "c20a2dc8917c755f02b94049356320fe1f62ac7d9f8994731f807d9df39302da"},
   {"deb": "libssl-dev", "member": "usr/lib/x86_64-linux-gnu/libcrypto.a", "ramfs": "dev/lib/libcrypto.a", "mode": "0644",
-   "sha256": "b80b24f71e4b4f0e084e4dc2f92b28f30dc9e576be3c970d2deac24120322da2"}
+   "sha256": "b80b24f71e4b4f0e084e4dc2f92b28f30dc9e576be3c970d2deac24120322da2"},
+  {"deb": "libssl-dev", "member": "usr/lib/x86_64-linux-gnu/libssl.a", "ramfs": "dev/lib/libssl.a", "mode": "0644",
+   "sha256": "aa7e370c3bcfee086e920f06dba7bd56a15005f40ae27d6726f1ea279ab4426c"}
  ],
  "trees": [
   {"deb": "libssl-dev", "member_dir": "usr/include/openssl", "dest": "dev/include/openssl", "files": 133,

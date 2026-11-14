@@ -58,7 +58,7 @@ CDCE_PKT_FILTER            equ 0x000C   ; SEC-S7a: DIRECTED|BROADCAST only (no P
 ; no adapter -> skip marker, boot continues on the other NICs / loopnet.
 ; ============================================================================
 cdc_ecm_selftest:
-    NATIVE_DRIVER_REFUSE 6, 0
+    NATIVE_DRIVER_REFUSE 10, 0
     push rbx
     push r12
     push r13
@@ -661,7 +661,7 @@ cdc_ecm_hexval:
 ; cdc_ecm_create — build the netdev_ops vtable (runtime VAs) + register.
 ; ============================================================================
 cdc_ecm_create:
-    NATIVE_DRIVER_REFUSE 6
+    NATIVE_DRIVER_REFUSE 10
     lea  rdi, [rel cdc_ecm_ops]
     lea  rax, [rel cdc_ecm_init]
     mov  [rdi + netdev_ops.init], rax
@@ -709,7 +709,7 @@ cdc_ecm_create:
 
 ; --- netdev_ops implementations ---------------------------------------------
 cdc_ecm_init:
-    NATIVE_DRIVER_REFUSE 6
+    NATIVE_DRIVER_REFUSE 10
     xor  eax, eax
     ret
 cdc_ecm_start:

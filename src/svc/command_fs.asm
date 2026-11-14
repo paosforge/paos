@@ -1,7 +1,7 @@
 ;; MODULE svc/command_fs
 ;; LAYER 5
 ;; EXPORTS fs_out_cur, fs_out_truncated, fs_command_init, fs_command_kat, fs_command_media_kat, fs_out_buf, fs_out_ready, fs_registry_census_arm
-;; IMPORTS fs/ext4_refusal, svc/runtime_failure_sources, hv/vmx, hv/vtd, fs/copy_service_config, fs/vfs_copy_service, fs/storage_access, boot/serial, boot/header, core/lib/mem, core/lib/fmt, core/lib/sha256, svc/command, fs/vfs, fs/blockdev, fs/fat32_disk, fs/exfat_disk, fs/ntfs_disk, sec/session, svc/command_auth, fs/ext4_write, fs/ext4_disk
+;; IMPORTS fs/format_job, fs/ext4_refusal, svc/runtime_failure_sources, hv/vmx, hv/vtd, fs/copy_service_config, fs/vfs_copy_service, fs/storage_access, boot/serial, boot/header, core/lib/mem, core/lib/fmt, core/lib/sha256, svc/command, fs/vfs, fs/blockdev, fs/fat32_disk, fs/exfat_disk, fs/ntfs_disk, sec/session, svc/command_auth, fs/ext4_write, fs/ext4_disk, fs/fs_format
 ;; CAPS
 ;; OWNER saga:fs_wave
 
@@ -9,6 +9,15 @@
 ; behind the explicit VFS mount handle and fs_ops; this module names no chip.
 ; Task2401: preserve complete, bounded FSLS records when grading scratch creates.
 
+%define FS_VOLUME_LAB_REMOTE 1
+%ifdef PAOS_PUBLIC_BUILD
+%if PAOS_PUBLIC_BUILD != 0
+%define FS_VOLUME_LAB_REMOTE 0
+%endif
+%endif
+
+FS_VOLUME_SOURCE_UDP equ 1               ; CMD_SOURCE_UDP; test_rc_volume_rule_host pins both
+FS_VOLUME_SOURCE_SSH equ 5               ; CMD_SOURCE_SSH
 FS_CMD_INFO    equ 0
 FS_CMD_LS      equ 1
 FS_CMD_STAT    equ 2
@@ -27,6 +36,7 @@ FS_REQUEST_CAP equ FS_PATH_CAP + 80
 FS_INFO_DEV_NAME_MAX equ 63             ; complete ASCII token, never a prefix
 FS_INFO_DEV_SCAN_MAX equ 64             ; bounded even if registry links cycle
 FS_COPY_REQUIRED_VERBS equ 14           ; complete copy API, excluding optional FSJOBS
+FSF_WORDS      equ 11                    ; FSFORMAT CHECK result words (fsf_words)
 
 %macro FS_REGISTER 3
     lea  rdi, [rel %1]
@@ -47,6 +57,7 @@ fs_command_init:
     FS_REGISTER str_fscensus, cmd_verb_fscensus, 0
     FS_REGISTER fswriteobs_name, cmd_verb_fswriteobs, 0
     FS_REGISTER extr_name, cmd_verb_extrefusal, 0
+    FS_REGISTER exfr_name, cmd_verb_exfrefusal, 0
     FS_REGISTER str_fsls,     cmd_verb_fsls,     0
     FS_REGISTER str_fsstat,   cmd_verb_fsstat,   0
     FS_REGISTER str_fsread,   cmd_verb_fsread,   0
@@ -62,7 +73,9 @@ fs_command_init:
     FS_REGISTER str_fsremount, cmd_verb_fsremount, 1
     FS_REGISTER str_fsnew,    cmd_verb_fsnew,    1
     FS_REGISTER str_fsdel,    cmd_verb_fsdel,    1
-%ifdef PAOS_NTFS_UNSIGNED_TEST
+%if FS_VOLUME_LAB_REMOTE == 0
+    ; T5-15.4, root 88577: FSWRITE stays out of the product. Lab routes unchanged.
+%elifdef PAOS_NTFS_UNSIGNED_TEST
     FS_REGISTER str_fswrite,  cmd_verb_fswrite,  0    ; QEMU ORACLE ONLY (no durable store in QEMU) — never ship
 %else
     FS_REGISTER str_fswrite,  cmd_verb_fswrite,  1
@@ -642,10 +655,6 @@ fs_path_name11:
     mov  esi, [rel fs_tok_len]
     jmp  vfs_path_to_name11
 
-; Classify the raw root path for the wire-level scratch refusal.  This is not
-; the authorization boundary: the physical backend rechecks the normalized
-; 11-byte name.  It only ensures an outside name that is itself not valid 8.3
-; (the normative /NOTSCRATCH.BIN vector) still reports scratch_allowlist.
 ; Emit only the final path component in FSSTAT NAME=.
 fs_out_basename:
     xor  ecx, ecx
@@ -663,79 +672,6 @@ fs_out_basename:
     add  rdi, rdx
     sub  esi, edx
     jmp  fs_out_token
-
-fs_raw_scratch_path:
-    ; Classifier only: it matches the /FSW*.TST / /FSWDIR* shape and does NOT
-    ; resolve '.' or '..'. The backend resolves the exact scratch tree and leaf
-    ; again: FAT re-checks the allowlist, and an ext mount refuses any '..'
-    ; component itself (BADPATH), e.g. for /FSWDIR/../X (srcreview 06:41).
-    cmp  esi, 7
-    jb   .root
-    cmp  byte [rdi], '/'
-    jne  .no
-    mov  eax, [rdi + 1]
-    or   eax, 0x20202020
-    cmp  eax, 'fswd'
-    jne  .root
-    mov  ax, [rdi + 5]
-    or   ax, 0x2020
-    cmp  ax, 'ir'
-    jne  .root
-    mov  ecx, 7
-.dir_component:
-    cmp  ecx, esi
-    jae  .directory
-    cmp  byte [rdi + rcx], '/'
-    je   .directory
-    cmp  ecx, 9
-    jae  .no
-    cmp  byte [rdi + rcx], '.'
-    je   .no
-    inc  ecx
-    jmp  .dir_component
-.directory:
-    mov  eax, 1
-    ret
-.root:
-    cmp  esi, 8                            ; /FSW.TST
-    jb   .no
-    cmp  esi, 13                           ; /FSWxxxxx.TST
-    ja   .no
-    cmp  byte [rdi], '/'
-    jne  .no
-    mov  al, [rdi + 1]
-    or   al, 0x20
-    cmp  al, 'f'
-    jne  .no
-    mov  al, [rdi + 2]
-    or   al, 0x20
-    cmp  al, 's'
-    jne  .no
-    mov  al, [rdi + 3]
-    or   al, 0x20
-    cmp  al, 'w'
-    jne  .no
-    mov  ecx, esi
-    sub  ecx, 4
-    cmp  byte [rdi + rcx], '.'
-    jne  .no
-    mov  al, [rdi + rcx + 1]
-    or   al, 0x20
-    cmp  al, 't'
-    jne  .no
-    mov  al, [rdi + rcx + 2]
-    or   al, 0x20
-    cmp  al, 's'
-    jne  .no
-    mov  al, [rdi + rcx + 3]
-    or   al, 0x20
-    cmp  al, 't'
-    jne  .no
-    mov  eax, 1
-    ret
-.no:
-    xor  eax, eax
-    ret
 
 cmd_verb_fsinfo:
     mov  eax, FS_CMD_INFO
@@ -1264,9 +1200,11 @@ fsntfs_parse_u64:
     mov  edx, -1
     ret
 
+%if FS_VOLUME_LAB_REMOTE
 cmd_verb_fswrite:
     mov  eax, FS_CMD_WRITE
     jmp  fs_read_handler
+%endif
 cmd_verb_fsren:
     mov  eax, FS_CMD_RENAME
     jmp  fs_read_handler
@@ -1799,6 +1737,11 @@ fs_read_handler:                                ; EAX = the verb's op (set by th
 .write:
     cmp  dword [rel fs_tok_count], 3
     je   .txn                           ; normative FAT32 whole-file update grammar
+    mov  edi, [rel vfs_disk_handle]     ; T5-15.4: the lab in-place route takes the rule too
+    mov  rsi, r12
+    call fs_volume_write_rule
+    test rax, rax
+    jnz  .read_only_write
     ; FSWRITE <name> <off> <hex-bytes> <nonce> — IN-PLACE overwrite through fs_ops.write_at
     ; (the backend enforces: existing file, allocated + initialized range, no metadata change,
     ; read-back verified). Payload bounded by FS_IO_CAP.
@@ -1861,6 +1804,9 @@ fs_read_handler:                                ; EAX = the verb's op (set by th
     jmp  .error
 .bad_write:
     lea  rdi, [rel str_e_write_args]
+    jmp  .error
+.read_only_write:
+    lea  rdi, [rel str_e_fswrite_ro]
     jmp  .error
 .io_write:
     lea  rdi, [rel str_e_write_io]
@@ -2491,8 +2437,8 @@ fs_mutation_mount:
 ; mount is admitted only through the fs_ops seam: it provides .mutate_path and an
 ; .mutate_armed(self) that answers 1 now (an owner-armed authority: ext4 via FSARM).
 ; NTFS exact-length UPDATE supplies a current verified OWNER/SPECIAL hint; RAM
-; (no .mutate_armed) and an unarmed ext mount stay refused. The scratch-name
-; allowlist (fs_mut_path_copy) still applies first on every mount. FSCOPY uses the same
+; (no .mutate_armed) and an unarmed ext mount stay refused. The T5-15.4 volume
+; rule (fs_mut_path_copy) still applies first on every mount. FSCOPY uses the same
 ; gate with the .copy slot (admin 05:19, rc-fs ABI 05:22): a same-volume copy job on
 ; an armed ext mount whose backend fills fs_ops.copy.
 %include "svc/command_fs_errors.asm"
@@ -2717,8 +2663,159 @@ fs_path_mutate_body:
 .put:
     jmp  fs_out_str
 
+; T5-15.4 volume rule (Peter 87337, 87106; root 88569; SEC 88677). Replaces the
+; 9/11 scratch-name classifier: the selected VOLUME decides whether a mutating verb
+; may write, and fd_scratch_name_allowed decides only what a name may be. This grants
+; nothing. Owner + SPECIAL, the live media checks, the arm binding and
+; storage_access all still run after it, once per physical effect.
+;
+;   FAT DATA exact gate                  allow
+;   FAT32 or exFAT on removable media    allow (removable is the native transport flag)
+;   adopted fixed volume (vol_owner)     allow
+;   anything else fixed, NTFS, ext       refuse; a lab build keeps these for signed
+;                                        UDP/SSH owner requests (0.2 writers, lab rows)
+;   other mounts                         no opinion: their existing gates refuse
+;
+; fs_local_removable_arm: dispatch, under the local bit alone, on the selected mount.
+; Anything else (DATA, ext, NTFS, unmounted) is left to the handler's own rule and refusal.
+fs_local_removable_arm:
+    mov  edi, [rel vfs_disk_handle]
+    push rdi
+    call vfs_mount_ptr
+    pop  rdi
+    test rax, rax
+    jz   .out
+    mov  rcx, [rax + fsmount.ops]
+    lea  rdx, [rel exf_ops]
+    cmp  rcx, rdx
+    je   .exfat
+    mov  rdi, [rax + fsmount.priv]
+    lea  rdx, [rel fd_scratch_ops]
+    cmp  rcx, rdx
+    je   .fat
+    lea  rdx, [rel fd_selected_ops]
+    cmp  rcx, rdx
+    jne  .out
+.fat:
+    call fat32_disk_local_arm
+    ret
+.exfat:
+    call exfat_disk_local_arm
+.out:
+    ret
+
+; fs_volume_write_rule(EDI=handle, RSI=request) -> RAX 0 / -1 (FD_ERR_VOLUME_RO).
+fs_volume_write_rule:
+    push rbx
+    push r12
+    push r13
+    mov  r12d, edi
+    mov  r13, rsi
+    call vfs_mount_ptr
+    test rax, rax
+    jz   .yes
+    mov  rbx, [rax + fsmount.ops]
+    lea  rdx, [rel fat32_disk_ops]
+    cmp  rbx, rdx
+    je   .yes                           ; the DATA exact gate and the write tail's pin decide
+    lea  rdx, [rel fd_scratch_ops]
+    cmp  rbx, rdx
+    je   .media
+    lea  rdx, [rel exf_ops]
+    cmp  rbx, rdx
+    je   .media
+    lea  rdx, [rel ext_ops]
+    cmp  rbx, rdx
+    je   .fixed
+    lea  rdx, [rel nt_ops]
+    cmp  rbx, rdx
+    je   .remote                        ; NTFS is never adoptable
+    jmp  .yes
+.media:
+    mov  edi, r12d
+    lea  rsi, [rel fs_volume_info]
+    call vfs_info
+    test rax, rax
+    jnz  .no
+    mov  rax, [rel fs_volume_info + fs_info.device]
+    test rax, rax
+    jz   .no
+    test al, 7                           ; a backend's stale context must not be followed
+    jnz  .no
+    mov  rax, [rax + dev.info]
+    test rax, rax
+    jz   .no
+    cmp  byte [rax + blk_info.removable], 0
+    jne  .yes
+    test dword [rax + blk_info.flags], BLKF_REMOVABLE
+    jnz  .yes
+.fixed:
+    call .remote_allowed
+    test eax, eax
+    jnz  .yes
+    mov  edi, r12d
+    lea  rsi, [rel fs_volume_info]
+    call vfs_info
+    test rax, rax
+    jnz  .no
+    mov  edi, r12d
+    mov  rsi, [rel fs_volume_info + fs_info.device]
+    call vol_owner_mount_bound           ; FSARM's adoption bound it; this binds nothing
+    test rax, rax
+    jnz  .yes
+    jmp  .no
+.remote:
+    call .remote_allowed
+    test eax, eax
+    jnz  .yes
+.no:
+    mov  dword [rel fat32_disk_last_error], FD_ERR_VOLUME_RO
+    mov  rax, -1
+    jmp  .out
+.yes:
+    xor  eax, eax
+.out:
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+.remote_allowed:
+%if FS_VOLUME_LAB_REMOTE
+    xor  eax, eax
+    test r13, r13
+    jz   .remote_out
+    mov  rcx, [r13 + REQ_SOURCE]
+    cmp  rcx, FS_VOLUME_SOURCE_UDP
+    je   .remote_yes
+    cmp  rcx, FS_VOLUME_SOURCE_SSH
+    jne  .remote_out
+.remote_yes:
+    mov  eax, 1
+.remote_out:
+    ret
+%else
+    xor  eax, eax
+    ret
+%endif
+
+fs_volume_info: times fs_info_size db 0
+
 ; Token slices are not NUL-terminated. Copy once into bounded owned buffers.
 fs_mut_path_copy:
+    push rdi
+    push rsi
+    push rdx
+    mov  edi, [rel vfs_disk_handle]
+    mov  rsi, r12                       ; every caller holds its request in R12
+    call fs_volume_write_rule
+    pop  rdx
+    pop  rsi
+    pop  rdi
+    test rax, rax
+    jz   .bound
+    mov  rax, -1                        ; FD_ERR_VOLUME_RO
+    ret
+.bound:                                 ; a cross-mount copy's paths: rule taken on its destination
     push rbx
     push r12
     push r13
@@ -2729,9 +2826,8 @@ fs_mut_path_copy:
     jz   .bad
     cmp  esi, FS_PATH_CAP
     ja   .bad
-    call fs_raw_scratch_path
-    test eax, eax
-    jz   .allow
+    cmp  byte [r12], '/'
+    jne  .bad
     mov  rdi, rbx
     mov  rsi, r12
     mov  edx, r13d
@@ -2739,9 +2835,6 @@ fs_mut_path_copy:
     mov  byte [rbx + r13], 0
     xor  eax, eax
     jmp  .out
-.allow:
-    mov  dword [rel fat32_disk_last_error], FD_ERR_ALLOWLIST
-    jmp  .fail
 .bad:
     mov  dword [rel fat32_disk_last_error], FD_ERR_BAD_ARG
 .fail:
@@ -2759,6 +2852,7 @@ fs_tx_nonce: db " NONCE=",0
 fs_tx_args: db " ERR bad_args",0
 fs_tx_name: db " ERR name_invalid",0
 fs_tx_allow: db " ERR scratch_allowlist",0
+fs_tx_volume: db " ERR volume_read_only",0
 fs_tx_exact: db " ERR data_volume_not_exact",0
 fs_tx_pre_begin_exact: db " ERR data_volume_not_exact BEGIN=0",0
 fs_tx_exists: db " ERR exists",0
@@ -3196,7 +3290,7 @@ fs_res_word:
 ;   principal never started answers "... STATE=unknown".
 ; RCQ-20 S2 request identity: FSCOPY's nonce is its request key (0 = none). See fs_req_key.
 ; The source is any DATA file (a read); the destination passes the wire scratch
-; classifier here and the backend allowlist again. The job then runs on the
+; volume rule here and the backend name floor again. The job then runs on the
 ; fs.orphan idle cadence; these handlers never wait for it. Admission is
 ; fs_armed_mount with .copy: the FAT DATA mount, or an owner-armed mount whose
 ; backend provides fs_ops.copy (ext4), both unqualified paths on that volume.
@@ -3425,6 +3519,11 @@ cmd_verb_fscopy:
     jmp  .started
 .cross:
     mov  edi, [rel fs_cp_dst_handle]
+    mov  rsi, r12
+    call fs_volume_write_rule
+    test rax, rax
+    jnz  .volume
+    mov  edi, [rel fs_cp_dst_handle]
     call vfs_mount_ptr
     test rax, rax
     jz   .exact
@@ -3579,6 +3678,9 @@ cmd_verb_fscopy:
     jmp .error
 .job_active:
     lea  r15, [rel fs_tx_job_active]
+    jmp  .error
+.volume:
+    lea  r15, [rel fs_tx_volume]
     jmp  .error
 .exact:
     lea  r15, [rel fs_tx_pre_begin_exact] ; refused before vfs_copy_start_mode, never backend failure
@@ -5249,12 +5351,23 @@ fs_copy_stamp:
     mov  [rsi + fs_copy_job.reason], rdi
     ret
 .record:
+    cmp  dword [rel fs_cp_carry + fs_copy_carry.kind], FS_CARRY_FAT_SCRATCH
+    jne  .record_fat
+    mov  rax, [rel fd_scratch_ctx + FD_DEV]      ; FAT scratch (C8): its own medium, never fat32_disk_ctx's
+    mov  [rsi + fs_copy_qrec.ident], rax
+    mov  eax, [rel fd_scratch_ctx + FD_VOLUME_ID]
+    mov  [rsi + fs_copy_qrec.ident + 8], rax
+    mov  rax, [rel fd_scratch_generation]
+    mov  [rsi + fs_copy_qrec.ident + 16], rax
+    jmp  .record_session
+.record_fat:
     mov  rax, [rel fat32_disk_ctx + FD_DEV]
     mov  [rsi + fs_copy_qrec.ident], rax
     mov  eax, [rel fat32_disk_ctx + FD_VOLUME_ID]
     mov  [rsi + fs_copy_qrec.ident + 8], rax
     call fs_copy_medium_gen
     mov  [rsi + fs_copy_qrec.ident + 16], rax   ; (0: unreadable, which never compares as the same)
+.record_session:
     mov  rax, [rel session_bound_pid]
     mov  [rsi + fs_copy_qrec.session], rax
     mov  rax, [rel session_key_handle]
@@ -5281,11 +5394,21 @@ fs_copy_stamp:
     mov  eax, FS_CREF_SESSION_ENDED      ; another principal or token: the session it was asked in ended
     ret
 .kept:
+    cmp  dword [rsi + fs_copy_qrec.carry + fs_copy_carry.kind], FS_CARRY_FAT_SCRATCH
+    je   .scratch_kept
     cmp  dword [rsi + fs_copy_qrec.carry + fs_copy_carry.kind], FS_CARRY_EXT4
     jne  .out
     lea  rdi, [rsi + fs_copy_qrec.carry]
     jmp  ext_w_carry_check               ; S5c: the arm, the medium and the age too (rev 3 C4)
+.scratch_kept:                           ; FAT scratch (C8): the same rule, then the scratch carry
+    call fs_copy_scratch_holds
+    test eax, eax
+    jnz  .out
+    lea  rdi, [rsi + fs_copy_qrec.carry]
+    jmp  fd_scratch_carry_check
 .compare:
+    cmp  dword [rsi + fs_copy_qrec.carry + fs_copy_carry.kind], FS_CARRY_FAT_SCRATCH
+    je   .scratch
     cmp  dword [rsi + fs_copy_qrec.carry + fs_copy_carry.kind], FS_CARRY_EXT4
     je   .carried
     mov  eax, 1
@@ -5308,6 +5431,20 @@ fs_copy_stamp:
     mov  eax, 1
 .out:
     ret
+.scratch:                                ; FAT scratch (rc-sec 105819 C8): kind, mount and medium agree, carry holds
+    call fs_copy_scratch_holds
+    test eax, eax
+    jnz  .scratch_typed
+    push rsi
+    lea  rdi, [rsi + fs_copy_qrec.carry]
+    call fd_scratch_carry_check
+    pop  rsi
+    test eax, eax
+    jz   .out
+.scratch_typed:
+    mov  [rel vfs_copy_refusal], eax     ; mount_changed, arm_changed or carry_expired
+    mov  eax, 1
+    ret
 .carried:                                ; S5c: an ext4 record: its carry still holds (rev 3 C3 (a) (b) (e) (g))
     push rsi
     lea  rdi, [rsi + fs_copy_qrec.carry]
@@ -5319,30 +5456,98 @@ fs_copy_stamp:
     mov  eax, 1
     ret
 
+; fs_copy_scratch_holds(RSI = a FAT-scratch kind queue record) -> EAX 0 / FS_CREF_MOUNT_CHANGED: the
+;   record names the exact scratch mount (ops fd_scratch_ops, priv fd_scratch_ctx) and its .ident still
+;   names fd_scratch_ctx's device, BPB volume serial and generation (rc-sec 105819 C8: a kind on any other
+;   mount is refused). Preserves RSI; clobbers RAX, RCX.
+fs_copy_scratch_holds:
+    lea  rax, [rel fd_scratch_ops]
+    cmp  [rsi + fs_copy_qrec.ops], rax
+    jne  .changed
+    lea  rax, [rel fd_scratch_ctx]
+    cmp  [rsi + fs_copy_qrec.priv], rax
+    jne  .changed
+    mov  rcx, [rel fd_scratch_ctx + FD_DEV]
+    cmp  rcx, [rsi + fs_copy_qrec.ident]
+    jne  .changed
+    mov  ecx, [rel fd_scratch_ctx + FD_VOLUME_ID]
+    cmp  rcx, [rsi + fs_copy_qrec.ident + 8]
+    jne  .changed
+    mov  rcx, [rel fd_scratch_generation]
+    test rcx, rcx
+    jz   .changed
+    cmp  rcx, [rsi + fs_copy_qrec.ident + 16]
+    jne  .changed
+    xor  eax, eax
+    ret
+.changed:
+    mov  eax, FS_CREF_MOUNT_CHANGED
+    ret
+
 ; fs_copy_carry_stage() -> EAX 0: this ext4 FSCOPY may queue; its decision is staged in fs_cp_carry for
 ;   stamp op 2 / 1: it may not, and answers job_active as before S5c. RCQ-20 S5c (rc-sec rev 3 C1, root
 ;   14:09:28 Q1 a): only a CONSOLE frame carries. A remote frame (command_auth_remote_active = 1 and
 ;   command_session_sync_active = 0, command_auth_ticket_owner's definition; a sync-dispatched frame is a
-;   console frame) never does: no remote requester outlives its reply. Then ext_w_carry_record decides.
+;   console frame) never does: no remote requester outlives its reply. Then ext_w_carry_record decides, or
+;   fd_scratch_carry_record for the exact armed FAT scratch mount (ROOT105787, rc-sec 105819 C1/C7).
+;   SEC106668 (C1 amended, FAT scratch only): on that mount a remote frame also carries when
+;   command_auth_owner_consumed_for("FSCOPY") holds (a consumed signed OWNER frame). Every other remote
+;   frame, and every remote frame on ext4, still answers job_active; a remote frame never reaches
+;   ext_w_carry_record. R2: the staged carry records the frame kind (.frame); nothing after reads it.
 fs_copy_carry_stage:
-    cmp  byte [rel command_auth_remote_active], 1
-    jne  .console
-    cmp  byte [rel command_session_sync_active], 0
-    je   .no                             ; a remote frame
-.console:
+    push rbx
+    push r12
     mov  edi, [rel vfs_disk_handle]
     call vfs_mount_ptr
     test rax, rax
     jz   .no
-    mov  rdi, rax
+    mov  r12, rax
+    xor  ebx, ebx                        ; FS_CARRY_FRAME_CONSOLE
+    lea  rcx, [rel fd_scratch_ops]
+    cmp  [rax + fsmount.ops], rcx
+    jne  .ext4
+    lea  rcx, [rel fd_scratch_ctx]
+    cmp  [rax + fsmount.priv], rcx
+    jne  .ext4
+    lea  rdi, [rel str_fscopy]
+    call command_auth_owner_consumed_for ; SEC106668 R1: its one caller
+    test eax, eax
+    jz   .scratch_frame
+    mov  ebx, FS_CARRY_FRAME_REMOTE_OWNER
+    jmp  .scratch
+.scratch_frame:
+    cmp  byte [rel command_auth_remote_active], 1
+    jne  .scratch
+    cmp  byte [rel command_session_sync_active], 0
+    je   .no                             ; a remote frame without a consumed OWNER FSCOPY ticket
+.scratch:
+    mov  rdi, r12
+    lea  rsi, [rel fs_cp_carry]
+    mov  edx, [rel fs_cp_mode]
+    call fd_scratch_carry_record         ; FAT scratch (rc-sec 105819 C7): 0 recorded / -1 nothing to carry
+    jmp  .recorded
+.ext4:
+    cmp  byte [rel command_auth_remote_active], 1
+    jne  .console
+    cmp  byte [rel command_session_sync_active], 0
+    je   .no                             ; a remote frame: ext4 stays console-only
+.console:
+    mov  rdi, r12
     lea  rsi, [rel fs_cp_carry]
     call ext_w_carry_record              ; 0 recorded / -1 nothing to carry
+.recorded:
     test rax, rax
     jnz  .no
+    mov  [rel fs_cp_carry + fs_copy_carry.frame], rbx
+    mov  qword [rel fs_cp_carry + fs_copy_carry.spare], 0
     xor  eax, eax
+    pop  r12
+    pop  rbx
     ret
 .no:
     mov  eax, 1
+    pop  r12
+    pop  rbx
     ret
 
 ; fs_copy_medium_gen() -> RAX the FAT DATA device's media generation (blockdev: fresh at every
@@ -5392,6 +5597,9 @@ fs_copy_reason:
     mov  eax, [rel fat32_disk_last_error]
     lea  rdi, [rel fs_tx_allow]
     cmp  eax, FD_ERR_ALLOWLIST
+    je   .out
+    lea  rdi, [rel fs_tx_volume]
+    cmp  eax, FD_ERR_VOLUME_RO
     je   .out
     lea  rdi, [rel fs_tx_name]
     cmp  eax, FD_ERR_BAD_ARG
@@ -5468,7 +5676,417 @@ fs_tree_inside:
     lea  rdx, [rel %2]
     jmp  fs_unsupported
 %endmacro
-FS_UNSUPPORTED cmd_verb_fsformat, str_e_fsformat_unsup
+
+; FSFORMAT (Format F1, ROOT 108207; SEC 108221 C4). One read-only form: `FSFORMAT CHECK <device> <nonce16>`,
+; on FSFORMAT's existing registration (no new route). The reply carries the eligibility word and, when
+; eligible, the scheme, slot, partition bytes, current filesystem and the kept partition type: never a label,
+; disk GUID, partition GUID, MBR signature or serial. It reads through fs_format_classify only, and touches no
+; snapshot, decision, custody or mount. JOB <device> <nonce16> copies the same
+; unlocked owner epoch's bounded public native job state without IO. PROOF
+; copies its accepted F3 profile and validated public FINISH under the same gate. Every mutating form is card-only: a format starts only from the local
+; owner's confirmation card (F4), never from a command.
+cmd_verb_fsformat:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov  byte [rel fs_out_ready], 0
+    call cmd_handler_prologue
+    mov  r12, rdi
+    mov  r13, rsi
+    mov  rdi, [r12 + REQ_ARG]
+    test rdi, rdi
+    jz   .card
+    xor  ecx, ecx
+.bound:
+    cmp  ecx, 6 + FS_INFO_DEV_NAME_MAX + 1 + 16
+    ja   .card                      ; index 86 may hold the NUL of a 63-character name (REVIEW-F1-NAME-BOUND)
+    cmp  byte [rdi + rcx], 0
+    je   .tokens
+    inc  ecx
+    jmp  .bound
+.tokens:
+    call fs_tokenize
+    cmp  dword [rel fs_tok_count], 3
+    jne  .card
+    cmp  dword [rel fs_tok_len], 3
+    je   .job_args
+    cmp  dword [rel fs_tok_len], 5
+    jne  .card
+    mov  rax, [rel fs_tok_ptr]
+    cmp  dword [rax], 'PROO'
+    je   .proof_args
+    cmp  dword [rax], 'CHEC'
+    jne  .card
+    cmp  byte [rax + 4], 'K'
+    jne  .card
+    mov  esi, [rel fs_tok_len + 4]
+    test esi, esi
+    jz   .card
+    cmp  esi, FS_INFO_DEV_NAME_MAX
+    ja   .card
+    mov  rdi, [rel fs_tok_ptr + 16]
+    mov  esi, [rel fs_tok_len + 8]
+    call fs_nonce_valid
+    test eax, eax
+    jz   .card
+    mov  rdi, [rel fs_tok_ptr + 8]
+    mov  esi, [rel fs_tok_len + 4]
+    call fsf_device_by_name               ; 0: no such device (classify answers no-device)
+    mov  rdi, rax
+    xor  esi, esi
+    xor  edx, edx
+    lea  rcx, [rel fsf_class]
+    call fs_format_classify
+    mov  ebx, eax
+    call fs_out_reset
+    lea  rdi, [rel str_fsf_head]
+    call fs_out_str
+    mov  rdi, [rel fs_tok_ptr + 16]
+    mov  esi, 16
+    call fs_out_token
+    lea  rdi, [rel str_fsf_result]
+    call fs_out_str
+    lea  rdi, [rel fsf_words]
+    cmp  ebx, FSF_WORDS
+    jb   .word
+    mov  ebx, FSF_WORDS - 1               ; any later code reads as refused
+.word:
+    imul eax, ebx, 12
+    add  rdi, rax
+    call fs_out_str
+    test ebx, ebx
+    jnz  .done
+    lea  rdi, [rel str_fsf_scheme]
+    call fs_out_str
+    lea  rdi, [rel str_fsf_mbr]
+    cmp  byte [rel fsf_class + 32], 2
+    jne  .scheme
+    lea  rdi, [rel str_fsf_gpt]
+.scheme:
+    call fs_out_str
+    lea  rdi, [rel str_fsf_slot]
+    call fs_out_str
+    movzx edi, byte [rel fsf_class + 33]
+    call fs_out_dec
+    lea  rdi, [rel str_fsf_bytes]
+    call fs_out_str
+    mov  rdi, [rel fsf_class + 8]
+    shl  rdi, 9
+    call fs_out_dec
+    lea  rdi, [rel str_fsf_kind]
+    call fs_out_str
+    movzx eax, byte [rel fsf_class + 35]
+    cmp  eax, 4
+    jbe  .kind
+    xor  eax, eax
+.kind:
+    lea  rdi, [rel fsf_kinds]
+    shl  eax, 3
+    add  rdi, rax
+    call fs_out_str
+    lea  rdi, [rel str_fsf_type]
+    call fs_out_str
+    cmp  byte [rel fsf_class + 32], 2
+    je   .gpt_type
+    movzx edi, byte [rel fsf_class + 34]
+    call fsf_out_hex8
+    jmp  .done
+.gpt_type:
+    lea  rdi, [rel str_fsf_basic]
+    cmp  byte [rel fsf_class + 40], 1
+    je   .gpt_word
+    lea  rdi, [rel str_fsf_linux]
+.gpt_word:
+    call fs_out_str
+.done:
+    lea  rdi, [rel fsf_class]             ; nothing of the reading outlives the reply
+    xor  esi, esi
+    mov  edx, 80
+    call memset
+    call fs_finish
+    jmp  .out
+.job_args:
+    mov  rax, [rel fs_tok_ptr]
+    cmp  word [rax], 'JO'
+    jne  .card
+    cmp  byte [rax + 2], 'B'
+    jne  .card
+    mov  esi, [rel fs_tok_len + 4]
+    test esi, esi
+    jz   .card
+    cmp  esi, FS_INFO_DEV_NAME_MAX
+    ja   .card
+    mov  rdi, [rel fs_tok_ptr + 16]
+    mov  esi, [rel fs_tok_len + 8]
+    call fs_nonce_valid
+    test eax, eax
+    jz   .card
+    mov  rdi, [rel fs_tok_ptr + 8]
+    mov  esi, [rel fs_tok_len + 4]
+    call fsf_device_by_name
+    test rax, rax
+    jz   .job_departed
+    mov  rdi, rax
+    lea  rsi, [rel fsf_job]
+    mov  edx, 128
+    call format_job_observe
+    jmp  .job_copied
+.job_departed:
+    ; Exact saved name only when no registered descriptor resolved. No media IO.
+    mov  rdi, [rel fs_tok_ptr + 8]
+    mov  esi, [rel fs_tok_len + 4]
+    lea  rdx, [rel fsf_job]
+    mov  ecx, 128
+    call format_job_observe_named
+.job_copied:
+    mov  ebx, eax
+    call fs_out_reset
+    lea  rdi, [rel str_fsf_job_head]
+    call fs_out_str
+    mov  rdi, [rel fs_tok_ptr + 16]
+    mov  esi, 16
+    call fs_out_token
+    cmp  ebx, 128
+    jne  .job_none
+    lea  rdi, [rel str_fsf_job_observed]
+    call fs_out_str
+    lea  rdi, [rel str_fsf_job_phase]
+    call fs_out_str
+    mov  edi, [rel fsf_job + 4]
+    call fs_out_dec
+    lea  rdi, [rel str_fsf_job_gen]
+    call fs_out_str
+    mov  rdi, [rel fsf_job + 8]
+    call fs_out_dec
+    lea  rdi, [rel str_fsf_job_devgen]
+    call fs_out_str
+    mov  rdi, [rel fsf_job + 16]
+    call fs_out_dec
+    lea  rdi, [rel str_fsf_job_first]
+    call fs_out_str
+    mov  rdi, [rel fsf_job + 24]
+    call fs_out_dec
+    lea  rdi, [rel str_fsf_job_count]
+    call fs_out_str
+    mov  rdi, [rel fsf_job + 32]
+    call fs_out_dec
+    lea  rdi, [rel str_fsf_job_scheme]
+    call fs_out_str
+    mov  edi, [rel fsf_job + 40]
+    call fs_out_dec
+    lea  rdi, [rel str_fsf_job_slot]
+    call fs_out_str
+    mov  edi, [rel fsf_job + 44]
+    call fs_out_dec
+    lea  rdi, [rel str_fsf_job_kind]
+    call fs_out_str
+    mov  edi, [rel fsf_job + 48]
+    call fs_out_dec
+    lea  rdi, [rel str_fsf_job_state]
+    call fs_out_str
+    mov  edi, [rel fsf_job + 52]
+    call fs_out_dec
+    lea  rdi, [rel str_fsf_job_outcome]
+    call fs_out_str
+    mov  edi, [rel fsf_job + 56]
+    call fs_out_dec
+    lea  rdi, [rel str_fsf_job_custody]
+    call fs_out_str
+    mov  edi, [rel fsf_job + 60]
+    call fs_out_dec
+    lea  rdi, [rel str_fsf_job_done]
+    call fs_out_str
+    mov  rdi, [rel fsf_job + 64]
+    call fs_out_dec
+    lea  rdi, [rel str_fsf_job_total]
+    call fs_out_str
+    mov  rdi, [rel fsf_job + 72]
+    call fs_out_dec
+    lea  rdi, [rel str_fsf_job_start_us]
+    call fs_out_str
+    mov  rdi, [rel fsf_job + 80]
+    call fs_out_dec
+    lea  rdi, [rel str_fsf_job_stop_us]
+    call fs_out_str
+    mov  rdi, [rel fsf_job + 88]
+    call fs_out_dec
+    lea  rdi, [rel str_fsf_job_retire_us]
+    call fs_out_str
+    mov  rdi, [rel fsf_job + 96]
+    call fs_out_dec
+    lea  rdi, [rel str_fsf_job_end_us]
+    call fs_out_str
+    mov  rdi, [rel fsf_job + 104]
+    call fs_out_dec
+    lea  rdi, [rel str_fsf_job_transport]
+    call fs_out_str
+    mov  edi, [rel fsf_job + 112]
+    call fs_out_dec
+    lea  rdi, [rel str_fsf_job_cancel]
+    call fs_out_str
+    mov  edi, [rel fsf_job + 116]
+    call fs_out_dec
+    jmp  .job_done
+.job_none:
+    lea  rdi, [rel str_fsf_job_none]
+    call fs_out_str
+.job_done:
+    lea  rdi, [rel fsf_job]
+    xor  esi, esi
+    mov  edx, 128
+    call memset
+    call fs_finish
+    jmp  .out
+.proof_args:
+    cmp  byte [rax + 4], 'F'
+    jne  .card
+    mov  esi, [rel fs_tok_len + 4]
+    test esi, esi
+    jz   .card
+    cmp  esi, FS_INFO_DEV_NAME_MAX
+    ja   .card
+    mov  rdi, [rel fs_tok_ptr + 16]
+    mov  esi, [rel fs_tok_len + 8]
+    call fs_nonce_valid
+    test eax, eax
+    jz   .card
+    mov  rdi, [rel fs_tok_ptr + 8]
+    mov  esi, [rel fs_tok_len + 4]
+    call fsf_device_by_name
+    test rax, rax
+    jz   .proof_departed
+    mov  rdi, rax
+    lea  rsi, [rel fsf_proof]
+    mov  edx, 544
+    call format_job_proof
+    jmp  .proof_copied
+.proof_departed:
+    ; Exact saved name only when no registered descriptor resolved. No media IO.
+    mov  rdi, [rel fs_tok_ptr + 8]
+    mov  esi, [rel fs_tok_len + 4]
+    lea  rdx, [rel fsf_proof]
+    mov  ecx, 544
+    call format_job_proof_named
+.proof_copied:
+    mov  ebx, eax
+    call fs_out_reset
+    lea  rdi, [rel str_fsf_proof_head]
+    call fs_out_str
+    mov  rdi, [rel fs_tok_ptr + 16]
+    mov  esi, 16
+    call fs_out_token
+    cmp  ebx, 544
+    jne  .proof_none
+    lea  rdi, [rel str_fsf_proof_observed]
+    call fs_out_str
+    lea  rdi, [rel fsf_proof]
+    mov  esi, 544
+    call fs_out_data_hex
+    jmp  .proof_done
+.proof_none:
+    lea  rdi, [rel str_fsf_job_none]
+    call fs_out_str
+.proof_done:
+    lea  rdi, [rel fsf_proof]
+    xor  esi, esi
+    mov  edx, 544
+    call memset
+    call fs_finish
+    jmp  .out
+.card:
+    call fs_out_reset
+    lea  rdi, [rel str_e_fsformat_card]
+    call fs_out_str
+    call fs_finish
+.out:
+    pop  r15
+    pop  r14
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+
+; fsf_device_by_name(RDI=name, ESI=length) -> RAX = the registered dev* whose complete name (dev.name, else
+; blk_info.name) is exactly that token, or 0. Bounded registry walk; no IO.
+fsf_device_by_name:
+    push rbx
+    push r12
+    push r13
+    push r14
+    sub  rsp, 8
+    mov  r12, rdi
+    mov  r13d, esi
+    xor  ebx, ebx
+    mov  r14d, FS_INFO_DEV_SCAN_MAX
+.next:
+    dec  r14d
+    js   .none
+    mov  rdi, rbx
+    xor  esi, esi
+    xor  edx, edx
+    call blk_iter_after
+    test rax, rax
+    jz   .none
+    mov  rbx, rax
+    mov  rdx, [rax + dev.name]
+    test rdx, rdx
+    jnz  .compare
+    mov  rcx, [rax + dev.info]
+    test rcx, rcx
+    jz   .next
+    mov  rdx, [rcx + blk_info.name]
+    test rdx, rdx
+    jz   .next
+.compare:
+    xor  ecx, ecx
+.char:
+    cmp  ecx, r13d
+    jae  .end
+    mov  al, [rdx + rcx]
+    cmp  al, [r12 + rcx]
+    jne  .next
+    inc  ecx
+    jmp  .char
+.end:
+    cmp  byte [rdx + rcx], 0
+    jne  .next
+    mov  rax, rbx
+    jmp  .out
+.none:
+    xor  eax, eax
+.out:
+    add  rsp, 8
+    pop  r14
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+
+; fsf_out_hex8(EDI=byte): "0x" and two hex digits.
+fsf_out_hex8:
+    push rbx
+    mov  ebx, edi
+    lea  rdi, [rel str_fsf_0x]
+    call fs_out_str
+    mov  eax, ebx
+    shr  eax, 4
+    and  eax, 15
+    lea  rdx, [rel fs_hex]
+    mov  al, [rdx + rax]
+    mov  [rel fs_one_char], al
+    lea  rdi, [rel fs_one_char]
+    call fs_out_str
+    mov  eax, ebx
+    and  eax, 15
+    lea  rdx, [rel fs_hex]
+    mov  al, [rdx + rax]
+    mov  [rel fs_one_char], al
+    lea  rdi, [rel fs_one_char]
+    call fs_out_str
+    pop  rbx
+    ret
 
 fs_unsupported:
     call cmd_handler_prologue
@@ -6293,10 +6911,52 @@ str_e_fsnew_io: db "FSNEW ERR io_or_verify",0
 str_e_fsdel_io: db "FSDEL ERR io_or_verify",0
 str_e_fsdel_file: db "FSDEL ERR no_file",0
 str_e_fswrite_unsup: db "FSWRITE ERR unsupported",0
+str_e_fswrite_ro: db "FSWRITE ERR volume_read_only",0
 str_e_fsren_unsup: db "FSREN ERR unsupported",0
 str_e_fsmkdir_unsup: db "FSMKDIR ERR unsupported",0
 str_e_fsrmdir_unsup: db "FSRMDIR ERR unsupported",0
-str_e_fsformat_unsup: db "FSFORMAT ERR unsupported",0
+str_e_fsformat_card: db "FSFORMAT ERR card-only",0
+str_fsf_proof_head: db "FSFORMAT PROOF V=1 NONCE=",0
+str_fsf_proof_observed: db " RESULT=observed HEX=",0
+str_fsf_job_head: db "FSFORMAT JOB V=1 NONCE=",0
+str_fsf_job_observed: db " RESULT=observed",0
+str_fsf_job_none: db " RESULT=unavailable",0
+str_fsf_job_phase: db " PHASE=",0
+str_fsf_job_gen: db " GEN=",0
+str_fsf_job_devgen: db " DEVGEN=",0
+str_fsf_job_first: db " FIRST=",0
+str_fsf_job_count: db " COUNT=",0
+str_fsf_job_scheme: db " SCHEME=",0
+str_fsf_job_slot: db " SLOT=",0
+str_fsf_job_kind: db " KIND=",0
+str_fsf_job_state: db " STATE=",0
+str_fsf_job_outcome: db " OUTCOME=",0
+str_fsf_job_custody: db " CUSTODY=",0
+str_fsf_job_done: db " DONE=",0
+str_fsf_job_total: db " TOTAL=",0
+str_fsf_job_start_us: db " START_US=",0
+str_fsf_job_stop_us: db " STOP_US=",0
+str_fsf_job_retire_us: db " RETIRE_US=",0
+str_fsf_job_end_us: db " END_US=",0
+str_fsf_job_transport: db " TRANSPORT=",0
+str_fsf_job_cancel: db " CANCEL=",0
+str_fsf_head: db "FSFORMAT CHECK NONCE=",0
+str_fsf_result: db " RESULT=",0
+str_fsf_scheme: db " SCHEME=",0
+str_fsf_mbr: db "mbr",0
+str_fsf_gpt: db "gpt",0
+str_fsf_slot: db " SLOT=",0
+str_fsf_bytes: db " BYTES=",0
+str_fsf_kind: db " FS=",0
+str_fsf_type: db " TYPE=",0
+str_fsf_basic: db "basic-data",0
+str_fsf_linux: db "linux",0
+str_fsf_0x: db "0x",0
+; fs_format_classify's FF_E_* order, 12 bytes each; the last row stands for any later code (FSF_WORDS).
+fsf_words: db "eligible",0,0,0,0, "no-device",0,0,0, "fixed",0,0,0,0,0,0,0, "sector-size",0
+           db "busy",0,0,0,0,0,0,0,0, "boot-media",0,0, "table",0,0,0,0,0,0,0, "type",0,0,0,0,0,0,0,0
+           db "extent",0,0,0,0,0,0, "io",0,0,0,0,0,0,0,0,0,0, "refused",0,0,0,0,0
+fsf_kinds: db "unknown",0, "fat32",0,0,0, "exfat",0,0,0, "ntfs",0,0,0,0, "ext4",0,0,0,0
 
 str_fs_ready: db "[PAOS64] P6 svc: FS read verb family + honest mutator skeletons registered [fs.verbs.ready]",13,10,0
 str_fs_write_ready: db "[PAOS64] P6 fs: FAT32 create/delete transaction path ready (entry-last, dual-FAT) [fs.write.create.ready]",13,10,0
@@ -6345,6 +7005,10 @@ fs_use_path: resb 1                    ; v1.1: token 0 routed through the path s
 fs_ntfs_state_buf: resb fs_ntfs_selection_size
 fs_info_buf: resb fs_info_size
 fs_info_dev_name_buf: resb FS_INFO_DEV_NAME_MAX + 1
+alignb 8
+fsf_proof: resb 544                    ; readonly accepted F3/FINISH copy, wiped after reply
+fsf_job: resb 128                      ; readonly original-job copy, wiped after reply
+fsf_class: resb 80                      ; FSFORMAT CHECK: one classification, wiped after the reply
 fs_list_buf: resb fs_list_result_size
 fs_stat_buf: resb fs_stat_size
 fs_entries: resb (FS_LIST_CAP * fs_dirent_size)
@@ -7233,7 +7897,7 @@ cmd_verb_fscensus:
     mov dword [rel fs_info_buf+fs_info.scheme],-1
     mov edi,r14d
     lea rsi,[rel fs_info_buf]
-    call vfs_info
+    call vfs_info_facts         ; census prints no free count: no FAT walk (ROOT108324)
     test rax,rax
     jz .info_available
     mov rdi,rbx

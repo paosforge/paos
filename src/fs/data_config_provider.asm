@@ -12,6 +12,11 @@
 FD_DATA_SOURCE equ 0xFFFFFFF0
 FD_DATA_MAX equ 8 * 1024 * 1024 + 512
 FD_DATA_TOKEN equ 112
+FD_DATA_APP_MAX equ 1024 * 1024
+FD_DATA_DAILY_CLASS equ 257              ; distinct purpose, NOT byte maximum
+FD_DATA_DAILY_MAX equ 256
+FD_DATA_UPDATES_MAX equ 256              ; dedicated local Updates consent only
+FD_DATA_DOC_MAX equ 4224                 ; native public-documents aggregate only
 
 ; RDI=registered exact read-only selected mount handle, RSI=descriptor[56],
 ; RDX=out token[112] -> 0 / -1 refused / -2 busy. No writes or recovery here.
@@ -287,7 +292,9 @@ data_config_current:
     pop rbx
     ret
 
-; RDI=name11 -> EAX maximum, or 0. Exact length is 11; no Z/path parsing.
+; RDI=name11 -> EAX purpose class, or 0. Daily uses a distinct class;
+; fd_data_size_limit maps it to its byte maximum at the three size checks.
+; Other historical classes equal their byte maximum. Exact length is 11; no Z/path parsing.
 fd_data_policy:
     push rbx
     mov rbx, rdi
@@ -296,6 +303,24 @@ fd_data_policy:
     call memcmp
     test rax, rax
     jz .cfg
+    mov rdi, rbx
+    lea rsi, [rel fd_data_cfg_v2]
+    mov edx, 11
+    call memcmp
+    test rax, rax
+    jz .cfg
+    mov rdi, rbx
+    lea rsi, [rel fd_data_updates]
+    mov edx, 11
+    call memcmp
+    test rax, rax
+    jz .updates
+    mov rdi, rbx
+    lea rsi, [rel fd_data_daily]
+    mov edx, 11
+    call memcmp
+    test rax, rax
+    jz .daily
     mov rdi, rbx
     lea rsi, [rel fd_data_learn0]
     mov edx, 11
@@ -307,9 +332,32 @@ fd_data_policy:
     mov edx, 11
     call memcmp
     test rax, rax
+    jz .learn
+    mov rdi, rbx
+    lea rsi, [rel fd_data_apps]
+    mov edx, 11
+    call memcmp
+    test rax, rax
+    jz .apps
+    mov rdi, rbx
+    lea rsi, [rel fd_data_docs]
+    mov edx, 11
+    call memcmp
+    test rax, rax
     jnz .bad
+    mov eax, FD_DATA_DOC_MAX
+    jmp .out
+.apps:
+    mov eax, FD_DATA_APP_MAX
+    jmp .out
 .learn:
     mov eax, FD_DATA_MAX
+    jmp .out
+.daily:
+    mov eax, FD_DATA_DAILY_CLASS
+    jmp .out
+.updates:
+    mov eax, FD_DATA_UPDATES_MAX
     jmp .out
 .cfg:
     mov eax, 1024
@@ -318,6 +366,14 @@ fd_data_policy:
     xor eax, eax
 .out:
     pop rbx
+    ret
+
+; EAX=purpose class -> EAX actual byte maximum. Not an admission checker.
+fd_data_size_limit:
+    cmp eax, FD_DATA_DAILY_CLASS
+    jne .out
+    mov eax, FD_DATA_DAILY_MAX
+.out:
     ret
 
 ; 1 admitted provider name, -1 refused provider, 0 unrelated legacy context.
@@ -341,15 +397,46 @@ fd_data_name_gate:
     call fd_data_policy
     test eax, eax
     jz .no
+    cmp dword [rel fd_data_mode], 6
+    jne .not_daily
+    cmp eax, FD_DATA_DAILY_CLASS
+    jne .no
+    jmp .allowed
+.not_daily:
+    cmp eax, FD_DATA_DAILY_CLASS
+    je .no
     cmp dword [rel fd_data_mode], 1
     jne .not_learned
     cmp eax, FD_DATA_MAX
     jne .no
 .not_learned:
     cmp dword [rel fd_data_mode], 2
-    jne .allowed
+    jne .not_local
     cmp eax, 1024
     jne .no
+.not_local:
+    cmp dword [rel fd_data_mode], 5
+    jne .not_updates
+    cmp eax, FD_DATA_UPDATES_MAX
+    jne .no
+    jmp .allowed
+.not_updates:
+    cmp dword [rel fd_data_mode], 4
+    jne .not_docs
+    cmp eax, FD_DATA_DOC_MAX
+    jne .no
+    jmp .allowed
+.not_docs:
+    cmp eax, FD_DATA_DOC_MAX
+    je .no
+    cmp dword [rel fd_data_mode], 3
+    jne .not_app
+    cmp eax, FD_DATA_APP_MAX
+    jne .no
+    jmp .allowed
+.not_app:
+    cmp eax, FD_DATA_APP_MAX
+    je .no
 .allowed:
     mov eax, 1
     jmp .out
@@ -427,6 +514,7 @@ data_config_read:                      ; RDI=token, RSI=name11, RDX=buf, RCX=cap
     call fd_data_policy
     test eax, eax
     jz .fail
+    call fd_data_size_limit
     mov ebx, eax
     mov rdi, [rel fd_data_binding + 24]
     mov rsi, r13
@@ -490,7 +578,7 @@ data_config_write:                     ; ordinary request authority only
     xor r10d, r10d
     jmp fd_data_write_common
 
-; R10D mode: 0 explicit request, 1 learned service, 2 captured local CFG.
+; R10D mode: 0 request, 1 learned, 2 local CFG, 3 app, 4 docs, 5 Updates.
 fd_data_write_common:
     push rbx
     push rbp
@@ -525,6 +613,7 @@ fd_data_write_common:
     call fd_data_policy
     test eax, eax
     jz .refuse
+    call fd_data_size_limit
     cmp r15, rax
     ja .refuse
     call vfs_copy_busy
@@ -660,6 +749,7 @@ fd_data_write_common:
     mov r14d, eax
     mov rdi, r13
     call fd_data_policy
+    call fd_data_size_limit
     cmp r14, rax
     ja .failed_locked
 .arm:
@@ -1146,8 +1236,13 @@ fd_data_metadata:
 str_fd_data_name: db 'data-config',0
 str_fd_data_gate: db 'fs.data.owner_config',0
 fd_data_cfg: db 'PAOS    CFG'
+fd_data_cfg_v2: db 'PAOS2   CFG'
+fd_data_updates: db 'UPDATE  CFG'
+fd_data_daily: db 'UPDAILY CFG'
 fd_data_learn0: db 'DDLEARN0BIN'
 fd_data_learn1: db 'DDLEARN1BIN'
+fd_data_apps: db 'PAOSAPPSBIN'
+fd_data_docs: db 'PAOSDOCSBIN'
 %macro WDATA_BSS_fs_data_config 0
 alignb 8
 fd_data_ctx: resb FD_CTX_SIZE

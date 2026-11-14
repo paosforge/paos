@@ -1,7 +1,7 @@
 ;; MODULE hv/driver_domain_command
 ;; LAYER 5
 ;; EXPORTS nd_register_verbs, nd_token, nd_number, nd_info_number
-;; IMPORTS hv/driver_domain, hv/driver_domain_boot, hv/vm_profile, hv/vmx, svc/command_auth, fs/storage_access, core/lib/fmt
+;; IMPORTS hv/nic_assignment, hv/driver_domain_restart, hv/driver_domain_failure, hv/driver_domain_power, hv/driver_domain, hv/driver_domain_boot, hv/nd_isolation, hv/vm_profile, hv/vmx, svc/command_auth, fs/storage_access, core/lib/fmt
 ;; CAPS extension
 ;; OWNER saga:hv
 ;; CONTEXT: bsp_only
@@ -37,6 +37,9 @@ nd_register_verbs:
     xor r8d,r8d
     xor r9d,r9d
     call command_register_verb
+    call nd_restart_register
+    call nd_failure_register
+    call nd_power_register
     pop rbx
     ret
 nd_command_start:
@@ -195,7 +198,83 @@ nd_command:
     call nd_info_number
     mov edi,[rel nd_boot_select_error]
     call nd_info_number
-    jmp .ready
+    ; This START's A1 mode has no legacy admission receipt. An earlier
+    ; singleton record is not an observation of the current A1 attempt.
+    xor eax,eax
+    xor edx,edx
+    xor ecx,ecx
+    cmp dword [rel nd_mode],0
+    jne .info_admission
+    call nic_assignment_admission_info
+.info_admission:
+    mov r13d,edx
+    mov r14d,ecx
+    mov edi,eax
+    call nd_info_number
+    mov edi,r13d
+    call nd_info_number
+    mov edi,r14d
+    call nd_info_number
+    ; NDISO1 (ROOT110035, VM110041): only on a recorded isolation refusal, the
+    ; page's fields as decimals; never text. Absent otherwise: bytes unchanged.
+    ; The record lives for the whole boot, but the tail rides only while this
+    ; reply is still the refusal it describes: START 0, boot_error 5, selector
+    ; == reason in 1..9, target == the BDF printed above. A later valid NDSTART
+    ; of another NIC drops the tail (REVIEW110718).
+    cmp byte [rel nd_iso_page],1
+    jne .ready
+    cmp qword [rel nd_generation],0
+    jne .ready
+    cmp dword [rel nd_boot_error],5
+    jne .ready
+    movzx eax,byte [rel nd_iso_page+1]   ; reason
+    lea ecx,[rax-1]
+    cmp ecx,8
+    ja .ready
+    cmp eax,[rel nd_boot_select_error]
+    jne .ready
+    movzx eax,word [rel nd_iso_page+4]   ; target
+    cmp eax,[rel nd_boot_bdf]
+    jne .ready
+    lea rdi,[rel nd_iso_tag]
+    call hv_out_str
+    movzx edi,byte [rel nd_iso_page+1]   ; reason
+    call nd_info_number
+    movzx edi,byte [rel nd_iso_page+2]   ; acs_state
+    call nd_info_number
+    movzx edi,byte [rel nd_iso_page+3]   ; backend
+    call nd_info_number
+    movzx edi,word [rel nd_iso_page+4]   ; target
+    call nd_info_number
+    movzx edi,word [rel nd_iso_page+6]   ; port
+    call nd_info_number
+    movzx edi,word [rel nd_iso_page+8]   ; member
+    call nd_info_number
+    movzx edi,byte [rel nd_iso_page+10]  ; member kind
+    call nd_info_number
+    movzx edi,byte [rel nd_iso_page+11]  ; member flags
+    call nd_info_number
+    movzx edi,word [rel nd_iso_page+12]  ; categories
+    call nd_info_number
+    movzx edi,word [rel nd_iso_page+14]  ; protected categories
+    call nd_info_number
+    mov edi,[rel nd_iso_page+24]         ; target vendor|device<<16
+    call nd_info_number
+    ; NAS1 is observation only, subordinate to the same current NDISO tuple.
+    cmp byte [rel nd_iso_page+1],5
+    jne .ready
+    cmp byte [rel nd_iso_page+3],2
+    jne .ready
+    cmp dword [rel nd_iso_scope_page],0x3153414e
+    jne .ready
+    mov ax,[rel nd_iso_scope_page+8]
+    cmp ax,[rel nd_iso_page+4]
+    jne .ready
+    lea rdi,[rel nd_scope_tag]
+    call hv_out_str
+    lea rbx,[rel nd_iso_scope_page]
+    lea r13,[rbx+48]
+    jmp .hex
 .stat:
     cmp r14d,8
     jae .syntax
@@ -379,7 +458,9 @@ nd_verb_info: db 'NDINFO',0
 nd_start_ok: db 'NDSTART1 ',0
 nd_stop_ok: db 'NDSTOP1 ',0
 nd_stat_ok: db 'NDSTAT1 ',0
-nd_info_ok: db 'NDINFO1 ',0
+nd_info_ok: db 'NDINFO2 ',0
+nd_iso_tag: db ' NDISO1',0
+nd_scope_tag: db ' NAS1 ',0
 nd_zero_nonce: db '0000000000000000',0
 nd_error: db 'NDERR ',0
 nd_space: db ' ',0

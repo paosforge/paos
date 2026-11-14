@@ -2810,6 +2810,9 @@ str_cons_user_data_verbs:
     db "BLKWRITE",0,2,4                 ; <backend> <lba> <hex1024>; GEN echoes the hex as ARG=
     db "CHAT_GETTEXT",0,0,4             ; reply Q=<typed> A=<answer>
     db "CHAT_SENDTEXT",0,0,4            ; <text...>
+    db "APPSTOREOBS",0,0,0              ; extended L reply relays unvalidated guest record bytes
+    db "DOCREAD",0,1,0                  ; <leaf> <offset> <count>; reply byte zero can be file content
+    db "DOCNEW",0,1,0                   ; <leaf> <hex payload>; reply may be raw/binary or generic echo
     db "FSNEW",0,1,5                    ; <path> <hex> <nonce>; EXCL "FSNEW NONCE= OK SIZE="
     db "FSREAD",0,CONS_KEEP_LINE_ALL,4  ; <path...> <off> <len> <nonce>; reply SHA256= DATA= are content
     db "FSWRITE",0,1,5                  ; <path> <hex> <nonce> | <name> <off> <hex> <nonce>

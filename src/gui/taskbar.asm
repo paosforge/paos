@@ -2,7 +2,7 @@
 %include "core/abi/build_profile.inc"
 ;; LAYER 6
 ;; EXPORTS taskbar_cluster_rect, taskbar_draw_registry, taskbar_pointer_press, f1_cmd_verb_taskbar, f1_cmd_verb_winattn, taskbar_attention_tick, f1_out_reset, f1_put_str, f1_put_dec, f1_put_hex6, f1_put_escaped, f1_out_buf, f1_out_ready
-;; IMPORTS gui/calendar, gui/window, gui/input_route, gui/chat_app, gui/window_mgmt, gui/wm_pointer, gui/cadence_mark, gui/guardian_indicator, core/lib/fmt, dev/power/ec_power
+;; IMPORTS gui/calendar, gui/window, gui/input_route, gui/chat_app, gui/window_mgmt, gui/wm_pointer, gui/cadence_mark, gui/guardian_indicator, core/lib/fmt, dev/power/ec_power, gui/terminal_consent
 ;; CAPS
 ;; OWNER saga:gui_foundation_ladder
 
@@ -268,6 +268,7 @@ taskbar_draw_registry:
     call guardian_indicator_taskbar_draw    ; SEC-GA0-lite: left-tray security alert cell
 %endif
     call snapshot_indicator_draw           ; owner-visible screen read, including PUBLIC
+    call terminal_consent_draw              ; continuous current-grant notice, including PUBLIC
     call taskbar_battery_paint              ; RCQ-27 POWER-04: Dell battery cell (gui/window; inert elsewhere)
     call taskbar_ime_paint                  ; RCQ-38 I3b-1 (b): the IME mode cell (gui/window; nothing while OFF)
     xor  r12d, r12d
@@ -428,6 +429,11 @@ taskbar_pointer_press:
     call calendar_toggle
     jmp  .yes
 .start:
+    mov  edi,r12d
+    mov  esi,r13d
+    call terminal_consent_press
+    test eax,eax
+    jnz  .yes
     mov  edi, r12d
     mov  esi, r13d
     call summon_palette_taskbar_press

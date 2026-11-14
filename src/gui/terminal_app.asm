@@ -1,7 +1,7 @@
 ;; MODULE gui/terminal_app
 ;; LAYER 6
-;; EXPORTS terminal_app_init, terminal_ui_launch, terminal_app_tick, terminal_key_hook, terminal_find_window, terminal_termfeed, terminal_ssh_sink, terminal_wheel, terminal_key_filter, terminal_wheel_hook, terminal_cmd_launch, terminal_cmd_termfeed
-;; IMPORTS gui/calendar, hv/vmx, sec/session, net/dns, svc/ssh_client, boot/serial, gui/window, gui/vt/vt_engine, core/heap, gui/widget, gui/window_mgmt, gui/wm_pointer, gui/input_route, gui/form_loader, gui/cadence_mark, svc/command, svc/command_auth, svc/command_cons, dev/input/ps2, core/time, gui/power_exec, core/lib/fmt, sec/keyprov
+;; EXPORTS terminal_terminal_launch_op, terminal_app_init, terminal_ui_launch, terminal_app_tick, terminal_key_hook, terminal_find_window, terminal_termfeed, terminal_ssh_sink, terminal_wheel, terminal_key_filter, terminal_wheel_hook, terminal_cmd_launch, terminal_cmd_termfeed, terminal_power_refusal
+;; IMPORTS svc/command_shutdown, gui/interpreter_feed, hv/context_execution, gui/calendar, hv/vmx, sec/session, net/dns, svc/ssh_client, boot/serial, gui/window, gui/vt/vt_engine, core/heap, gui/widget, gui/window_mgmt, gui/wm_pointer, gui/input_route, gui/form_loader, gui/cadence_mark, svc/command, svc/command_auth, svc/command_cons, dev/input/ps2, core/time, gui/power_exec, core/lib/fmt, sec/keyprov
 ;; CAPS CAP_GUI
 ;; OWNER saga:msi_terminal_input_ux
 ;
@@ -376,8 +376,19 @@ terminal_open:
     push rbx
     push r12
     push r13
+    push r14
+    sub  rsp, 8                       ; preserve ordinary nested SysV call alignment
     cmp  dword [rel term_type_id], -1
     je   .fail
+    cmp  dword [rel wgt_alloc_next], -1
+    jne  .fail                         ; never consume another form reservation
+    ; Like the form/image loaders, choose a free interior slot before any heap
+    ; or window side effect. Serialized BSP path: choosing marks nothing.
+    mov  edi, 1
+    call wgt_reserve_run
+    cmp  eax, -1
+    je   .fail
+    mov  r14d, eax
     xor  ebx, ebx
 .find:
     cmp  ebx, TERM_MAX
@@ -395,11 +406,18 @@ terminal_open:
     ; the heaps are bump-only: an instance keeps its buffers across reopen
     cmp  qword [r12 + TI_CAP], 0
     jne  .have_mem
+    ; A refused later allocation retains the earlier bump-only buffers.
+    ; Retry only the missing stage instead of overwriting its owned pointer.
+    cmp  qword [r12 + TI_VT], 0
+    jne  .have_vt
     mov  edi, VT_size
     call term_alloc
     test rax, rax
     jz   .nomem
     mov  [r12 + TI_VT], rax
+.have_vt:
+    cmp  qword [r12 + TI_ARENA], 0
+    jne  .have_arena
     mov  edi, TERM_MAXCOLS
     mov  esi, TERM_MAXROWS
     call vt_mem_required
@@ -408,6 +426,7 @@ terminal_open:
     test rax, rax
     jz   .nomem
     mov  [r12 + TI_ARENA], rax
+.have_arena:
     mov  edi, TERM_CAP_SIZE
     call term_alloc
     test rax, rax
@@ -428,23 +447,22 @@ terminal_open:
     rep  movsb
     lea  rdi, [r12 + TI_NAME]           ; hub: wm_title is the identity (WINTREE, WINCLOSE by name);
                                         ; the program's title is the app label (wm_app_title)
-    mov  esi, ebx
-    imul esi, 48
-    add  esi, 180
-    mov  edx, ebx
-    imul edx, 36
-    add  edx, 70
+    mov  esi, 180
+    mov  edx, 70
     mov  ecx, TERM_DEF_COLS * 8 + TERM_INSET_X * 2 + TERM_SB_RESERVE
     mov  r8d, TERM_DEF_ROWS * 16 + GUI_TITLE_H + TERM_INSET_TOP + TERM_INSET_BOT
     mov  r9d, WM_RESTORE_FRESH
-    call wmx_open_window
+    lea  r10, [rel term_title]           ; all copies, independent of caption/buffer
+    call wmx_open_app_window
     cmp  eax, -1
     je   .fail
     mov  r13d, eax
     mov  [r12 + TI_WIN], eax
     mov  edi, [rel term_type_id]
     mov  esi, r13d
+    mov  [rel wgt_alloc_next], r14d
     call wgt_create                     ; hub: the WM close path retires + recycles it
+    mov  dword [rel wgt_alloc_next], -1 ; never lend a spent reservation
     cmp  eax, -1
     je   .close_fail
     mov  [r12 + TI_WID], eax
@@ -532,6 +550,8 @@ terminal_open:
 .fail:
     mov  eax, -1
 .out:
+    add  rsp, 8
+    pop  r14
     pop  r13
     pop  r12
     pop  rbx
@@ -616,7 +636,9 @@ term_out:
     mov  rdi, [r12 + TI_VT]
     mov  rsi, rbx
     mov  edx, r13d
-    call vt_feed
+    call context_vt_enter
+    call interpreter_vt_feed
+    call context_vt_exit
     pop  r13
     pop  rbx
     ret
@@ -629,6 +651,98 @@ term_out_cstr:
     pop  rsi
     mov  edx, eax
     jmp  term_out
+
+; Snapshot only after the native local plan accepted this Terminal. The
+; existing paste lifetime advances on release/detach/dial and survives reuse.
+; No TI layout change, allocation, new authority, or new power executor.
+term_power_return_bind:
+    push rax
+    push rcx
+    push rdx
+    mov [rel term_power_instance],r12
+    call term_inst_index
+    lea rdx,[rel term_paste_generations]
+    mov rax,[rdx+rax*8]
+    mov [rel term_power_generation],rax
+    mov rax,[r12+TI_VT]
+    mov [rel term_power_vt],rax
+    mov eax,[r12+TI_WIN]
+    mov [rel term_power_window],eax
+    mov eax,[r12+TI_WID]
+    mov [rel term_power_widget],eax
+    pop rdx
+    pop rcx
+    pop rax
+    ret
+
+; RDI = actual reason returned by power_execute, never a guessed status.
+; The original Linux cleanup locks the desktop before BOOT; retain the reason
+; in that live Terminal even while LOCK_HIDDEN, for its next normal sign-in.
+; Feeding the VT is not physical-visible proof. Public focused VTROW captures
+; remain independent observations. Closed/reused/foreign instances get no text.
+terminal_power_refusal:
+    push rbx
+    push r12
+    mov rbx,rdi
+    call command_power_return_terminal
+    test rax,rax
+    jz .out
+    cmp rax,[rel term_power_instance]
+    jne .out
+    mov r12,rax
+    mov rcx,[rel term_instances_ptr]
+    test rcx,rcx
+    jz .out
+    sub rax,rcx
+    jc .out
+    cmp rax,TERM_MAX * TI_SIZE
+    jae .out
+    xor edx,edx
+    mov ecx,TI_SIZE
+    div rcx
+    test edx,edx
+    jnz .out
+    lea rdx,[rel term_paste_generations]
+    mov rax,[rdx+rax*8]
+    cmp rax,[rel term_power_generation]
+    jne .out
+    cmp byte [r12+TI_USED],1
+    jne .out
+    cmp byte [r12+TI_SSH],0
+    jne .out
+    mov rax,[r12+TI_VT]
+    test rax,rax
+    jz .out
+    cmp rax,[rel term_power_vt]
+    jne .out
+    mov eax,[r12+TI_WID]
+    cmp eax,[rel term_power_widget]
+    jne .out
+    mov ecx,[r12+TI_WIN]
+    cmp ecx,WM_MAX
+    jae .out
+    cmp ecx,[rel term_power_window]
+    jne .out
+    lea rdx,[rel wm_title]
+    lea rax,[r12+TI_NAME]
+    cmp [rdx+rcx*8],rax
+    jne .out
+    lea rdx,[rel wm_state]
+    mov eax,[rdx+rcx*4]
+    cmp eax,WM_VISIBLE
+    je .feed
+    cmp eax,WM_MIN
+    je .feed
+    cmp eax,LOCK_HIDDEN
+    jne .out
+.feed:
+    mov rsi,rbx
+    call term_out_cstr
+    call term_prompt
+.out:
+    pop r12
+    pop rbx
+    ret
 
 ;; term_out_byte(R12, AL)
 term_out_byte:
@@ -705,7 +819,7 @@ term_refit:
     jne  .resize
     mov  rax, [r12 + TI_VT]
     mov  dword [rax + VT.rf_pending], 0 ; window returned to the already-owned grid
-    jmp  .out
+    jmp  .guest
 .resize:
     push rsi
     push rdx
@@ -730,6 +844,20 @@ term_refit:
     mov  [rcx], eax
     mov  [rcx + 4], si
     mov  [rcx + 6], dx
+.guest:
+%ifdef PAOS_TERMINAL_GUEST
+    ; The native grid is accepted (or unchanged). Publish also on the first
+    ; refit after attach; retries use this attachment's exact consumed START.
+    cmp byte [r12 + TI_SSH], TERM_GUEST_MODE
+    jne .out
+    cmp r12, [rel term_guest_instance]
+    jne .out
+    mov rdi, r12
+    mov esi, [rel term_guest_generation]
+    mov edx, [r12 + TI_COLS]
+    mov ecx, [r12 + TI_ROWS]
+    call hv_terminal_resize
+%endif
 .out:
     pop  rbx
     ret
@@ -1485,6 +1613,7 @@ terminal_app_tick:
     push rbx
     push r12
 %ifdef PAOS_TERMINAL_SSH
+    call term_ssh_deadlines_tick        ; expiry is independent of paint/visibility
     call ssh_sessions_poll              ; 0014: queued sends, keepalives, ended sessions draining
 %endif
     call time_monotonic_now_us
@@ -1556,6 +1685,9 @@ terminal_app_tick:
 .not_resolving:
     cmp  byte [r12 + TI_SSH], 1
     jne  .paint
+    call term_ssh_caller_expire         ; poll may have crossed a caller deadline
+    cmp  byte [r12 + TI_SSH], 1
+    jne  .paint
     call term_paste_drain               ; a long paste continues as the channel drains
     mov  edi, [r12 + TI_SESS]
     call ssh_session_use                ; the client state below is this window's
@@ -1570,13 +1702,13 @@ terminal_app_tick:
     cmp  byte [rel ssh_cli_state], SSH_CLI_ST_TCP
     jne  .dial_budget
     cmp  rax, [r12 + TI_NEXTTRY]        ; the TCP handshake gets 10 s (catalogue SSH-08)
-    jb   .paint
+    jb   .ceiling_pending
     lea  rsi, [rel term_ssh_tcp_timeout]
     mov  edi, 1
     jmp  .detach_msg
 .dial_budget:
     cmp  rax, [r12 + TI_DEADLINE]
-    jb   .paint
+    jb   .ceiling_pending
 %ifdef PAOS_TERMINAL_SSH
     call ssh_cli_exec_pending
     test eax, eax
@@ -1613,6 +1745,10 @@ terminal_app_tick:
     call term_out_cstr
     call term_prompt
     jmp  .paint
+.ceiling_pending:                       ; this pass tested the ceiling: not yet reached
+    mov  rdi, rax
+    call term_ssh_observation_pass
+    jmp  .paint
 .winch:
 %ifdef PAOS_TERMINAL_SSH
     call ssh_cli_is_exec
@@ -1643,6 +1779,117 @@ terminal_app_tick:
 .out:
     pop  r12
     pop  rbx
+    ret
+
+;; Service existing attached callers before any SSH idle polling. Do not let a
+;; minimized/lock-hidden window turn its dial into an unbounded pending caller.
+;; This is a finite scan of native instances, not a wall-clock scheduler bound.
+;; The original loaded session is restored; no visibility/input grant changes.
+term_ssh_deadlines_tick:
+%ifdef PAOS_TERMINAL_SSH
+    push rbx
+    push r12
+    mov  eax, [rel ssh_sess_active]
+    push rax
+    xor  ebx, ebx
+.each:
+    mov  edi, ebx
+    call term_inst_ptr
+    mov  r12, rax
+    test r12, r12
+    jz   .done
+    call term_ssh_caller_expire
+    inc  ebx
+    cmp  ebx, TERM_MAX
+    jb   .each
+.done:
+    pop  rdi
+    cmp  edi, TERM_MAX
+    jae  .park
+    call ssh_session_use
+    jmp  .out
+.park:
+    call ssh_sess_park
+.out:
+    pop  r12
+    pop  rbx
+%endif
+    ret
+
+;; R12 live native instance. Reuse the actual 10/20s tests and detach hooks;
+;; never clamp the actual clock or claim asynchronous transport retirement.
+;; Failure/close/ready retain their original causes in the ordinary tick. No
+;; remote input, window-change or query reply is sent by this service.
+term_ssh_caller_expire:
+%ifdef PAOS_TERMINAL_SSH
+    cmp  byte [r12 + TI_USED], 1
+    jne  .out
+    cmp  byte [r12 + TI_SSH], 1
+    jne  .out
+    ; A closed/reused WM slot keeps the original release/cancel path, rather
+    ; than being relabelled as an expired live window by this early pass.
+    mov  ecx, [r12 + TI_WIN]
+    cmp  ecx, 64
+    jae  .out
+    lea  rdx, [rel wm_title]
+    lea  rax, [r12 + TI_NAME]
+    cmp  [rdx + rcx*8], rax
+    jne  .out
+    lea  rdx, [rel wm_state]
+    mov  eax, [rdx + rcx*4]
+    cmp  eax, WM_VISIBLE
+    je   .session
+    cmp  eax, WM_MIN
+    je   .session
+    cmp  eax, LOCK_HIDDEN
+    jne  .out
+.session:
+    mov  edi, [r12 + TI_SESS]
+    cmp  edi, TERM_MAX
+    jae  .out
+    call ssh_session_use
+    cmp  byte [rel ssh_cli_chan_closed], 1
+    je   .out
+    cmp  byte [rel ssh_cli_state], SSH_CLI_ST_FAILED
+    je   .out
+    cmp  byte [rel ssh_cli_chan_ready], 1
+    je   .out
+    call term_ssh_observation_tick
+    call time_monotonic_now_us
+    cmp  byte [rel ssh_cli_state], SSH_CLI_ST_TCP
+    jne  .channel
+    cmp  rax, [r12 + TI_NEXTTRY]
+    jb   .ceiling_pending
+    lea  rsi, [rel term_ssh_tcp_timeout]
+    mov  edi, 1
+    jmp  .detach
+.channel:
+    cmp  rax, [r12 + TI_DEADLINE]
+    jb   .ceiling_pending
+    lea  rsi, [rel term_ssh_timeout]
+    mov  edi, 2
+    push rsi
+    push rdi
+    call ssh_cli_exec_pending
+    pop  rdi
+    pop  rsi
+    test eax, eax
+    jz   .detach
+    lea  rsi, [rel term_ssh_exec_timeout_text]
+.detach:
+    push rsi
+    call term_ssh_observation_reason
+    call term_ssh_detach
+    call term_session_reset
+    pop  rsi
+    call term_out_cstr
+    call term_prompt
+    jmp  .out
+.ceiling_pending:                       ; this pass tested the ceiling: not yet reached
+    mov  rdi, rax
+    call term_ssh_observation_pass
+.out:
+%endif
     ret
 
 ;; term_repaint_changes(R12): paint when the VT, cursor or blink phase changed.
@@ -4803,6 +5050,12 @@ term_execute_line:
     mov  ecx, 3
     test eax, eax
     jnz  .power
+    mov  rdi, rbx
+    lea  rsi, [rel term_cmd_linux_return]
+    call term_word_eq
+    mov  ecx, 4                       ; nonactuating, pending signed Linux return
+    test eax, eax
+    jnz  .power
 %ifdef PAOS_TERMINAL_GUEST
     mov rdi, rbx
     lea rsi, [rel term_cmd_guest]
@@ -5122,16 +5375,14 @@ term_execute_line:
     call term_out_cstr
     jmp  .prompt
 .help:
-    lea  rsi, [rel term_help_text]
-    call term_out_cstr
-    ; RCQ-22: the local words above are Terminal-only; the native verb list is
-    ; the live registry's own HELP (as the Console shows it), never a copy.
+    ; One generated catalog supplies local words and live native documentation.
+    ; Pass the user's operand through the existing guarded command path.
     lea  rdi, [rel term_registry_help]
     call command_lookup
     cmp  eax, -1
     je   .prompt
     lea  rdi, [rel term_registry_help]
-    lea  rsi, [rel term_empty]
+    mov  rsi, r13
     call term_run_command
 .prompt:
     call term_prompt
@@ -5151,12 +5402,28 @@ term_execute_line:
     lea  rdx, [rel term_builtin_power]
     test eax, eax
     jz   .builtin_refused
+    cmp  ecx, 4
+    je   .linux_power
     mov  [r12 + TI_CONFIRM], cl
     mov  edi, ecx
     call power_question_text
     mov  rsi, rax
     call term_out_cstr                  ; the answer arrives in term_confirm_key
     jmp  .out
+.linux_power:
+    mov  rdi, r12                      ; only this Terminal may answer this prompt
+    call command_power_return_local_begin
+    test eax, eax
+    jz   .linux_unavailable
+    call term_power_return_bind          ; snapshot this actual Terminal lifetime
+    mov  byte [r12 + TI_CONFIRM], 4
+    lea  rsi, [rel term_linux_question]
+    call term_out_cstr
+    jmp  .out
+.linux_unavailable:
+    lea  rsi, [rel term_linux_unavailable]
+    call term_out_cstr
+    jmp  .prompt
 
 ;; term_confirm_key(R12, EAX = GUI key): the y/N answer to a power command.
 ;; 'y' confirms; anything else (Enter alone, n, Ctrl+C) cancels.
@@ -5173,6 +5440,8 @@ term_confirm_key:
     mov  edx, eax
     pop  rcx
     pop  rax
+    cmp  ecx, 4
+    je   .linux_answer
     test edx, edx
     jz   .no
     cmp  eax, 'y'
@@ -5183,6 +5452,45 @@ term_confirm_key:
     lea  rsi, [rel term_power_no]
     call term_out_cstr
     jmp  term_prompt
+.linux_answer:
+    ; Keep the real key-origin distinction. An owner-injected answer may
+    ; authorize the Terminal path, but can never be reported as human input.
+    push rax
+    push rdx
+    call keyprov_key_is_human
+    mov ecx,eax
+    pop rdx
+    pop rax
+    xor esi,esi
+    cmp eax,'y'
+    je .linux_yes
+    cmp eax,'Y'
+    jne .linux_origin
+.linux_yes:
+    mov esi,1
+.linux_origin:
+    test edx,edx
+    jz .linux_deliver
+    mov edx,2
+    test ecx,ecx
+    jz .linux_deliver
+    mov edx,1
+.linux_deliver:
+    mov rdi,r12
+    push rsi
+    call command_power_return_local_answer
+    pop rsi
+    test eax,eax
+    jz .linux_refused
+    test esi,esi
+    jz .no
+    lea rsi,[rel term_linux_waiting]
+    call term_out_cstr
+    jmp term_prompt
+.linux_refused:
+    lea rsi,[rel term_linux_unavailable]
+    call term_out_cstr
+    jmp term_prompt
 .yes:
     push rcx
     lea  rsi, [rel term_power_yes]
@@ -6136,6 +6444,7 @@ term_ssh_dial:
     cmp  eax, -1
     je   .no_session
     mov  [r12 + TI_SESS], eax
+    call term_ssh_observation_forget    ; a new actual dial retires prior public evidence
     lea  rdi, [r12 + TI_DIAL]
     cmp  dword [rbx + TS_VALID], 1
     jne  .arg
@@ -6148,6 +6457,7 @@ term_ssh_dial:
     test eax, eax
     jz   .attached
     push rax
+    call term_ssh_start_observation_record ; actual preconnect refusal before session_end
     mov  edi, [r12 + TI_SESS]
     call ssh_session_end                ; no connection: freed by the next poll
     mov  dword [r12 + TI_SESS], -1
@@ -6201,10 +6511,19 @@ term_ssh_dial:
     add  rax, TERM_SSH_CONNECT_US
     mov  [r12 + TI_DEADLINE], rax
     call term_ssh_lookup_deadline
+    mov edi, [r12 + TI_SESS]
+    mov rsi, [r12 + TI_NEXTTRY]
+    mov rdx, [r12 + TI_DEADLINE]
+    mov rcx, [rsp]                       ; original sample; never start another D
+    call ssh_session_bind_deadlines
+    test eax, eax
+    jnz .budget_refused
     pop  rdi
     call term_ssh_observation_begin
     xor  eax, eax
     jmp  .out
+.budget_refused:
+    add rsp, 8
 .exec_refused:
     mov  edi, [r12 + TI_SESS]
     call ssh_session_end
@@ -6676,11 +6995,41 @@ term_reply_forget:
 ;;   @RAW <hex>                   bytes as if received from the remote (captured)
 ;;   @KEY <hex>                   Set-1 scancodes through the shared keyboard ring
 ;;   @SSHOBS                      actual dial/deadline/detach snapshot (read-only)
+;;   @SSHDUE                      last pass before the caller ceiling (read-only)
 ;;   @VTSTAT                      geometry, cursor, modes, SSH, capture, screen CRC
 ;;   @VTCELLS <row> <col> <n>     cells cp:fg:bg:flags:width (hex), n <= 16
 ;;   @VTCAP <offset> <n>          capture-ring bytes (hex), n <= 200
 ;;   @VTRZ <i>                    resize log entry i: capture offset, cols, rows
 ;; -> EAX 0 ok, 4 malformed, 5 oversized
+; Read-only current public ID for this Terminal slot. Existing predicates stay
+; unchanged: no gui.read grant, window enumeration, content read or policy write.
+term_public_window_id:
+    push rbx
+    push r12
+    mov  r12d, edi
+    xor  eax, eax
+    cmp  edi, WM_MAX - 1              ; reserved lock/chrome slot is never public
+    jae  .out
+    cmp  dword [rel wm_state + (WM_MAX - 1)*4], WM_VISIBLE
+    je   .out                        ; no desktop ID while lock surface is shown
+    call wmx_window_id               ; original live/minimized stamped generation
+    test eax, eax
+    jz   .out
+    mov  ebx, eax
+    mov  edi, eax
+    xor  esi, esi                    ; window only, never a widget/content read
+    call wmx_history_target          ; current/public/no-history, unchanged
+    cmp  eax, r12d
+    jne  .withheld
+    mov  eax, ebx
+    jmp  .out
+.withheld:
+    xor  eax, eax
+.out:
+    pop  r12
+    pop  rbx
+    ret
+
 terminal_termfeed:
     push rbx
     push r12
@@ -6712,6 +7061,15 @@ terminal_termfeed:
     lea  rsi, [rel term_sub_sshobs]
     call .kw
     jnz  .sshobs
+    lea  rsi, [rel term_sub_sshkeyobs]
+    call .kw
+    jnz  .sshkeyobs
+    lea  rsi, [rel term_sub_sshstartobs]
+    call .kw
+    jnz  .sshstartobs
+    lea  rsi, [rel term_sub_sshdue]
+    call .kw
+    jnz  .sshdue
     lea  rsi, [rel term_sub_stat]
     call .kw
     jnz  .stat
@@ -6740,6 +7098,24 @@ terminal_termfeed:
     test eax, eax
     lea  rax, [r13 + rax]
     ret
+.sshdue:
+    mov  rdi, rax
+    call term_ssh_due_observation_feed
+    test eax, eax
+    jnz  .malformed
+    jmp  .ok
+.sshstartobs:
+    mov  rdi, rax
+    call term_ssh_start_observation_feed
+    test eax, eax
+    jnz  .malformed
+    jmp  .ok
+.sshkeyobs:
+    mov  rdi, rax
+    call term_ssh_key_observation_feed
+    test eax, eax
+    jnz  .malformed
+    jmp  .ok
 .sshobs:
     mov  rdi, rax
     call term_ssh_observation_feed
@@ -6823,6 +7199,16 @@ terminal_termfeed:
     jmp  .key_push
 .key_done:
     call gui_input_route_tick           ; deliver now: this reply describes the batch
+    ; Enter can synchronously dispatch a command that uses grid_out too. Its
+    ; display and transcript are consumed before routing returns; now rebuild
+    ; the outer acknowledgement after every routing tick has finished.
+    call grid_out_reset
+    lea  rdi, [rel term_str_tfeed]
+    call grid_out_str
+    mov  edi, r15d
+    call grid_out_dec
+    lea  rdi, [rel term_str_rc]
+    call grid_out_str
     xor  edi, edi
     call grid_out_dec
     lea  rdi, [rel term_out_sub_key]
@@ -6862,6 +7248,12 @@ terminal_termfeed:
 %ifdef PAOS_TERMINAL_GUEST
     call term_guest_stat
 %endif
+    lea  rdi, [rel term_out_public_id]
+    call grid_out_str
+    mov  edi, r15d
+    call term_public_window_id
+    mov  edi, eax
+    call grid_out_dec
     lea  rdi, [rel term_out_chan]
     call grid_out_str
     xor  edi, edi
@@ -7094,10 +7486,10 @@ terminal_termfeed:
 .row_cell:
     cmp  r15d, [rbx + VT.cols]
     jae  .row_hex
-    mov  rdi, rbx
-    mov  esi, r14d
-    mov  edx, r15d
-    call vt_cell_ptr
+    ; Match the painted viewport, including original scrollback rows.
+    mov  edi, r14d
+    mov  esi, r15d
+    call term_view_cell
     inc  r15d
     mov  eax, [rax + VTC_CP]
     test eax, eax
@@ -7811,6 +8203,17 @@ terminal_hub_seams:
 
 ;; terminal_cmd_launch(RDI = req, RSI = rsp): LAUNCH app_terminal, else fallback
 terminal_cmd_launch:
+    cmp qword [rel terminal_terminal_launch_op],0
+    je .ordinary
+    push rdi
+    push rsi
+    call [rel terminal_terminal_launch_op]
+    pop rsi
+    pop rdi
+    cmp eax,-1
+    je .ordinary
+    ret
+.ordinary:
     call form_verb_unlocked             ; RCQ-16 F2b-1: refused under the lock, first
     test eax, eax
     jz   .unlocked
@@ -7908,7 +8311,13 @@ terminal_cmd_sshclikey:
     mov  edi, ebx
     call ssh_cli_identity_enroll
     test eax, eax
-    jns  .show                          ; written, or already enrolled: the key's line
+    js   .enroll_failed
+    test ebx, ebx
+    jz   .show                          ; ENROLL retains the existing public reply
+    lea  rdi, [rel term_str_sshclikey_reset_complete]
+    call form_out_put_str              ; verified RESET: explain loss and reenrollment
+    jmp  .show
+.enroll_failed:
     cmp  eax, -2
     je   .write_failed
     lea  rdi, [rel term_str_sshclikey_enroll_refused]
@@ -8171,6 +8580,7 @@ term_str_sshclikey_usage: db "SSHCLIKEY ERR usage: SSHCLIKEY [ENROLL | RESET]",0
 term_str_sshclikey_enroll_refused: db "SSHCLIKEY ERR enroll_unavailable (runtime, owner secret or trusted generation unavailable; nothing written)",0
 term_str_sshclikey_reset_refused: db "SSHCLIKEY ERR reset_unavailable (verified identity and unused generation required; nothing written)",0
 term_str_sshclikey_write_failed: db "SSHCLIKEY ERR commit_unverified (identity refused; durable outcome uncertain)",0
+term_str_sshclikey_reset_complete: db "SSHCLIKEY RESET complete: previous client identity replaced; install the following public key in remote authorized_keys before reconnecting; server pins retained; ",0
 term_str_sshclikey_enroll_word: db "ENROLL",0
 term_str_sshclikey_reset_word: db "RESET",0
 term_str_tfeed:      db " TFEED=1 WIN=",0
@@ -8214,6 +8624,7 @@ term_help_text:     db "  ssh          not in this build yet (no SSH client)", 1
                     db "  windows      return to Windows (asks first)", 13, 10
                     db "  reboot       restart the computer (asks first)", 13, 10
                     db "  shutdown     power off (asks first)", 13, 10
+                    db "  linux-return confirm or cancel a pending signed return to Linux",13,10
                     db "  status, ...  any PaOS command (case-insensitive)", 13, 10, 0
 term_crlf:          db 13, 10, 0
 term_cr:            db 13, 0
@@ -8221,12 +8632,16 @@ term_el:            db 0x1b, "[K", 0
 term_ed:            db 0x1b, "[J", 0      ; RCQ-38 L4: erase to the end of the screen
 term_cub1:          db 0x1b, "[D", 0
 term_cuf1:          db 0x1b, "[C", 0
-term_complete_words: db "guest", 0, "ssh", 0, "clear", 0, "exit", 0, "help", 0, "history", 0, "echo", 0, "windows", 0, "reboot", 0, "shutdown", 0
+term_complete_words: db "guest", 0, "ssh", 0, "clear", 0, "exit", 0, "help", 0, "history", 0, "echo", 0, "windows", 0, "reboot", 0, "shutdown", 0, "linux-return", 0
                     db "ls", 0, "stat", 0, "sha256sum", 0, "mkdir", 0, "rmdir", 0, "rm", 0, "mv", 0, "cp", 0, "df", 0, 0
 term_cmd_guest: db "guest",0
 term_cmd_history:   db "history", 0
 term_history_usage: db "usage: history (no arguments)", 13, 10, 0
 term_power_yes:     db "y", 13, 10, 0
+term_cmd_linux_return: db "linux-return",0
+term_linux_question: db "Confirm the pending signed return to Linux? [y/N] ",0
+term_linux_waiting: db "y",13,10,"Confirmed; waiting for the signed Linux return.",13,10,0
+term_linux_unavailable: db "No live Linux return plan; cancelled or expired. Nothing changed.",13,10,0
 term_power_no:      db "n", 13, 10, "cancelled", 13, 10, 0
 term_power_leaving: db "leaving PaOS ...", 13, 10, 0
 term_power_off:     db "powering off ...", 13, 10, 0
@@ -8268,7 +8683,10 @@ term_ssh_dns_timeout: db "[ssh: hostname lookup timed out]",13,10,0
 term_ssh_dns_refused: db "[ssh: hostname lookup refused (no usable IPv4 address)]",13,10,0
 term_ssh_dns_locked: db "[ssh: hostname lookup cancelled by session lock]",13,10,0
 term_ssh_connecting: db "ssh: connecting to ", 0
-term_ssh_connecting_tail: db " (TERM=xterm-256color) ...", 13, 10, 0
+term_ssh_connecting_tail: db " (TERM=xterm-256color) ...",13,10
+    db "[ssh: When connected, commands execute on the remote system.]",13,10
+    db "[ssh: Files created by those commands are stored on that system.]",13,10
+    db "[ssh: PaOS files are separate; this connection does not copy them.]",13,10,0
 term_ssh_busy:      db "ssh: this window already runs an ssh session", 13, 10, 0
 term_ssh_nosession: db "ssh: every ssh session is in use (close one first)", 13, 10, 0
 term_ssh_outcome_unknown: db 13,10,"[ssh session closed; remote exit status unknown]",13,10,0
@@ -8290,6 +8708,11 @@ align 8
 term_paste_generation: dq 0
 term_ssh_lookups: times TERM_MAX * TS_SIZE db 0
 term_paste_generations: times TERM_MAX dq 0 ; outside the reused instance records
+term_power_instance: dq 0
+term_power_generation: dq 0
+term_power_vt: dq 0
+term_power_window: dd 0
+term_power_widget: dd 0
 term_clip_copies:   dd 0
 term_clip_pastes:   dd 0
 term_sel_r0:        dd 0
@@ -8312,7 +8735,7 @@ term_ssh_hostclosed_text: db 13, 10, "[ssh session closed by the host]", 13, 10,
 term_ssh_silent_text: db 13, 10, "[ssh: connection lost (the host stopped answering)]", 13, 10, 0
 term_ssh_auth_text: db 13, 10, "[ssh: authentication failed (the key was refused)]", 13, 10, 0
 term_ssh_disc_text: db 13, 10, "[ssh: disconnected by the host]", 13, 10, 0
-term_ssh_hostkey_text: db 13, 10, "[ssh: REFUSED: this host's key changed since the first connection this boot (possible man-in-the-middle)]", 13, 10, 0
+term_ssh_hostkey_text: db 13, 10, "[ssh: REFUSED: host key or stored trust rejected; inspect storage warnings and verify the host fingerprint independently; any trust replacement requires a separate owner action]", 13, 10, 0
 term_ssh_ownerkey_text: db 13, 10, "[ssh: REFUSED: the client key signs only in the owner's session]", 13, 10, 0
 term_ssh_idempty_text: db 13,10,"[ssh: REFUSED: client identity store empty; owner sshclikey enroll is required; no temporary key created]",13,10,0
 term_ssh_idruntime_text: db 13,10,"[ssh: REFUSED: client identity storage unavailable; restore supported EFI runtime storage; no temporary key]",13,10,0
@@ -8409,6 +8832,9 @@ term_cmd_shutdown:  db "shutdown", 0
 term_empty:         db 0
 term_sub_raw:       db "@RAW", 0
 term_sub_key:       db "@KEY", 0
+term_sub_sshstartobs: db '@SSHSTARTOBS',0
+term_sub_sshkeyobs: db '@SSHKEYOBS',0
+term_sub_sshdue: db '@SSHDUE',0
 term_sub_sshobs: db '@SSHOBS',0
 term_sub_stat:      db "@VTSTAT", 0
 term_sub_cells:     db "@VTCELLS", 0
@@ -8428,6 +8854,7 @@ term_out_sub_key:   db " SUB=KEY KEYS=", 0
 term_out_routed:    db " TROUTED=", 0
 term_out_reflow: db " REFLOW=",0        ; evicted physical rows, atomic resize refusals
 term_out_marks: db " MARKLOSS=", 0     ; overflow,orphan,latest clipboard truncation
+term_out_public_id db " PUBLIC_ID=",0
 term_out_sub_stat:  db " SUB=VTSTAT APP=terminal COLS=", 0
 term_out_rows:      db " TROWS=", 0
 term_out_cur:       db " CUR=", 0
@@ -8549,6 +8976,7 @@ term_taint_spare:   times KT_SIZE db 0
 term_exec_taint:    times KT_SIZE db 0             ; the line term_execute_line is running
 term_feed_req:      dq 0                           ; TERMFEED: the request whose @KEY bytes are queued
 term_feed_entry_req: dq 0
+terminal_terminal_launch_op: dq 0
 term_launch_fallback: dq 0             ; the LAUNCH handler before app_terminal
 term_key_filter_prev: dq 0             ; the kit key filter before the Terminal's
 term_ssh_taint:     times KT_SIZE db 0  ; SEC D1: the event term_ssh_input_ok judges

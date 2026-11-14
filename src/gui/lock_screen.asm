@@ -2,8 +2,8 @@
 %include "core/abi/build_profile.inc"
 ;; LAYER 6
 ;; PURPOSE Stock sign-in composition; sec/session is the only authority owner.
-;; EXPORTS lock_screen_focus_assert, lock_screen_boot_release, lock_screen_notice, lock_screen_init, lock_screen_sync, lock_screen_desktop_start, lock_screen_boot_report, lock_screen_key, lock_screen_click, lock_screen_command_allowed, lock_surface_ready, lock_surface_loading, taskbar_draw_registry, taskbar_attention_tick, lock_composition_ok, lock_desktop_created, lock_wallpaper_load, lock_screen_display_serial
-;; IMPORTS gui/calendar, gui/app_launch_flow, gui/app_launcher, gui/lock_ssh_notice, gui/recovery_notice, gui/lock_fade, gui/lock_screen_card, gui/form_loader, gui/widget, gui/widget_image, gui/window, gui/window_mgmt, gui/chat_app, gui/demo_three_windows, gui/console_app, gui/widget_console_grid, gui/session_restore, sec/session, sec/principal, svc/command, svc/command_auth, svc/command_cons, svc/command_udp, boot/header, boot/gop, boot/serial, core/lib/str, gui/taskbar, dev/input/ps2, gui/input_route, config/keep_config, sec/keyprov, gui/netmon_form
+;; EXPORTS lock_screen_account_offer, lock_screen_focus_assert, lock_screen_boot_release, lock_screen_notice, lock_screen_init, lock_screen_sync, lock_screen_desktop_start, lock_screen_boot_report, lock_screen_key, lock_screen_click, lock_screen_command_allowed, lock_surface_ready, lock_surface_loading, taskbar_draw_registry, taskbar_attention_tick, lock_composition_ok, lock_desktop_created, lock_wallpaper_load, lock_wallpaper_bind, lock_wallpaper_fit_choice, lock_screen_display_serial
+;; IMPORTS gui/format_confirm, gui/adopt_confirm, gui/calendar, gui/app_launch_flow, gui/app_launcher, gui/lock_ssh_notice, gui/recovery_notice, gui/lock_fade, gui/lock_screen_card, gui/form_loader, gui/widget, gui/widget_image, gui/window, gui/window_mgmt, gui/chat_app, gui/demo_three_windows, gui/console_app, gui/widget_console_grid, gui/session_restore, sec/session, sec/principal, svc/command, svc/command_auth, svc/command_cons, svc/command_udp, boot/header, boot/gop, boot/serial, core/lib/str, gui/taskbar, dev/input/ps2, gui/input_route, config/keep_config, sec/keyprov, gui/netmon_form, gui/terminal_consent, sec/terminal_native, gui/account_local, hv/app_network
 ;; OWNER saga:login_surfaces
 
 LOCK_SLOT equ WM_MAX - 1                ; reserved from ordinary WM allocation (the top slot; G9: was the literal 7 = old WM_MAX-1)
@@ -92,12 +92,7 @@ lock_screen_init:
     mov  [rax + WGI_W], ecx
     mov  ecx, [rel fb_height]
     mov  [rax + WGI_H], ecx
-    mov  edi, [rel lock_widget_first]
-    call widget_image_state_ptr
-    mov  rsi, [rax + WIS_SRC]
-    mov  edi, [rel lock_widget_first]
-    mov  edx, WIMG_FIT_COVER
-    call widget_image_bind
+    call lock_wallpaper_bind
     mov  edi, [rel lock_widget_first]
     call widget_image_state_ptr
     mov  ecx, [rax + WIS_LOAD]
@@ -238,12 +233,17 @@ lock_screen_desktop_start:
     call terminal_app_init               ; hub packet 0009: after the Console so LAUNCH chains app_terminal -> app_console
     call start_programs_init             ; hub packet 0010: after both, so FORMLOAD chains the Start rows -> console -> loader
     call card_surface_init               ; RCQ-40 J2b: last, so the key/click hooks chain card -> start_programs -> lock
+    call adopt_confirm_init
+    call format_confirm_init
     call app_confirm_init               ; app_confirm -> card -> start_programs -> lock
+    call terminal_consent_init          ; chain native pointer note/click after Start
+    call terminal_policy_runtime_init   ; SEC installs native policy/transport/consent callbacks once
     call app_package_card_init          ; read-only native report navigation
     call app_launcher_init              ; chained native bundle desktop entry
     call netmon_check_click_init        ; Network Monitor's Network Check button
     call app_launch_flow_init            ; WAIT/UI ready; native callback, no app prepare
     call app_install_init                ; after binding: decision card hooks, consent resolver
+    call lock_screen_account_init        ; both native init and network configuration must succeed
     call demo_three_windows_retire       ; B18: after the routing init/KAT and the app inits; desktop handed over clean
     ; T5-11: the Console stays hidden at startup. Require the retained
     ; headless command/transcript service, not a legacy window allocation.
@@ -255,8 +255,34 @@ lock_screen_desktop_start:
     mov  byte [rel lock_restore_pending], 0
     call session_shell_restore_workspace
 .notice:
+    call console_observe_unlock
     call recovery_notice_init
 .out:
+    ret
+
+; Native composition, never a command/guest route. A later maintained operation
+; caller must pass its actual current instance; the accepted card re-reads it.
+lock_screen_account_init:
+    push rbx
+    mov byte [rel lock_account_ready],0
+    call account_local_init
+    cmp eax,1
+    jne .out
+    lea rdi,[rel account_policy_copy]
+    call app_network_configure
+    cmp eax,1
+    jne .out
+    mov byte [rel lock_account_ready],1
+.out:
+    pop rbx
+    ret
+
+lock_screen_account_offer:
+    cmp byte [rel lock_account_ready],1
+    jne .bad
+    jmp account_local_offer
+.bad:
+    xor eax,eax
     ret
 
 ; One late-boot state measurement for isolated policy boots. The nonce is a
@@ -653,6 +679,40 @@ lock_screen_badge_selftest:
     pop  rbx
     ret
 
+; Reuse the stock form's source and sizing at the actual framebuffer extent.
+; COVER is opaque (its own scrim). Other fits first erase the whole lock image
+; rectangle, so bars/alpha can never expose pixels from a previous workspace.
+; This is presentation only; no session, focus, input or authority state changes.
+lock_wallpaper_bind:
+    mov  edi, [rel lock_widget_first]
+    call widget_image_state_ptr
+    mov  edx, [rax + WIS_FIT]
+    mov  ecx, [rel lock_wallpaper_fit_choice]
+    test ecx, ecx
+    cmovnz edx, ecx
+    cmp  edx, WIMG_FIT_COVER
+    je   .bind
+    push rbx
+    mov  edi, [rel lock_widget_first]
+    call wgt_slot_ptr
+    mov  r8d, [rax + WGI_X]
+    mov  r9d, [rax + WGI_Y]
+    mov  r10d, [rax + WGI_W]
+    mov  r11d, [rax + WGI_H]
+    mov  ebx, GUI_TOK_TASKBAR_NORMAL
+    call wgt_fill_rect
+    pop  rbx
+.bind:
+    mov  edi, [rel lock_widget_first]
+    call widget_image_state_ptr
+    mov  rsi, [rax + WIS_SRC]
+    mov  edx, [rax + WIS_FIT]
+    mov  ecx, [rel lock_wallpaper_fit_choice]
+    test ecx, ecx
+    cmovnz edx, ecx
+    mov  edi, [rel lock_widget_first]
+    jmp  widget_image_bind
+
 ; Rebind at a session/presentation boundary: a workspace can evict the bitmap.
 ; This runs in normal context, never in a damage painter.
 ; SEC-lock-noncovering-after-res (root 18:05:32): RESSET rewrites fb_width/
@@ -676,12 +736,7 @@ lock_screen_paint:
     mov  [rax + WGI_H], ecx
     mov  [rel wm_h + LOCK_SLOT*4], ecx
     call lock_card_layout
-    mov  edi, [rel lock_widget_first]
-    call widget_image_state_ptr
-    mov  rsi, [rax + WIS_SRC]
-    mov  edi, [rel lock_widget_first]
-    mov  edx, WIMG_FIT_COVER
-    call widget_image_bind
+    call lock_wallpaper_bind
     call wmx_draw_all
     mov  edi, [rel lock_notice_kind]        ; RCQ-27: a full repaint keeps the notice
     mov  esi, [rel lock_notice_secs]
@@ -1382,6 +1437,24 @@ lock_cmd_state:
     call form_out_put_str
     mov  rdi, [rel session_authority_epoch]
     call form_out_put_dec
+    lea  rdi, [rel str_lock_observer]
+    call form_out_put_str
+    lea  rdi, [rel str_lock_unlocks]
+    call form_out_put_str
+    mov  rdi, [rel session_observed_unlocks]
+    call form_out_put_dec
+    lea  rdi, [rel str_lock_local_unlocks]
+    call form_out_put_str
+    mov  rdi, [rel session_genuine_local_unlocks]
+    call form_out_put_dec
+    lea  rdi, [rel str_lock_local_epoch]
+    call form_out_put_str
+    mov  rdi, [rel session_genuine_local_epoch]
+    call form_out_put_dec
+    lea  rdi, [rel str_lock_local_us]
+    call form_out_put_str
+    mov  rdi, [rel session_genuine_local_us]
+    call form_out_put_dec
     lea  rdi, [rel str_lock_failures]
     call form_out_put_str
     mov  rdi, [rel prin_password_failures]
@@ -1542,6 +1615,11 @@ str_lock_badge_painted: db " badge_painted=",0
 str_lock_badge_repairs: db " badge_repairs=",0
 str_lock_paints: db " paints=",0
 str_lock_epoch: db " authority_epoch=",0
+str_lock_observer: db " session_observer=1",0
+str_lock_unlocks: db " unlocks=",0
+str_lock_local_unlocks: db " local_unlocks=",0
+str_lock_local_epoch: db " local_epoch=",0
+str_lock_local_us: db " local_us=",0
 str_lock_failures: db " failures=",0
 str_lock_backoff: db " backoff_until=",0
 str_lock_enrolled: db " enrolled=",0
@@ -1575,7 +1653,9 @@ lock_boot_report_owed: db 0             ; boot audit (2): LOGINBOOT waits for th
 lock_tab_keep_kat_ok: db 0
 lock_desktop_created: db 0
 align 4
+lock_wallpaper_fit_choice: dd 0       ; runtime only: 0 preserves the form; owner choice 2/3/4/5
 lock_wallpaper_load: dd 0xFFFFFFFF    ; DISPLAY: WIS_LOAD of the boot wallpaper bind (all ones = not reached)
+lock_account_ready: db 0
 lock_desktop_started: db 0
 lock_restore_pending: db 0
 lock_setup_staged: db 0

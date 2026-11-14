@@ -1,8 +1,8 @@
 ;; MODULE gui/app_launch_flow
 ;; LAYER 6
 ;; PURPOSE Native owner policy and bounded isolated-app launch composition.
-;; EXPORTS app_launch_flow_init, app_launch_flow_tick, app_launch_flow_begin, app_launch_flow_available, app_launch_flow_observe
-;; IMPORTS gui/calendar, gui/chat_send, gui/form_events, gui/app_launcher, sec/app_binding, sec/session, svc/app_script, hv/app_vm, gui/widget, gui/window_mgmt, gui/wm_pointer, svc/command, core/time, boot/gop
+;; EXPORTS app_launch_flow_click_observe, app_launch_flow_init, app_launch_flow_tick, app_launch_flow_begin, app_launch_flow_available, app_launch_flow_observe, app_launch_flow_quiesce
+;; IMPORTS gui/form_loader, gui/calendar, gui/chat_send, gui/form_events, gui/app_launcher, sec/app_binding, sec/session, svc/app_script, hv/app_vm, gui/widget, gui/window_mgmt, gui/wm_pointer, svc/command, core/time, core/smp, hv/vmx, hv/app_vm_memory, boot/gop
 ;; OWNER saga:app_launch_flow
 ;; CONTEXT: bsp_only
 ; Native-only. One original VM lifecycle, no guest command/setter/executor.
@@ -102,6 +102,11 @@ app_launch_flow_begin:
     cmp rax,PRIN_OWNER
     jne .bad
     mov [rel af_epoch],rdx
+    mov rdi,rbx
+    mov rsi,r12
+    call app_launcher_terminal_current
+    cmp eax,1
+    jne .bad
     mov rax,[rel session_key_handle]
     mov [rel af_key],rax
     mov rdi,rbx
@@ -134,6 +139,7 @@ app_launch_flow_begin:
     mov qword [rel af_instance],0
     mov dword [rel af_form_slot],-1
     mov byte [rel af_answer],0
+    call af_start_clock_clear
     lea rdi,[rel af_times]
     xor eax,eax
     mov ecx,6
@@ -154,6 +160,218 @@ app_launch_flow_begin:
 .bad:
     xor eax,eax
 .out:
+    pop r12
+    pop rbx
+    ret
+
+; Native REMOVE: RDI mapped/disjoint bundle SHA256[32], RSI current owner epoch.
+; 1 exact UI and VM confirmed retired/absent,2 pending,0 refused. INPUT owns
+; prior durable REMOVING denial and physical confirmation, FS owns bytes and
+; INPUT owns grants. This leaf never reports durable removal success. Poll
+; from the ordinary depth-zero native turn; no spin or hidden VM tick here.
+; Pending digest/session/entry/flow identity is immutable. Terminal1 ends it;
+; the caller stops polling and needs a fresh confirmed REMOVING for a new call.
+app_launch_flow_quiesce:
+    push rbx
+    push r12
+    push r13
+    mov rbx, rdi
+    mov r12, rsi
+    xor r13d, r13d
+    cmp byte [rel cmd_in_dispatch], 0
+    jne .bad
+    cmp byte [rel af_remove_busy], 0
+    jne .bad
+    call smp_current_logical
+    test eax, eax
+    jnz .bad
+    test rbx, rbx
+    jz .bad
+    mov rax, rbx
+    add rax, 32
+    jc .bad
+    mov rcx, rbx
+    shl rcx, 16
+    sar rcx, 16
+    cmp rcx, rbx
+    jne .bad
+    lea rdx, [rax-1]
+    mov rcx, rdx
+    shl rcx, 16
+    sar rcx, 16
+    cmp rcx, rdx
+    jne .bad
+    ; Validate before the first read, including a partial VM-memory overlap.
+    mov rcx, [rel avm_base]
+    mov rdx, [rel avm_capacity]
+    test rcx, rcx
+    jz .no_vm_base
+    test rdx, rdx
+    jz .bad
+    add rdx, rcx
+    jc .bad
+    cmp rax, rcx
+    jbe .linux_vm
+    cmp rbx, rdx
+    jb .bad                         ; app VM span
+    jmp .linux_vm
+.no_vm_base:
+    test rdx, rdx
+    jnz .bad
+.linux_vm:
+    mov rcx, [rel hv_linux_region]
+    mov rdx, [rel hv_linux_region_capacity]
+    test rdx, rdx
+    jz .native
+    test rcx, rcx
+    jz .bad
+    add rdx, rcx
+    jc .bad
+    cmp rax, rcx
+    jbe .native
+    cmp rbx, rdx
+    jb .bad                         ; Linux guest span
+.native:
+    lea rcx, [rel af_private_end]
+    cmp rbx, rcx
+    jae .bss
+    lea rcx, [rel af_click_prev]
+    cmp rax, rcx
+    ja .bad
+.bss:
+    lea rcx, [rel af_private_bss_end]
+    cmp rbx, rcx
+    jae .authority
+    lea rcx, [rel af_gui_target]
+    cmp rax, rcx
+    ja .bad
+.authority:
+    call session_shell_local_authority
+    cmp rax, PRIN_OWNER
+    jne .bad
+    test r12, r12
+    jz .bad
+    cmp rdx, r12
+    jne .bad
+    cmp byte [rel af_remove_active], 0
+    je .capture
+    cmp r12, [rel af_remove_epoch]
+    jne .bad
+    mov rax, [rel session_key_handle]
+    cmp rax, [rel af_remove_key]
+    jne .bad
+    mov rsi, rbx
+    lea rdi, [rel af_remove_digest]
+    mov ecx, 4
+    cld
+    repe cmpsq
+    jne .bad                        ; one immutable pending operation
+    jmp .original_flow
+.capture:
+    mov rsi, rbx
+    lea rdi, [rel af_remove_digest]
+    mov ecx, 4
+    cld
+    rep movsq
+    mov [rel af_remove_epoch], r12
+    mov rax, [rel session_key_handle]
+    mov [rel af_remove_key], rax
+    mov byte [rel af_remove_flow], 0
+    mov byte [rel af_remove_vm_done], 0
+    mov qword [rel af_remove_entry], 0
+    cmp dword [rel af_state], AF_IDLE
+    je .captured
+    cmp r12, [rel af_epoch]
+    jne .captured
+    lea rsi, [rel af_remove_digest]
+    lea rdi, [rel af_descriptor+32]
+    mov ecx, 4
+    repe cmpsq
+    jne .captured
+    mov byte [rel af_remove_flow], 1
+    mov rax, [rel af_observe_attempt]
+    mov [rel af_remove_attempt], rax
+    mov rax, [rel af_instance]
+    mov [rel af_remove_instance], rax
+    mov rax, [rel af_handle]
+    mov [rel af_remove_handle], rax
+.captured:
+    mov byte [rel af_remove_active], 1
+.original_flow:
+    cmp byte [rel af_remove_flow], 0
+    je .entry
+    ; Ordinary tick may finish the old flow; it may never substitute a new one.
+    mov rax, [rel af_observe_attempt]
+    cmp rax, [rel af_remove_attempt]
+    jne .bad
+    mov rax, [rel af_handle]
+    cmp rax, [rel af_remove_handle]
+    jne .bad
+    cmp dword [rel af_state], AF_IDLE
+    je .entry
+    mov rax, [rel af_instance]
+    cmp rax, [rel af_remove_instance]
+    jne .bad
+    mov r13d, 1
+.entry:
+    mov byte [rel af_remove_busy], 1
+    lea rdi, [rel af_remove_digest]
+    mov rsi, r12
+    mov rdx, [rel af_remove_entry]
+    call app_launcher_quiesce
+    test eax, eax
+    jz .unlock_bad
+    mov [rel af_remove_entry], rdx
+    test r13d, r13d
+    jz .vm
+    cmp dword [rel af_state], AF_RETIRING
+    je .vm
+    mov byte [rel af_end_ordinary], 1
+    call af_retire
+    mov dword [rel af_state], AF_RETIRING
+.vm:
+    cmp byte [rel af_remove_vm_done], 0
+    jne .ui
+    lea rdi, [rel af_remove_digest]
+    mov rsi, r12
+    call app_vm_quiesce              ; stop acceptance alone is never1
+    cmp eax, 1
+    je .vm_done
+    cmp eax, 2
+    je .pending
+    jmp .unlock_bad
+.vm_done:
+    mov byte [rel af_remove_vm_done], 1 ; do not reopen VM's terminal capsule
+.ui:
+    lea rdi, [rel af_remove_digest]
+    mov rsi, r12
+    mov rdx, [rel af_remove_entry]
+    call app_launcher_quiesce
+    cmp eax, 1
+    jne .ui_pending
+    test r13d, r13d
+    jz .done
+    mov qword [rel af_instance], 0
+    mov dword [rel af_state], AF_IDLE
+.done:
+    mov byte [rel af_remove_active], 0 ; terminal1 ends operation; caller stops polling
+    mov eax, 1
+    jmp .unlock
+.ui_pending:
+    cmp eax, 2
+    jne .unlock_bad
+.pending:
+    mov eax, 2
+    jmp .unlock
+.unlock_bad:
+    xor eax, eax
+.unlock:
+    mov byte [rel af_remove_busy], 0
+    jmp .out
+.bad:
+    xor eax, eax
+.out:
+    pop r13
     pop r12
     pop rbx
     ret
@@ -179,8 +397,9 @@ af_current:
     mov ecx,48
     repe cmpsq
     jne .bad
-    mov eax,1
-    ret
+    mov rdi,[rel af_handle]
+    mov rsi,[rel af_attempt]
+    jmp app_launcher_terminal_current
 .bad:
     xor eax,eax
     ret
@@ -212,6 +431,15 @@ af_in_time:
     ret
 .bad:
     xor eax,eax
+    ret
+
+; Clear only new diagnostics for a newly accepted original flow.
+af_start_clock_clear:
+    mov qword [rel af_start_candidate_us],0
+    mov qword [rel af_start_candidate_attempt],0
+    mov qword [rel af_start_spent_us],0
+    mov qword [rel af_start_spent_attempt],0
+    mov qword [rel af_start_us],0
     ret
 
 ; Pointer-only native widget callback. No grant/VM work inside input delivery.
@@ -264,11 +492,24 @@ af_click:
     mov [rel af_click_z],eax
     mov eax,[rel sp_ptr_inj_seq]
     mov [rel af_click_inj],eax
+    mov qword [rel af_start_candidate_us],0
+    mov qword [rel af_start_candidate_attempt],0
+    cmp dword [rel af_click_index],12
+    jne .answer
+    cmp qword [rel tsc_khz],0
+    je .answer
+    call time_monotonic_now_us
+    mov [rel af_start_candidate_us],rax
+    mov rax,[rel af_attempt]
+    mov [rel af_start_candidate_attempt],rax
+.answer:
     mov eax,[rel af_click_index]
     inc eax
     mov [rel af_answer],al
     jmp .taken
 .disarm:
+    mov qword [rel af_start_candidate_us],0
+    mov qword [rel af_start_candidate_attempt],0
     mov byte [rel af_answer],0
 .taken:
     mov eax,1
@@ -367,6 +608,12 @@ af_idle_turn:
 .in_front:
     movzx eax,byte [rel af_answer]
     mov byte [rel af_answer],0           ; spend before any decision/effect
+    mov rdx,[rel af_start_candidate_us]
+    mov [rel af_start_spent_us],rdx
+    mov rdx,[rel af_start_candidate_attempt]
+    mov [rel af_start_spent_attempt],rdx
+    mov qword [rel af_start_candidate_us],0 ; spent with the original answer
+    mov qword [rel af_start_candidate_attempt],0
     test eax,eax
     jz .out
     dec eax
@@ -431,6 +678,17 @@ af_idle_turn:
     call wgt_set_text
     ret
 .prepare:
+    ; All original idle-turn click checks passed. Missing clock never refuses Start.
+    cmp qword [rel af_start_us],0
+    jne .start_clock_done
+    mov rax,[rel af_start_spent_attempt]
+    test rax,rax
+    jz .start_clock_done
+    cmp rax,[rel af_attempt]
+    jne .start_clock_done
+    mov rax,[rel af_start_spent_us]
+    mov [rel af_start_us],rax
+.start_clock_done:
     call af_panel_close
     call af_new_deadline
     cmp eax,1
@@ -545,6 +803,11 @@ af_activate:
     call af_current
     cmp eax,1
     jne .bad
+    mov rdi,[rel af_handle]
+    mov rsi,[rel af_attempt]
+    call app_launcher_terminal_activation_begin
+    cmp eax,1
+    jne .bad
     mov rdi,[rel af_instance]
     call app_vm_activate
     cmp eax,1
@@ -623,6 +886,36 @@ af_launch_feedback:
     call time_monotonic_now_us
     mov [rel af_fallback_us],rax
 .out:
+    ret
+
+; New separate native mapped disjoint out64, depth0. Raw diagnostic only;
+; downstream must join exact original handle/attempt and fresh native custody.
+; schema,handle,attempt,accepted Start,first BEGIN,prepare,state,0. Same clock.
+app_launch_flow_click_observe:
+    cmp byte [rel cmd_in_dispatch],0
+    jne .bad
+    test rdi,rdi
+    jz .bad
+    cmp esi,64
+    jne .bad
+    mov qword [rdi],1
+    mov rax,[rel af_handle]
+    mov [rdi+8],rax
+    mov rax,[rel af_observe_attempt]
+    mov [rdi+16],rax
+    mov rax,[rel af_start_us]
+    mov [rdi+24],rax
+    mov rax,[rel af_first_wait_us]
+    mov [rdi+32],rax
+    mov rax,[rel af_prepare_us]
+    mov [rdi+40],rax
+    mov eax,[rel af_state]
+    mov [rdi+48],rax
+    mov qword [rdi+56],0
+    mov eax,1
+    ret
+.bad:
+    xor eax,eax
     ret
 
 ; Bounded native read-only observation, trusted mapped disjoint out80.
@@ -809,6 +1102,10 @@ af_decline:
 af_retire:
     mov dword [rel af_state],AF_RETIRING
     mov byte [rel af_answer],0
+    mov qword [rel af_start_candidate_us],0
+    mov qword [rel af_start_candidate_attempt],0
+    mov qword [rel af_start_spent_us],0
+    mov qword [rel af_start_spent_attempt],0
     call chat_send_retire
     call app_binding_retire
     mov rdi,[rel af_handle]
@@ -836,6 +1133,11 @@ af_retire:
     mov rdi,[rel af_instance]
     test rdi,rdi
     jz .form
+    ; Binding is retired above. Close only the package's exact native member
+    ; lifetimes for the captured actual VM principal, before stopping its VM.
+    mov rdi,[rel af_vm+8]
+    call form_app_members_close
+    mov rdi,[rel af_instance]
     call app_vm_stop
 .form:
     call af_form_current
@@ -1287,6 +1589,11 @@ af_click_xy: dq 0
 af_click_fb: dq 0
 af_observe_attempt: dq 0
 af_panel_shown_us: dq 0
+af_start_candidate_us: dq 0
+af_start_candidate_attempt: dq 0
+af_start_spent_us: dq 0
+af_start_spent_attempt: dq 0
+af_start_us: dq 0
 af_times:
 af_prepare_us: dq 0
 af_ready_us: dq 0
@@ -1299,6 +1606,18 @@ af_notice_slot: dd -1
 af_notice_gen: dd 0
 af_notice_attempted: db 0
 af_end_ordinary: db 0
+af_remove_busy: db 0
+af_remove_active: db 0
+af_remove_flow: db 0
+af_remove_vm_done: db 0
+align 8
+af_remove_digest: times 32 db 0
+af_remove_epoch: dq 0
+af_remove_key: dq 0
+af_remove_entry: dq 0
+af_remove_attempt: dq 0
+af_remove_instance: dq 0
+af_remove_handle: dq 0
 align 4
 af_state: dd AF_IDLE
 af_slot: dd -1
@@ -1315,6 +1634,7 @@ af_answer: db 0
 af_gui_configured: db 0
 af_gui_available: db 0
 af_gui_policy: db 0
+af_private_end:
 %endmacro
 WDATA_DEFER WDATA_app_launch_flow
 %macro WDATA_app_launch_flow_bss 0
@@ -1325,5 +1645,6 @@ af_vm: resb 128
 af_hash: resb 66
 af_identity: resb 64
 af_line: resb 40
+af_private_bss_end:
 %endmacro
 WDATA_BSS_DEFER WDATA_app_launch_flow_bss

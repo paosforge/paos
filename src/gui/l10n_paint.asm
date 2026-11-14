@@ -1,6 +1,6 @@
 ;; MODULE gui/l10n_paint
 ;; LAYER 6
-;; EXPORTS l10n_paint, l10n_paint_center, l10n_paint_wrap, l10n_help_paint, l10n_help_rows
+;; EXPORTS l10n_native_wrap, l10n_paint, l10n_paint_center, l10n_paint_wrap, l10n_help_paint, l10n_help_rows
 ;; IMPORTS gui/res_pack_boot, gui/chat_app, core/unicode_edit, core/lib/str, boot/serial
 ;; CAPS
 ;; OWNER rc-boot-claude
@@ -891,6 +891,73 @@ l10n_help_paint:
 .none:
     xor  eax, eax
     xor  edx, edx
+    ret
+
+; l10n_native_wrap(RSI native ASCII, R10D cells, R11D rows, EDX 0 measure
+; or L10N_WRAP_DRAW paint) -> EAX rows, -1 if unavailable. Uses the SAME
+; bounded escape and word/hard wrap as English fallback. Preserves every other
+; register. Catalog metadata is <=255 printable bytes, never a UI action.
+l10n_native_wrap:
+    push rbx
+    push rcx
+    push rdx
+    push rdi
+    push rsi
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+    sub  rsp, L10N_PAINT_ESC
+    mov  r12d, edx
+    test r10d, r10d
+    jle  .bad
+    test r11d, r11d
+    jz   .bad
+    mov  rdi, rsp
+    call l10n_escape
+    test eax, eax
+    js   .out
+    mov  rsi, rsp
+    mov  edx, eax
+    ; Prove a complete block fits BEFORE any cell is drawn. HARD fallback
+    ; itself permits truncation; this public helper deliberately does not.
+    push r11
+    mov  r11d, -1
+    mov  edi, L10N_WRAP_HARD
+    call l10n_wrap
+    pop  r11
+    test eax, eax
+    js   .out
+    cmp  eax, r11d
+    ja   .bad
+    test r12d, L10N_WRAP_DRAW
+    jz   .out
+    test r11d, r11d
+    jle  .bad
+    mov  edi, L10N_WRAP_DRAW | L10N_WRAP_HARD
+    call l10n_wrap
+    jmp  .out
+.bad:
+    mov  eax, -1
+.out:
+    add  rsp, L10N_PAINT_ESC
+    pop  r15
+    pop  r14
+    pop  r13
+    pop  r12
+    pop  r11
+    pop  r10
+    pop  r9
+    pop  r8
+    pop  rsi
+    pop  rdi
+    pop  rdx
+    pop  rcx
+    pop  rbx
     ret
 
 ; l10n_help_rows(EDI page, ESI block k or -1 for the title, R10D cells a row)

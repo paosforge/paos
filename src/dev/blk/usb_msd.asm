@@ -1,6 +1,6 @@
 ;; MODULE dev/blk/usb_msd
 ;; LAYER 3
-;; EXPORTS msd_census_model, msd_last_sense, msd_tur_attempts, usb_msd_init, usb_msd_dev, msd_bound, msd_state, msd_port, msd_lba_max, msd_block_size, msd_cmds, msd_cmd_fail, msd_cmd_refused, msd_write_refused, msd_flush_no_cache, msd_dead, msd_owned_skips
+;; EXPORTS usb_msd_power_quiesce, usb_msd_power_release, usb_msd_power_snapshot, msd_census_model, msd_last_sense, msd_tur_attempts, usb_msd_init, usb_msd_dev, msd_bound, msd_state, msd_port, msd_lba_max, msd_block_size, msd_cmds, msd_cmd_fail, msd_cmd_refused, msd_write_refused, msd_flush_no_cache, msd_dead, msd_owned_skips
 ;; IMPORTS boot/native_driver_gate, boot/native_driver_preload, usb/enum, fs/blockdev, dev/usb/xhci, dev/usb/hid, dev/net/ax88179, dev/net/ax88179b, dev/net/cdc_ecm, boot/serial, core/time
 ;; CAPS dma
 ;; OWNER saga:storage
@@ -25,12 +25,14 @@
 ;     (HID, CDC, vendor) leaves the whole device to its owner;
 ; with a bulk IN and a bulk OUT endpoint on that interface. It then:
 ;   SET_CONFIGURATION, configures the two bulk pipes, INQUIRY, TEST UNIT
-;   READY (bounded retries), READ CAPACITY(10) -> registers "usbmsd0".
+;   READY (bounded retries), READ CAPACITY(10), bounded read-only write-protection
+;   header -> registers "usbmsd0" with actual WP flags.
 ; The MSI spoke's root-8 claim becomes this class bind.
 ;
 ; COMMANDS:
 ;   * msd_cmd issues only INQUIRY (12h), TEST UNIT READY (00h), REQUEST SENSE
-;     (03h), READ CAPACITY(10) (25h), READ(10) (28h), WRITE(10) (2Ah) and
+;     (03h), the initial exact MODE SENSE(6) header (1Ah), READ CAPACITY(10)
+;     (25h), READ(10) (28h), WRITE(10) (2Ah) and
 ;     SYNCHRONIZE CACHE(10) (35h); any other opcode is refused before a CBW
 ;     leaves. WRITE(10) is the only data-OUT stage and must move exactly the
 ;     length its CDB names; SYNCHRONIZE CACHE carries no data.
@@ -82,6 +84,7 @@ MSD_DT_ENDPOINT      equ 0x05
 MSD_OP_TUR           equ 0x00
 MSD_OP_REQ_SENSE     equ 0x03
 MSD_OP_INQUIRY       equ 0x12
+MSD_OP_MODE_SENSE6   equ 0x1A
 MSD_OP_READ_CAP10    equ 0x25
 MSD_OP_READ10        equ 0x28
 MSD_OP_WRITE10       equ 0x2A
@@ -96,20 +99,49 @@ MSD_ST_TUR           equ 5
 MSD_ST_CAPACITY      equ 6
 MSD_ST_REGISTER      equ 7
 MSD_ST_BOUND         equ 8
+MSD_ST_PROTECTION    equ 9
 
 ; usb_msd_init — bind at most one unowned BOT device; never wedges boot.
 usb_msd_init:
+%ifdef PAOS_LAB_USB_MSD_DUMP
+    ; The optional upper-half read is a separate ordinary request after bind.
+    ; Keep it outside the bind's admission, so blk_read can enter normally.
+    xor eax,eax
+    mov r10d,1
+    lock cmpxchg [rel msd_io_gate],r10d
+    jne .busy
+    sub rsp,8
+    call usb_msd_init_active
+    mov dword [rel msd_io_gate],0
+    cmp byte [rel msd_bound],1
+    jne .out
+    call msd_lab_dump
+.out:
+    add rsp,8
+    ret
+.busy:
+    mov rax,-1
+    ret
+%else
+    lea rax,[rel usb_msd_init_active]
+    jmp msd_io_enter
+%endif
+usb_msd_init_active:
     push rbx
     push r12
     push r13
     push r14
     push r15
+    mov dword [rel msd_bind_result],0 ; unknown until actual scan completes
     mov  dword [rel msd_inquiry_bytes], 0
     mov  byte [rel msd_bound], 0
     mov  byte [rel msd_dead], 0
+    mov  byte [rel msd_wp], 0          ; no write-protection reply yet
     mov  byte [rel msd_state], MSD_ST_NONE
     call usb_dev_count
     mov  r15d, eax
+    cmp eax,USB_MAX_DEV
+    ja .scan_unavailable
     xor  ebx, ebx
 .device:
     cmp  ebx, r15d
@@ -183,16 +215,20 @@ usb_msd_init:
     test rax, rax
     jnz  .fail
     mov  byte [rel msd_state], MSD_ST_INQUIRY
-    call msd_inquiry
+    call msd_inquiry_active
     test eax, eax
     jnz  .fail
     mov  byte [rel msd_state], MSD_ST_TUR
-    call msd_tur_ready
+    call msd_tur_ready_active
     test eax, eax
     jnz  .fail
 .capacity:
     mov  byte [rel msd_state], MSD_ST_CAPACITY
-    call msd_read_capacity
+    call msd_read_capacity_active
+    test eax, eax
+    jnz  .fail
+    mov  byte [rel msd_state], MSD_ST_PROTECTION
+    call msd_write_protection_active
     test eax, eax
     jnz  .fail
     mov  byte [rel msd_state], MSD_ST_REGISTER
@@ -201,6 +237,7 @@ usb_msd_init:
     jne  .fail
     mov  byte [rel msd_state], MSD_ST_BOUND
     mov  byte [rel msd_bound], 1
+    mov dword [rel msd_bind_result],2
     lea  rdi, [rel str_msd_bound]
     call serial_string
     movzx edi, byte [rel msd_port]
@@ -219,20 +256,22 @@ usb_msd_init:
     call serial_hex64
     lea  rdi, [rel str_msd_bound_tail]
     call serial_string
-%ifdef PAOS_LAB_USB_MSD_DUMP
-    call msd_lab_dump
-%endif
     jmp  .out
+.scan_unavailable:
+    mov dword [rel msd_bind_result],3
+    jmp .out
 .owned:
     inc  dword [rel msd_owned_skips]
 .next:
     inc  ebx
     jmp  .device
 .none:
+    mov dword [rel msd_bind_result],1 ; completed actual class scan, no owned MSD
     lea  rdi, [rel str_msd_absent]
     call serial_string
     jmp  .out
 .fail:
+    mov dword [rel msd_bind_result],3
     mov  byte [rel msd_dead], 1
     lea  rdi, [rel str_msd_failed]
     call serial_string
@@ -258,13 +297,15 @@ usb_msd_init:
 
 ; usb_msd_policy_admit(EDI=enumeration index) -> EAX 0/-1.
 ; R12=the exact HC from that row, preserved by the caller.
-; Normal retains its existing probe order. Selected mode requires the exact
+; Normal/network_guest retain existing probe order. boot_only requires exact
 ; registered HC BDF AND exact boot USB port chain; upstream hubs do not qualify.
 ; RAM-only admission, no instance switch, MMIO, control transfer or claim.
 usb_msd_policy_admit:
     push rbx
     mov ebx, edi
     cmp qword [rel native_driver_selected_policy], 0
+    je .ordinary
+    cmp qword [rel native_driver_selected_policy], 2
     je .ordinary
     mov rdi, r12                       ; exact HC returned for this enum row
     call xhci_storage_bdf
@@ -478,6 +519,25 @@ msd_configure_ep:
     mov  rax, [rel msd_hcops]
     jmp  [rax + usbhc_ops.configure_ep]
 
+; One nonblocking admission word: 0 idle, 1 complete ordinary request (or the
+; final release publication),
+; 2 terminal fence. RAX=internal request body. All arguments and caller IF are
+; retained. A busy caller cannot touch shared CDB/CBW/CSW or change ownership.
+msd_io_enter:
+    mov r11,rax
+    xor eax,eax
+    mov r10d,1
+    lock cmpxchg [rel msd_io_gate],r10d
+    jne .busy
+    sub rsp,8
+    call r11
+    add rsp,8
+    mov dword [rel msd_io_gate],0
+    ret
+.busy:
+    mov rax,-1
+    ret
+
 ; ---------------------------------------------------------------------------
 ; Bulk-Only Transport
 ; ---------------------------------------------------------------------------
@@ -502,6 +562,9 @@ msd_bulk:
 ;   WRITE(10) is OUT, every other data stage is IN (msd_last_data_len = bytes moved).
 ;   Any transport or phase failure marks the device dead (no reset of any kind).
 msd_cmd:
+    lea rax,[rel msd_cmd_active]
+    jmp msd_io_enter
+msd_cmd_active:
     push rbp
     push rbx
     push r12
@@ -523,6 +586,8 @@ msd_cmd:
     je   .op_ok
     cmp  al, MSD_OP_INQUIRY
     je   .op_ok
+    cmp  al, MSD_OP_MODE_SENSE6
+    je   .mode_sense
     cmp  al, MSD_OP_READ_CAP10
     je   .op_ok
     cmp  al, MSD_OP_READ10
@@ -546,6 +611,19 @@ msd_cmd:
     cmp  eax, r14d                     ; the CBW and the CDB name one length
     jne  .refused
     mov  ebp, 1
+    jmp  .op_ok
+.mode_sense:
+    ; Only the pre-registration read-only header probe, never MODE SELECT.
+    cmp  byte [rel msd_bound], 0
+    jne  .refused
+    cmp  r13d, 6
+    jne  .refused
+    cmp  r14d, 4
+    jne  .refused
+    cmp  dword [r12], 0x003F081A       ; opcode, DBD, current/all pages, subpage0
+    jne  .refused
+    cmp  word [r12 + 4], 4            ; allocation4, control0
+    jne  .refused
 .op_ok:
     cmp  r13d, 16
     ja   .refused
@@ -673,6 +751,9 @@ msd_cmd:
 
 ; msd_inquiry() -> EAX 0 when a direct-access device answered
 msd_inquiry:
+    lea rax,[rel msd_inquiry_active]
+    jmp msd_io_enter
+msd_inquiry_active:
     mov  dword [rel msd_inquiry_bytes], 0
     lea  rdi, [rel msd_cdb]
     xor  eax, eax
@@ -683,7 +764,7 @@ msd_inquiry:
     mov  esi, 6
     mov  edx, 36
     lea  rcx, [rel msd_inq]
-    call msd_cmd
+    call msd_cmd_active
     test eax, eax
     jnz  .fail
     cmp  dword [rel msd_last_data_len], 5
@@ -703,6 +784,9 @@ msd_inquiry:
 ; msd_test_unit_ready() -> EAX 0 ready, 1 not ready yet, -1 transport (dead).
 ;   A CHECK CONDITION (1) is classified by msd_tur_ready through REQUEST SENSE.
 msd_test_unit_ready:
+    lea rax,[rel msd_test_unit_ready_active]
+    jmp msd_io_enter
+msd_test_unit_ready_active:
     lea  rdi, [rel msd_cdb]
     xor  eax, eax
     mov  [rdi], rax
@@ -711,11 +795,14 @@ msd_test_unit_ready:
     mov  esi, 6
     xor  edx, edx
     xor  ecx, ecx
-    jmp  msd_cmd
+    jmp  msd_cmd_active
 
 ; msd_request_sense() -> EAX 0 with msd_last_sense = key<<16 | ASC<<8 | ASCQ from
 ;   fixed-format sense data (response code 70h/71h), else -1. 18 bytes data-in.
 msd_request_sense:
+    lea rax,[rel msd_request_sense_active]
+    jmp msd_io_enter
+msd_request_sense_active:
     lea  rdi, [rel msd_cdb]
     xor  eax, eax
     mov  [rdi], rax
@@ -725,7 +812,7 @@ msd_request_sense:
     mov  esi, 6
     mov  edx, MSD_SENSE_LEN
     lea  rcx, [rel msd_sense]
-    call msd_cmd
+    call msd_cmd_active
     test eax, eax
     jnz  .fail
     cmp  dword [rel msd_last_data_len], 14
@@ -757,6 +844,9 @@ msd_request_sense:
 ;   NOT READY / becoming ready (2/04/01), <= MSD_TUR_RETRIES TURs and
 ;   <= MSD_TUR_BUDGET_US in total. Never a reset.
 msd_tur_ready:
+    lea rax,[rel msd_tur_ready_active]
+    jmp msd_io_enter
+msd_tur_ready_active:
     push rbx
     push r12
     mov  dword [rel msd_tur_attempts], 0
@@ -765,11 +855,11 @@ msd_tur_ready:
     mov  r12, rax                      ; start
 .try:
     inc  dword [rel msd_tur_attempts]
-    call msd_test_unit_ready
+    call msd_test_unit_ready_active
     test eax, eax
     jz   .ready
     js   .fail                         ; transport: already marked dead
-    call msd_request_sense
+    call msd_request_sense_active
     test eax, eax
     jnz  .fail
     mov  eax, [rel msd_last_sense]
@@ -803,6 +893,9 @@ msd_tur_ready:
 ; msd_read_capacity() -> EAX 0 when READ CAPACITY(10) reported 512-byte blocks;
 ;   fills msd_lba_max / msd_block_size.
 msd_read_capacity:
+    lea rax,[rel msd_read_capacity_active]
+    jmp msd_io_enter
+msd_read_capacity_active:
     lea  rdi, [rel msd_cdb]
     xor  eax, eax
     mov  [rdi], rax
@@ -811,7 +904,7 @@ msd_read_capacity:
     mov  esi, 10
     mov  edx, 8
     lea  rcx, [rel msd_cap]
-    call msd_cmd
+    call msd_cmd_active
     test eax, eax
     jnz  .fail
     cmp  dword [rel msd_last_data_len], 8
@@ -833,6 +926,61 @@ msd_read_capacity:
 ; ---------------------------------------------------------------------------
 ; blk_ops backend
 ; ---------------------------------------------------------------------------
+; One initial read-only WP header, after capacity and before registration.
+; WP: 0 unsupported/unknown (prior compatibility), 1 actual RW, 2 actual RO.
+; Only explicit unsupported-command sense keeps prior compatibility. A short,
+; malformed, residual or otherwise uncertain reply refuses bind. No reset/retry.
+msd_write_protection_active:
+    lea  rdi, [rel msd_cdb]
+    xor  eax, eax
+    mov  [rdi], rax
+    mov  [rdi + 8], rax
+    mov  dword [rdi], 0x003F081A
+    mov  byte [rdi + 4], 4
+    mov  dword [rel msd_mode_header], 0
+    mov  esi, 6
+    mov  edx, 4
+    lea  rcx, [rel msd_mode_header]
+    call msd_cmd_active
+    test eax, eax
+    jnz  .command_failed
+    cmp  dword [rel msd_last_data_len], 4
+    jne  .fail
+    cmp  dword [rel msd_csw + 8], 0
+    jne  .fail
+    cmp  byte [rel msd_mode_header], 3
+    jb   .fail
+    cmp  byte [rel msd_mode_header + 3], 0 ; DBD suppressed descriptors
+    jne  .fail
+    mov  al, [rel msd_mode_header + 2]
+    shr  al, 7
+    inc  al
+    mov  [rel msd_wp], al
+    xor  eax, eax
+    ret
+.command_failed:
+    cmp  byte [rel msd_dead], 0
+    jne  .fail
+    cmp  dword [rel msd_last_csw_status], 1
+    jne  .fail
+    call msd_request_sense_active
+    test eax, eax
+    jnz  .fail
+    cmp  dword [rel msd_csw + 8], 0
+    jne  .fail
+    cmp  byte [rel msd_sense + 7], 6  ; declared extent must include ASC/ASCQ
+    jb   .fail
+    cmp  dword [rel msd_last_sense], (MSD_SK_ILLEGAL << 16) | (MSD_ASC_INVALID_OP << 8)
+    je   .unsupported
+    cmp  dword [rel msd_last_sense], (MSD_SK_ILLEGAL << 16) | (0x24 << 8)
+    jne  .fail
+.unsupported:
+    xor  eax, eax                     ; not a claim that WP is clear
+    ret
+.fail:
+    mov  eax, -1
+    ret
+
 msd_register:
     push rbx
     lea  rbx, [rel msd_ops]
@@ -853,6 +1001,10 @@ msd_register:
     mov  byte  [rbx + blk_info.dma_mask], 64
     mov  byte  [rbx + blk_info.removable], 1
     mov  dword [rbx + blk_info.flags], BLKF_REMOVABLE
+    cmp  byte [rel msd_wp], 2
+    jne  .info_flags
+    or   dword [rbx + blk_info.flags], BLKF_RO
+.info_flags:
     mov  dword [rbx + blk_info.unit], 0
     mov  dword [rbx + blk_info.logical_sector_bytes], 512
     mov  dword [rbx + blk_info.physical_sector_bytes], 512
@@ -870,10 +1022,19 @@ msd_register:
     mov  dword [rbx + dev.health], HEALTH_OK
     mov  dword [rbx + dev.class], CLASS_BLOCK
     mov  dword [rbx + dev.flags], 0
+    cmp  byte [rel msd_wp], 2
+    jne  .dev_flags
+    or   dword [rbx + dev.flags], BLKF_RO
+.dev_flags:
     lea  rax, [rel str_msd_name]
     mov  [rbx + dev.name], rax
     mov  rdi, rbx
     call blk_register
+    cmp rax,REG_OK
+    jne .out
+    mov rdx,[rel msd_info+blk_info.media_generation]
+    mov [rel msd_registered_generation],rdx
+.out:
     pop  rbx
     ret
 
@@ -883,6 +1044,9 @@ msd_op_identify:
 
 ; read(self, RSI=lba, RDX=count, RCX=buf) -> RAX 0/-1, READ(10) in 4-sector commands
 msd_op_read:
+    lea rax,[rel msd_op_read_active]
+    jmp msd_io_enter
+msd_op_read_active:
     push rbx
     push r12
     push r13
@@ -920,7 +1084,7 @@ msd_op_read:
     mov  edx, ebx
     shl  edx, 9
     mov  rcx, r14
-    call msd_cmd
+    call msd_cmd_active
     test eax, eax
     jz   .moved
     cmp  eax, 1
@@ -952,7 +1116,7 @@ msd_op_read:
 ;   still reach this device. Clobbers caller-saved.
 msd_classify_failure:
     mov  dword [rel msd_last_sense], 0
-    call msd_request_sense
+    call msd_request_sense_active
     test eax, eax
     jnz  .read_only                    ; unknown state: no more writes on a guess
     mov  eax, [rel msd_last_sense]
@@ -979,6 +1143,9 @@ msd_classify_failure:
 ;   The whole range is checked before the first CBW. Any failure ends the request;
 ;   earlier chunks may already be on the media and the caller is told -1.
 msd_op_write:
+    lea rax,[rel msd_op_write_active]
+    jmp msd_io_enter
+msd_op_write_active:
     push rbx
     push r12
     push r13
@@ -1023,7 +1190,7 @@ msd_op_write:
     mov  edx, ebx
     shl  edx, 9
     mov  rcx, r14
-    call msd_cmd
+    call msd_cmd_active
     test eax, eax
     jz   .moved
     cmp  eax, 1
@@ -1055,6 +1222,9 @@ msd_op_write:
 ;   answers ILLEGAL REQUEST / invalid opcode has no such command: success, counted in
 ;   msd_flush_no_cache, since nothing more can be asked of it. Every other failure is -1.
 msd_op_flush:
+    lea rax,[rel msd_op_flush_active]
+    jmp msd_io_enter
+msd_op_flush_active:
     cmp  byte [rel msd_bound], 1
     jne  .fail
     lea  rdi, [rel msd_cdb]
@@ -1066,7 +1236,7 @@ msd_op_flush:
     xor  edx, edx
     xor  ecx, ecx
     sub  rsp, 8
-    call msd_cmd
+    call msd_cmd_active
     add  rsp, 8
     test eax, eax
     jz   .out
@@ -1087,6 +1257,156 @@ msd_op_flush:
     ret
 .out:
     xor  eax, eax
+    ret
+
+
+; Terminal MSD quiescence, called with interrupts in the original caller state.
+; EAX: 0 real SYNC completion, 1 completed scan/no owned MSD, 2 active work,
+; 3 unavailable/foreign/stale incarnation, 4 dead/failed, 5 unsupported SYNC.
+; Successful 0/1 retain gate2 until terminal execution or caller's explicit abort.
+; No waiting/replay/reset/reprobe/unregister/owner change. Failed normal BOT may
+; already have affected the media; its existing dead/RO effects are preserved.
+; 144B snapshot: version,size,result,fence u32; dev/mediaGeneration/HC u64;
+; original HCgeneration/port u32; original validated 96B owner query at +48.
+usb_msd_power_quiesce:
+    push rbx
+    push r12
+    push r13
+    sub rsp,96
+    xor eax,eax
+    mov edx,2
+    lock cmpxchg [rel msd_io_gate],edx
+    jne .busy
+    lea r12,[rel usb_msd_power_snapshot]
+    mov rdi,r12
+    xor eax,eax
+    mov ecx,18
+    rep stosq
+    mov dword [r12],1
+    mov dword [r12+4],144
+    mov dword [r12+8],3
+    mov dword [r12+12],2
+    call blk_registered_count          ; invalid/cyclic registry is unavailable
+    test eax,eax
+    js .unavailable
+    mov r13d,eax
+    cmp byte [rel msd_bound],1
+    jne .unbound
+    lea rax,[rel msd_dev]
+    mov [r12+16],rax
+    mov rax,[rel msd_registered_generation]
+    mov [r12+24],rax
+    mov rax,[rel msd_hc]
+    mov [r12+32],rax
+    mov eax,[rel msd_bound_hc_generation]
+    mov [r12+40],eax
+    movzx eax,byte [rel msd_port]
+    mov [r12+44],eax
+    cmp byte [rel msd_dead],0
+    jne .failed
+    cmp dword [rel msd_dev+dev.health],HEALTH_OK
+    jne .failed
+    lea rax,[rel msd_ops]
+    cmp [rel msd_dev+dev.ops],rax
+    jne .unavailable
+    mov rsi,[r12+24]
+    test rsi,rsi
+    jz .unavailable
+    lea rdi,[rel msd_dev]
+    lea rdx,[r12+48]
+    call usb_msd_owned_query
+    test rax,rax
+    jnz .unavailable
+    mov ebx,[rel msd_flush_no_cache]
+    call msd_op_flush_active           ; original opcode, permissions and wire path
+    test rax,rax
+    jnz .failed
+    cmp ebx,[rel msd_flush_no_cache]
+    jne .unsupported                  ; legacy flush's unsupported success != completed
+    cmp dword [rel msd_last_csw_status],0
+    jne .failed
+    cmp dword [rel msd_csw+8],0        ; zero data SYNC cannot leave residue
+    jne .failed
+    ; Actual completion must still name the same original device incarnation.
+    lea rax,[rel msd_ops]
+    cmp [rel msd_dev+dev.ops],rax
+    jne .unavailable
+    lea rdi,[rel msd_dev]
+    mov rsi,[r12+24]
+    mov rdx,rsp
+    call usb_msd_owned_query
+    test rax,rax
+    jnz .unavailable
+    lea rsi,[r12+48]
+    mov rdi,rsp
+    mov ecx,12
+    repe cmpsq
+    jne .unavailable
+    xor eax,eax
+    jmp .retained
+.unbound:
+    cmp byte [rel msd_bound],0
+    jne .unavailable
+    cmp byte [rel msd_dead],0
+    jne .unavailable
+    cmp dword [rel msd_bind_result],1
+    jne .unavailable
+    ; A completed absent scan cannot conceal an old registered MSD member.
+    xor ebx,ebx
+.absent_member:
+    mov rdi,rbx
+    xor esi,esi
+    xor edx,edx
+    call blk_iter_all_after
+    test rax,rax
+    jz .absent
+    test r13d,r13d
+    jz .unavailable
+    dec r13d
+    lea rdx,[rel msd_dev]
+    cmp rax,rdx
+    je .unavailable
+    mov rbx,rax
+    jmp .absent_member
+.absent:
+    mov eax,1
+    jmp .retained
+.unsupported:
+    mov eax,5
+    jmp .release
+.failed:
+    mov eax,4
+    jmp .release
+.unavailable:
+    mov eax,3
+.release:
+    mov dword [r12+12],0
+    mov [r12+8],eax
+    mov dword [rel msd_io_gate],0       ; open admission only after sample publication
+    jmp .out
+.retained:
+    mov [r12+8],eax
+    jmp .out
+.busy:
+    ; No snapshot write while another terminal owns it; return2 is decisive.
+    mov eax,2
+.out:
+    add rsp,96
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; Only the original serialized terminal caller uses this on a returned abort.
+; Release exactly gate2; never unlock another ordinary in-flight BOT request.
+usb_msd_power_release:
+    mov eax,2
+    mov edx,1                         ; hold admission through snapshot publication
+    lock cmpxchg [rel msd_io_gate],edx
+    jne .out
+    mov dword [rel usb_msd_power_snapshot+12],0
+    mov dword [rel msd_io_gate],0
+.out:
     ret
 
 %ifdef PAOS_LAB_USB_MSD_DUMP
@@ -1159,6 +1479,10 @@ msd_lab_dump:
 
 ; --- data ---------------------------------------------------------------------
 align 8
+msd_io_gate:     dd 0
+msd_bind_result: dd 0
+msd_registered_generation: dq 0
+usb_msd_power_snapshot: times 144 db 0
 msd_dev:         times dev_size db 0
 msd_ops:         times blk_ops_size db 0
 msd_info:        times blk_info_size db 0
@@ -1193,6 +1517,8 @@ align 8
 msd_setup:       times 8 db 0
 msd_in_ep_desc:  times 8 db 0
 msd_out_ep_desc: times 8 db 0
+msd_wp:          db 0
+msd_mode_header: times 4 db 0
 msd_cdb:         times 16 db 0
 msd_cbw:         times 32 db 0
 msd_csw:         times 16 db 0

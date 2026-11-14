@@ -1,7 +1,7 @@
 ;; MODULE fs/ext4_disk
 ;; LAYER 4
-;; EXPORTS ext4_disk_source_device, ext4_disk_remount, ext4_disk_register, ext4_disk_handle, ext4_disk_last_error, ext4_disk_mount_count, ext4_disk_format_ops
-;; IMPORTS fs/ext4_refusal, fs/blockdev, fs/vfs, fs/ext4_copy, fs/ext4_write, fs/storage_access, core/lib/mem, core/heap, boot/serial
+;; EXPORTS ext4_disk_select_removable_gpt_ro, ext4_disk_select_removable_mbr_ro, ext4_disk_source_device, ext4_disk_remount, ext4_disk_register, ext4_disk_handle, ext4_disk_last_error, ext4_disk_mount_count, ext4_disk_format_ops
+;; IMPORTS fs/fs_identify, fs/ext4_refusal, fs/blockdev, fs/vfs, fs/ext4_copy, fs/ext4_write, fs/storage_access, core/lib/mem, core/heap, boot/serial
 ;; CAPS CAP_BLOCK_READ
 ;; OWNER saga:rcq20_filesystems
 ;; CONTEXT: bsp_only  (RCQ-21 SA2b: ext_ctx carries the owned-mode binding the writer presents)
@@ -286,6 +286,293 @@ ext4_disk_register:
     pop  r13
     pop  r12
     pop  rbx
+    ret
+
+; ext4_disk_select_removable_mbr_ro(RDI=opaque row dev*) -> handle / -1,
+; -2 busy. BSP only, non-reentrant, after boot registration. The Explorer caller
+; owns its local owner/focus/frame gates. This helper only reads: no request
+; authority, arm, recovery, write or flush. Append one uniquely identified 0x83
+; MBR primary without resetting any existing ext2/3/4 context. GPT has its own entry.
+; Separate GPT entry, retaining original eligibility and full native validator.
+ext4_disk_select_removable_gpt_ro:
+    mov byte [rel ext_sel_gpt],1
+    jmp ext_sel_begin
+ext4_disk_select_removable_mbr_ro:
+    mov byte [rel ext_sel_gpt],0
+ext_sel_begin:
+    push rbx
+    push r12
+    push r13
+    mov rbx,rdi
+    mov al,[rel hv_linux_running]
+    or al,[rel hv_linux_start_active]
+    or al,[rel hv_linux_run_req]
+    or al,[rel vtd_owner_guest]
+    test al,al
+    jnz .busy
+    call vfs_copy_busy
+    test eax,eax
+    jnz .busy
+    call storage_access_binding_busy
+    test eax,eax
+    jnz .busy
+    cmp dword [rel ext4_disk_mount_count],EXT_MAX_MOUNTS
+    jae .no
+    ; Resolve the opaque row before dereferencing it, even on refusal.
+    mov rdi,rbx
+    call ext_sel_member
+    test rax,rax
+    jz .no
+    mov rdi,rbx
+    call ext_sel_context
+    test rax,rax
+    jnz .no
+    mov rdi,rbx
+    call guest_volume_native_allowed
+    test rax,rax
+    jnz .no
+    mov rax,[rbx+dev.info]
+    mov [rel ext_sel_identity],rax
+    mov rdx,[rbx+dev.ops]
+    mov [rel ext_sel_identity+8],rdx
+    mov rdx,[rbx+dev.priv]
+    mov [rel ext_sel_identity+16],rdx
+    mov rdx,[rax+blk_info.media_generation]
+    test rdx,rdx
+    jz .no
+    mov [rel ext_sel_identity+24],rdx
+    mov rdx,[rax+blk_info.lba_max]
+    mov [rel ext_sel_identity+32],rdx
+    mov [rel ext_sel_device],rbx
+    mov byte [rel ext_sel_reading],1
+    call ext_sel_current
+    test rax,rax
+    jnz .no
+    mov rdi,rbx
+    xor esi,esi
+    xor edx,edx
+    lea rcx,[rel ext_sel_primary]
+    lea r8,[rel ext_sel_current]
+    call ext_sel_query
+    test rax,rax
+    jnz .no
+    call ext_sel_current
+    test rax,rax
+    jnz .no
+    mov rdi,rbx
+    mov rsi,[rel ext_sel_primary+16]
+    add rsi,2
+    mov edx,2
+    lea rcx,[rel ext_sel_sb]
+    call ext_raw_read
+    test rax,rax
+    jnz .no
+    cmp word [rel ext_sel_sb+ESB_MAGIC],EXT_MAGIC
+    jne .no
+    lea rdi,[rel ext_sb_buf]
+    lea rsi,[rel ext_sel_sb]
+    mov edx,1024
+    call memcpy
+    mov rax,[rel ext_sel_identity+24]
+    mov [rel ext_probe_generation],rax
+    mov r13d,[rel ext4_disk_mount_count]
+    test r13d,r13d
+    jnz .ops_ready
+    call ext_build_ops
+.ops_ready:
+    mov rdi,rbx
+    mov rsi,[rel ext_sel_primary+16]
+    mov rdx,[rel ext_sel_primary+24]
+    mov ecx,[rel ext_sel_primary+36]
+    lea r8,[rel ext_sel_recheck]
+    mov byte [rel ext_sel_reading],1
+    call ext_try_mount_checked
+    mov byte [rel ext_sel_reading],0
+    mov eax,[rel ext4_disk_mount_count]
+    sub eax,r13d
+    cmp eax,1
+    jne .no
+    mov rdi,rbx
+    call ext_sel_context
+    test rax,rax
+    jz .no
+    mov r12,rax
+    mov eax,[r12+ext_ctx.handle]
+    mov [rel vfs_disk_handle],eax
+    jmp .out
+.busy:
+    mov rax,-2
+    jmp .out
+.no:
+    mov rax,-1
+.out:
+    mov byte [rel ext_sel_reading],0
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RCX=out96; MBR retains original48. GPT has no loose-parser fallback.
+ext_sel_query:
+    cmp byte [rel ext_sel_gpt],0
+    je .mbr
+    mov esi,2
+    jmp fs_identify_single_gpt_checked
+.mbr:
+    push rcx
+    call fs_identify_primary_checked
+    pop rcx
+    test rax,rax
+    jnz .out
+    cmp dword [rcx+36],FS_SCHEME_MBR
+    jne .no
+    cmp dword [rcx+40],0x83
+    jne .no
+.out:
+    ret
+.no:
+    mov rax,-1
+    ret
+
+; Opaque dev -> current native readable removable dev / 0. No media I/O.
+ext_sel_member:
+    push rbx
+    push r12
+    mov r12,rdi
+    xor ebx,ebx
+.next:
+    mov rdi,rbx
+    mov esi,BLKCAP_READ
+    xor edx,edx
+    call blk_iter_after
+    test rax,rax
+    jz .out
+    mov rbx,rax
+    cmp rax,r12
+    jne .next
+    mov rdx,[rax+dev.info]
+    cmp byte [rdx+blk_info.removable],0
+    jne .out
+    test dword [rdx+blk_info.flags],BLKF_REMOVABLE
+    jnz .out
+    xor eax,eax
+.out:
+    pop r12
+    pop rbx
+    ret
+
+; Compare original registry incarnation before following captured info/ops.
+ext_sel_current:
+    mov rdi,[rel ext_sel_device]
+    call ext_sel_member
+    test rax,rax
+    jz .no
+    mov rdx,[rax+dev.info]
+    cmp rdx,[rel ext_sel_identity]
+    jne .no
+    mov rcx,[rax+dev.ops]
+    cmp rcx,[rel ext_sel_identity+8]
+    jne .no
+    mov rcx,[rax+dev.priv]
+    cmp rcx,[rel ext_sel_identity+16]
+    jne .no
+    mov rcx,[rdx+blk_info.media_generation]
+    cmp rcx,[rel ext_sel_identity+24]
+    jne .no
+    mov rcx,[rdx+blk_info.lba_max]
+    cmp rcx,[rel ext_sel_identity+32]
+    jne .no
+    cmp dword [rdx+blk_info.sector_size],512
+    jne .no
+    cmp dword [rdx+blk_info.logical_sector_bytes],512
+    jne .no
+    mov rdi,rax
+    call guest_volume_native_allowed
+    test rax,rax
+    jnz .no
+    xor eax,eax
+    ret
+.no:
+    mov rax,-1
+    ret
+
+; Candidate is fully parsed but not published. Re-discover independently, then
+; compare all 48 tuple bytes and the complete original superblock. No partial mount
+; is visible if any parser-time device/table/boot identity changed.
+ext_sel_recheck:
+    call ext_sel_current
+    test rax,rax
+    jnz .out
+    mov rdi,[rel ext_sel_device]
+    xor esi,esi
+    xor edx,edx
+    lea rcx,[rel ext_sel_again]
+    lea r8,[rel ext_sel_current]
+    call ext_sel_query
+    test rax,rax
+    jnz .out
+    lea rdi,[rel ext_sel_primary]
+    lea rsi,[rel ext_sel_again]
+    mov ecx,6
+    cmp byte [rel ext_sel_gpt],0
+    je .compare
+    mov ecx,12
+.compare:
+    repe cmpsq
+    jne .no
+    call ext_sel_current
+    test rax,rax
+    jnz .out
+    mov rdi,[rel ext_sel_device]
+    mov rsi,[rel ext_sel_primary+16]
+    add rsi,2
+    mov edx,2
+    lea rcx,[rel ext_sel_sb_again]
+    call ext_raw_read
+    test rax,rax
+    jnz .out
+    lea rdi,[rel ext_sel_sb]
+    lea rsi,[rel ext_sel_sb_again]
+    mov ecx,128
+    repe cmpsq
+    jne .no
+    jmp ext_sel_current
+.no:
+    mov rax,-1
+.out:
+    ret
+
+; Resolve one already published native ext context without changing it.
+ext_sel_context:
+    push rbx
+    push r12
+    mov r12,rdi
+    xor ebx,ebx
+.next:
+    cmp ebx,VFS_MAX_MOUNTS
+    jae .no
+    mov edi,ebx
+    call vfs_mount_ptr
+    test rax,rax
+    jz .more
+    lea rdx,[rel ext_ops]
+    cmp [rax+fsmount.ops],rdx
+    jne .more
+    mov rax,[rax+fsmount.priv]
+    test rax,rax
+    jz .more
+    cmp dword [rax+ext_ctx.mounted],1
+    jne .more
+    cmp [rax+ext_ctx.dev],r12
+    je .out
+.more:
+    inc ebx
+    jmp .next
+.no:
+    xor eax,eax
+.out:
+    pop r12
+    pop rbx
     ret
 
 ; ext4_disk_remount(EDI=existing handle, RSI=full16 UUID) -> positive epoch / -1.
@@ -672,11 +959,16 @@ ext_probe:
 ; ext_sb_buf. Mounts + registers, or emits the refusal. A refused context is
 ; kept as the spare for the next candidate (the heap is a bump allocator).
 ext_try_mount:
+    xor r8d,r8d                       ; ordinary scan has no late validator
+; Internal R8=optional pre-publication read-only validator.
+ext_try_mount_checked:
     push rbx
     push r12
     push r13
     push r14
     push r15
+    sub rsp,16
+    mov [rsp],r8
     mov  r13, rdi
     mov  r14, rsi
     mov  r15, rdx
@@ -746,6 +1038,15 @@ ext_try_mount:
     call ext_emit_refused
     jmp  .out
 .mounted:
+    mov rax,[rsp]
+    test rax,rax
+    jz .publish
+    call rax
+    test rax,rax
+    jnz .out
+    cmp dword [rel ext4_disk_mount_count],EXT_MAX_MOUNTS
+    jae .out
+.publish:
     mov  dword [r12 + ext_ctx.mounted], 1
     lea  rdi, [rel ext_ops]
     mov  rsi, r12
@@ -769,6 +1070,7 @@ ext_try_mount:
     mov  qword [rel ext_spare_ctx], 0
     call ext_emit_mounted
 .out:
+    add rsp,16
     pop  r15
     pop  r14
     pop  r13
@@ -1178,6 +1480,9 @@ ext_raw_read:
     mov  r12, rsi
     mov  r13, rdx
     mov  r14, rcx
+    call ext_sel_guard
+    test rax,rax
+    jnz .fail
     test r13, r13
     jz   .fail
     mov  rax, [rbx + dev.info]
@@ -1216,7 +1521,7 @@ ext_raw_read:
     mov  rsi, r12
     mov  rdx, r15
     mov  rcx, r14
-    call blk_read
+    call ext_sel_block_read
     test rax, rax
     jnz  .read_refused
     call ext_cp_guard_read
@@ -1236,7 +1541,7 @@ ext_raw_read:
     mov  rsi, r12
     mov  edx, 1
     mov  rcx, r14
-    call blk_read
+    call ext_sel_block_read
     test rax, rax
     jnz  .fail
     call ext_cp_guard_read
@@ -1268,6 +1573,38 @@ ext_raw_read:
     pop  r13
     pop  r12
     pop  rbx
+    ret
+
+; Late selection guard around each native parser transfer, including fallback.
+; Ordinary reads retain their existing guard and budget. Preserve IO arguments.
+ext_sel_guard:
+    cmp byte [rel ext_sel_reading],0
+    je .ordinary
+    push rdi
+    push rsi
+    push rdx
+    push rcx
+    call ext_sel_current
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    ret
+.ordinary:
+    xor eax,eax
+    ret
+ext_sel_block_read:
+    call ext_sel_guard
+    test rax,rax
+    jnz .out
+    call blk_read
+    push rax
+    call ext_sel_guard
+    test rax,rax
+    pop rax
+    jz .out
+    mov rax,-1
+.out:
     ret
 
 ; ext_read_blocks(R12=ctx, RSI=first block, RDX=count, RCX=buf) -> RAX 0/-1.
@@ -3285,3 +3622,17 @@ WDATA_BSS_DEFER WDATA_BSS_ext_cross_probe
 ext4_disk_format_ops:
     lea  rax, [rel ext_ops]
     ret
+
+; Late selection holds only original read identity, never an authority token.
+%macro WDATA_BSS_ext_late_selector 0
+ext_sel_gpt: resb 1
+ext_sel_reading: resb 1
+alignb 8
+ext_sel_device: resq 1
+ext_sel_identity: resq 5
+ext_sel_primary: resb 96
+ext_sel_again: resb 96
+ext_sel_sb: resb 1024
+ext_sel_sb_again: resb 1024
+%endmacro
+WDATA_BSS_DEFER WDATA_BSS_ext_late_selector

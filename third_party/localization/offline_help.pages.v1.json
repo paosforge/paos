@@ -6,7 +6,7 @@
   "status": "translated-DATA-review-fold-unbound",
   "numeric_id_allocation": {
     "first": 6000,
-    "last_used": 6044,
+    "last_used": 6049,
     "proposed_range_last": 6099,
     "status": "reserved by rc-boot 2026-10-10T23:42:51-07:00",
     "condition": "UI catalog must not use 6000-6099; all help message IDs must stay in 6000-6099."
@@ -43,7 +43,8 @@
     "Previous-version boot is not a promise to restore personal files. Rescue is not a public root shell.",
     "General reporting and cable-check advice is identified as advice; citations establish the associated product state/security boundary, not a feedback implementation.",
     "This DATA draft alone does not satisfy offline-help delivery. Native binding, reachability, release contacts and page/glyph/budget acceptance are still required.",
-    "RCQ-41 failure-record guidance6040-6044 uses embedded English fallback; five-locale translations pending. One best-effort diagnostic archive, not every crash/rollback or file recovery."
+    "RCQ-41 failure-record guidance6040-6044 uses embedded English fallback; five-locale translations pending. One best-effort diagnostic archive, not every crash/rollback or file recovery.",
+    "T5-35 Try guide6045-6049 uses embedded English fallback; translations and native-language evaluation remain pending. This offline instruction component does not establish installation inputs or a completed offline install journey."
   ],
   "pages": [
     {
@@ -83,6 +84,52 @@
             "src/bootmgr/paos_bootmgr.asm:5464-5472",
             "src/bootmgr/paos_bootmgr.asm:7874-7874",
             "src/bootmgr/paos_bootmgr.asm:8310-8311"
+          ]
+        },
+        {
+          "kind": "explanation",
+          "static_params": {},
+          "source_refs": [
+            "src/sec/session.asm"
+          ],
+          "message_key": "help.offline.try.title"
+        },
+        {
+          "message_key": "help.offline.try.session",
+          "kind": "explanation",
+          "static_params": {},
+          "source_refs": [
+            "src/sec/session.asm:113-143",
+            "src/sec/session.asm:837-865"
+          ]
+        },
+        {
+          "message_key": "help.offline.try.offline",
+          "kind": "instruction",
+          "static_params": {},
+          "source_refs": [
+            "src/gui/start_programs.asm",
+            "src/gui/res_pack_boot.asm",
+            "src/gui/console_app.asm:572-623"
+          ]
+        },
+        {
+          "message_key": "help.offline.try.prepare",
+          "kind": "instruction",
+          "static_params": {},
+          "source_refs": [
+            "gauntlet_v2/paos_runner/docs/t5_35_checks.md",
+            "tools/installer/paos_usb_writer.py"
+          ]
+        },
+        {
+          "message_key": "help.offline.try.install",
+          "kind": "limitation",
+          "static_params": {},
+          "source_refs": [
+            "src/gui/naming_picker.asm",
+            "tools/installer/produce_install_bundle.py",
+            "tools/installer/paos-setup.c"
           ]
         }
       ]

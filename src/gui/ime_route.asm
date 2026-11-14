@@ -617,6 +617,10 @@ imr_pump:
     mov  byte [rel imr_bypass], 1
     mov  al, [rel imr_after_origin]
     mov  [rel input_key_origin], al
+    cmp  al, KO_HUMAN
+    je   .after_noted
+    inc  dword [rel input_other_origin_seq]
+.after_noted:
     mov  eax, [rel imr_after]
     cmp  eax, GUI_KEY_TEXT
     jne  .out

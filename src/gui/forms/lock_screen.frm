@@ -1,6 +1,6 @@
 form lock_screen spec=v1
 window title=Sign_in w=640 h=480 x=0 y=0 resizable=0 min_w=640 min_h=480 chrome=standard restore=never
-widget type=image id=wallpaper x=0 y=0 w=640 h=480 src=kat_quad16.bmp fit=scale role=image
+widget type=image id=wallpaper x=0 y=0 w=640 h=480 src=kat_quad16.bmp fit=cover role=image
 widget type=col id=machine x=140 y=137 w=360 h=286 text= role=group
 widget type=label id=identity x=200 y=157 w=280 h=24 text=Owner role=heading
 widget type=label id=user_label x=160 y=207 w=240 h=20 text=Password role=label

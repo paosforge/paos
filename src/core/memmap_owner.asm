@@ -14,7 +14,9 @@
 ; regions, plus three pools other boot modules keep and read after EBS
 ; (sec/ucode_preload's microcode pack pool, only while the pack was admitted
 ; to mcb_pack_buf, every other path frees it; boot/pmod_loader's two 4 KiB
-; preload buffers, HELLO and netmon, never freed). This
+; preload buffers, HELLO and netmon, never freed), the retained fatal identity
+; page and HP high-page mapping probe. Each page allocation has a zero owner
+; on absence and remains LoaderData in the final map. This
 ; census walks that PUBLISHED map (mmap_buffer / mmap_size / mmap_desc_size,
 ; stride = mmap_desc_size, never a hardcoded width) and proves, for every
 ; PaOS region that is present (base != 0 and length != 0; absent ones are
@@ -39,7 +41,7 @@
 ; failure prints one line and returns; it never halts the boot.
 ; ============================================================================
 
-MMO_REGION_MAX     equ 16                  ; slots below, in this order
+MMO_REGION_MAX     equ 18                  ; slots below, in this order
 MMO_SPAN_BYTES     equ 16                  ; {base:u64, length:u64}
 MMO_NO_INDEX       equ 0xFFFFFFFF          ; region/type field not applicable
 MMO_DESC_MIN       equ 40                  ; EFI_MEMORY_DESCRIPTOR v1 size
@@ -52,6 +54,8 @@ MMO_WX_PAGE        equ 4096                ; paging: AllocatePool 4096 (LoaderDa
 MMO_INV_MAP        equ 65536               ; paging: INV_MAP_BYTES AllocatePool (LoaderData)
 MMO_UCP_POOL       equ 0x100000 + 16       ; ucode_preload: UCP_MAX + UCP_ALIGN AllocatePool (LoaderData)
 MMO_PERCPU_STACK   equ 0x400000           ; percpu_stack: PERCPU_STACK_ALLOC_SIZE retained allocation
+MMO_CRASH_IDENTITY equ 4096               ; crash_identity.inc: CRID_PAGES = 1
+MMO_HP_MAPPING     equ 4096               ; hp_usb_mapping: one retained LoaderData page
 MMO_PMOD_FILE      equ 4096                ; pmod_loader: PMOD_FILE_MAX AllocatePool (LoaderData)
 
 MMO_R_UNCOVERED    equ 1
@@ -198,11 +202,23 @@ memmap_owner_census:
     mov  rax, [rel pmod_nm_buf]             ; 14 PMOD netmon preload buffer (pool, kept)
     mov  edx, MMO_PMOD_FILE
     MMO_PUT
+%else
+    ; Public builds omit both lab PMOD owners but retain their stable slots.
+    xor  eax, eax
+    xor  edx, edx
+    MMO_PUT
+    MMO_PUT
 %endif
-
 
     mov  rax, [rel percpu_stack_alloc]      ; 15 permanent guarded CPU arena (whole allocation)
     mov  edx, MMO_PERCPU_STACK
+    MMO_PUT
+
+    mov  rax, [rel crash_identity_base]     ; 16 retained fatal identity page
+    mov  edx, MMO_CRASH_IDENTITY
+    MMO_PUT
+    mov  rax, [rel hp_mapping_page]         ; 17 retained high-page mapping probe
+    mov  edx, MMO_HP_MAPPING
     MMO_PUT
 
     ; --- per region: loader coverage and no foreign type ---

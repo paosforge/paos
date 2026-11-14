@@ -1,6 +1,6 @@
 ;; MODULE gui/input_route
 ;; LAYER 6
-;; EXPORTS input_route_live_hook, input_route_live_no_kbd, input_ai_key_pop, input_ai_counts, input_ai_refused, input_ai_locked, input_ai_cancelled, input_ai_dropped, gui_input_route_init, gui_input_route_tick, input_route_tl_live, input_kbd_routed, input_kbd_submits, input_kbd_mods, input_kbd_caps, gui_input_global_key_hook, gui_input_modal_key_hook, input_win_down, input_win_chord, input_layout_set, input_layout_id, input_text_dropped, input_layout_selectable, input_layout_tags, input_kbd_ctx_other, input_dead_origin_other, input_ime_ops, input_ime_lq_scalar, input_ime_tray, input_ime_pop, input_layout_focus_check
+;; EXPORTS input_modifiers_are_human, input_route_live_hook, input_route_live_no_kbd, input_ai_key_pop, input_ai_counts, input_ai_refused, input_ai_locked, input_ai_cancelled, input_ai_dropped, gui_input_route_init, gui_input_route_tick, input_route_tl_live, input_kbd_routed, input_kbd_submits, input_kbd_mods, input_kbd_caps, gui_input_global_key_hook, gui_input_modal_key_hook, input_win_down, input_win_chord, input_layout_set, input_layout_id, input_text_dropped, input_layout_selectable, input_layout_tags, input_kbd_ctx_other, input_dead_origin_other, input_ime_ops, input_ime_lq_scalar, input_ime_tray, input_ime_pop, input_layout_focus_check
 ;; IMPORTS gui/calendar, core/log, core/time, core/keyboard_layout, core/unicode_edit, dev/usb/hid, dev/input/ps2, gui/window_mgmt, gui/widget, gui/widget_tabstrip, gui/summon_palette, gui/chat_app, gui/start_programs, boot/serial, sec/session
 ;; CAPS CAP_GUI
 ;; OWNER saga:verb_console
@@ -138,6 +138,10 @@ gui_input_route_tick:
     call ps2_kbd_origin_merge
 .origin_set:
     mov  [rel input_key_origin], al
+    cmp  al, KO_HUMAN
+    je   .origin_noted
+    inc  dword [rel input_other_origin_seq]  ; T5-15.4: ends an Explorer HUMAN latch
+.origin_noted:
     cmp  byte [rel input_kbd_e1], 0
     je   .no_e1
     dec  byte [rel input_kbd_e1]        ; Pause: E1 1D 45 / E1 9D C5 is not Ctrl/NumLock
@@ -410,6 +414,10 @@ gui_input_route_tick:
     lea  rdx, [rel input_lq_origin]
     mov  cl, [rdx + rax]
     mov  [rel input_key_origin], cl
+    cmp  cl, KO_HUMAN
+    je   .lq_noted
+    inc  dword [rel input_other_origin_seq]
+.lq_noted:
     lea  rdx, [rel input_lq_scalar]
     mov  ebx, [rdx + rax*4]
     inc  eax
@@ -981,6 +989,24 @@ gui_input_route_tick:
     pop  r13
     pop  r12
     pop  rbx
+    ret
+
+; input_modifiers_are_human -> EAX 1 when every held modifier belongs to
+; the native hand. Use alongside keyprov_key_is_human at human-action
+; boundaries: the trigger's provenance alone says nothing about a held chord.
+; These are the same per-side custody bits used by the router's shortcuts.
+; Released Win may retain its old taint; only a held Win participates.
+input_modifiers_are_human:
+    xor  eax, eax
+    cmp  byte [rel input_kbd_sides_inj], 0
+    jne  .out
+    cmp  byte [rel input_win_down], 0
+    je   .yes
+    cmp  byte [rel input_win_inj], 0
+    jne  .out
+.yes:
+    mov  eax, 1
+.out:
     ret
 
 ; input_key_is_hand -> ZF=1 when the key being routed is the owner's hand:

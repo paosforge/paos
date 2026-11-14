@@ -1,7 +1,7 @@
 ;; MODULE net/ntp
 ;; LAYER 4
-;; EXPORTS ntp_reply_start_ms, ntp_reply_done_ms, ntp_route_revoke, ntp_sample_t1_1, ntp_sample_t1_2, ntp_sample_t1_3, ntp_sample_t1_4, ntp_sample_t4_1, ntp_sample_t4_2, ntp_sample_t4_3, ntp_sample_t4_4, ntp_init, ntp_mark_ready, ntp_sync_start, ntp_sync_wall_offset, ntp_tick, ntp_wire_ingest, ntp_applied, ntp_offset_ms, ntp_delay_ms, ntp_stratum, ntp_state, ntp_reason, ntp_server_port, ntp_timeout_phase, ntp_arp_tx, ntp_query_tx, ntp_rx_udp, ntp_rx_match, ntp_sample_count, ntp_selected_sample, ntp_wall_offset_before, ntp_wall_offset_after, ntp_sync_mono_start, ntp_sync_mono_commit, ntp_rtc_reads_before, ntp_rtc_reads_after, ntp_rtc_writes_before, ntp_rtc_writes_after, ntp_guard_start_ms, ntp_guard_deadline_ms, ntp_guard_fire_ms, ntp_guard_fired, ntp_receipt_valid, ntp_receipt_persisted, ntp_receipt_objid, ntp_receipt_version, ntp_receipt_owner, ntp_receipt_schema, ntp_receipt_checksum, ntp_receipt_utc_us, ntp_receipt_offset_fp, ntp_receipt_delay_fp, ntp_receipt_server_ip, ntp_receipt_samples, ntp_receipt_selected, ntp_receipt_stratum, ntp_m_ready, ntp_m_query, ntp_m_apply
-;; IMPORTS boot/serial, core/lib/mem, core/lib/fixed, core/time, net/arp_cache, net/dns, net/udp
+;; EXPORTS ntp_reply_view, ntp_reply_start_ms, ntp_reply_done_ms, ntp_route_revoke, ntp_sample_t1_1, ntp_sample_t1_2, ntp_sample_t1_3, ntp_sample_t1_4, ntp_sample_t4_1, ntp_sample_t4_2, ntp_sample_t4_3, ntp_sample_t4_4, ntp_init, ntp_mark_ready, ntp_sync_start, ntp_sync_wall_offset, ntp_tick, ntp_wire_ingest, ntp_applied, ntp_offset_ms, ntp_delay_ms, ntp_stratum, ntp_state, ntp_reason, ntp_server_port, ntp_timeout_phase, ntp_arp_tx, ntp_query_tx, ntp_rx_udp, ntp_rx_match, ntp_sample_count, ntp_selected_sample, ntp_wall_offset_before, ntp_wall_offset_after, ntp_sync_mono_start, ntp_sync_mono_commit, ntp_rtc_reads_before, ntp_rtc_reads_after, ntp_rtc_writes_before, ntp_rtc_writes_after, ntp_guard_start_ms, ntp_guard_deadline_ms, ntp_guard_fire_ms, ntp_guard_fired, ntp_receipt_valid, ntp_receipt_persisted, ntp_receipt_objid, ntp_receipt_version, ntp_receipt_owner, ntp_receipt_schema, ntp_receipt_checksum, ntp_receipt_utc_us, ntp_receipt_offset_fp, ntp_receipt_delay_fp, ntp_receipt_server_ip, ntp_receipt_samples, ntp_receipt_selected, ntp_receipt_stratum, ntp_m_ready, ntp_m_query, ntp_m_apply
+;; IMPORTS lib/safe_buffer, boot/serial, core/lib/mem, core/lib/fixed, core/time, net/arp_cache, net/dns, net/udp
 ;; CAPS
 ;; OWNER saga:net
 ; RFC 5905 client decision layered over Task1060's RFC 4330 wire transaction.
@@ -13,11 +13,16 @@
 NTP_PORT              equ 123
 NTP_SRC_PORT          equ 49154
 NTP_PACKET_LEN        equ 48
+NTP_REPLY_MAX         equ 2048 ; no live payload exceeds the original whole RX frame
 NTP_UNIX_DELTA_Q      equ 0x83AA7E8000000000
 NTP_MAX_OFFSET_Q      equ 0x0001518000000000 ; 86400 seconds
 NTP_MAX_DELAY_Q       equ 0x0000000500000000 ; 5 seconds
 NTP_ARP_RETRY_MS      equ 250
 NTP_ARP_BUDGET_MS     equ 3000
+; The 3s bound includes setup, polling and terminal recording. End the ARP
+; wait one existing retry interval early to leave those operations time;
+; a stalled poll must still record its real (possibly late) terminal sample.
+NTP_ARP_WAIT_US       equ (NTP_ARP_BUDGET_MS - NTP_ARP_RETRY_MS) * 1000
 NTP_REPLY_TIMEOUT_MS  equ 2000
 NTP_SAMPLE_TARGET     equ 4
 NTP_SAMPLE_GAP_MS     equ 250
@@ -101,7 +106,7 @@ ntp_grade_reset:
 ; ntp_grade_select_sample(RDI=corrected UTC us, RSI=signed offset Q32.32,
 ; RDX=round-trip delay Q32.32, ECX=stratum).  Task1060 remains the sole parser;
 ; this decision layer merely retains the lowest-delay sane output.  Samples are
-; separated and bounded exclusively by boot_ms_now's monotonic deadline clock.
+; separated by boot_ms_now; ARP expiry uses the microsecond duration clock.
 ntp_grade_select_sample:
     push rbx
     push r12
@@ -133,6 +138,7 @@ ntp_grade_select_sample:
 .selected:
     cmp  byte [rel ntp_sample_count], NTP_SAMPLE_TARGET
     jae  .commit
+    mov  [rel ntp_arp_start_us], r15
     call boot_ms_now
     lea  rdx, [rax + NTP_ARP_BUDGET_MS]
     mov  [rel ntp_deadline_ms], rdx
@@ -305,6 +311,7 @@ ntp_sync_start:
     call time_monotonic_now_us
     mov  [rel ntp_sync_mono_start], rax
     mov  [rel ntp_sync_mono_commit], rax
+    mov  [rel ntp_arp_start_us], rax
     mov  rax, [rel time_rtc_read_count]
     mov  [rel ntp_rtc_reads_before], rax
     mov  [rel ntp_rtc_reads_after], rax
@@ -502,12 +509,23 @@ ntp_tick:
     call ntp_route_check
     test rax, rax
     jnz  .no_route
+    cmp  byte [rel ntp_state], NTP_ST_WAIT_ARP
+    jne  .reply_clock
+    ; Match the original measured start, without converting between the
+    ; independent boot-ms and monotonic-us origins or granting setup extra time.
+    call time_monotonic_now_us
+    sub  rax, [rel ntp_arp_start_us]
+    cmp  rax, NTP_ARP_WAIT_US
+    jae  .timeout
+.reply_clock:
     call boot_ms_now
     mov  r12, rax
+    cmp  byte [rel ntp_state], NTP_ST_WAIT_ARP
+    je   .arp_retry
     cmp  rax, [rel ntp_deadline_ms]
     jae  .timeout
-    cmp  byte [rel ntp_state], NTP_ST_WAIT_ARP
-    jne  .tick_pop
+    jmp  .tick_pop
+.arp_retry:
     cmp  rax, [rel ntp_retry_ms]
     jb   .tick_pop
     mov  edi, [rel ntp_next_hop_ip]
@@ -660,11 +678,66 @@ ntp_accept_reply:
     push r13
     push r14
     push r15
+    mov  r13, rdx                       ; original T4 for accepted trace
+    mov  rcx, [rel ntp_t1_fp]
+    call ntp_reply_view
+    cmp  rax, -1
+    je   .reject
+    mov  rbx, rsi
+    mov  r12, rdx
+    mov  r15d, ecx
+    ; Retain only parser-accepted T1/T4, in sample order. T2/T3 remain on
+    ; the wire; these raw Q32.32 values let an independent capture compute
+    ; every guest delay. Rejected replies cannot overwrite a retained slot.
+    movzx ecx, byte [rel ntp_sample_count]
+    cmp  ecx, NTP_SAMPLE_TARGET
+    jae  .trace_full
+    lea  rdx, [rel ntp_sample_t1_1]
+    mov  rsi, [rel ntp_t1_fp]
+    mov  [rdx + rcx*8], rsi
+    lea  rdx, [rel ntp_sample_t4_1]
+    mov  [rdx + rcx*8], r13
+.trace_full:
+    mov  rdi, rax
+    mov  rsi, rbx
+    mov  rdx, r12
+    mov  ecx, r15d
+    call ntp_grade_select_sample         ; no mutation until bounded selection
+    jmp  .accept_out
+.reject:
+    call ntp_set_reject
+    mov  rax, -1
+.accept_out:
+    pop  r15
+    pop  r14
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+
+; Pure original wire reply decoder, shared by ntp_accept_reply and census.
+; RDI=payload, RSI=declared span, RDX=T4, RCX=expected T1.
+; RAX=UTC us, RSI=signed offset Q32.32, RDX=delay Q32.32, ECX=stratum;
+; refusal RAX=-1, EDI=existing NTP reason, remaining outputs zero.
+; No clock, route, transaction, sample, receipt or network state is touched.
+ntp_reply_view:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
     mov  rbx, rdi
-    mov  r12, rsi
+    mov  r12, rcx                       ; expected originate timestamp
     mov  r13, rdx                       ; T4
-    cmp  r12, NTP_PACKET_LEN
+    cmp  rsi, NTP_PACKET_LEN
     jb   .reject_malformed
+    cmp  rsi, NTP_REPLY_MAX
+    ja   .reject_malformed
+    mov  rcx, rsi                       ; validate full declared end before load
+    xor  edx, edx
+    call safe_span_validate
+    test eax, eax
+    jnz  .reject_malformed
     mov  al, [rbx]
     mov  ah, al
     and  ah, 0xc0
@@ -702,7 +775,7 @@ ntp_accept_reply:
 
     lea  rdi, [rbx + 24]
     call be64_load
-    cmp  rax, [rel ntp_t1_fp]
+    cmp  rax, r12
     jne  .reject_origin
     lea  rdi, [rbx + 32]
     call be64_load
@@ -714,7 +787,7 @@ ntp_accept_reply:
     mov  r9, rax                        ; T3
 
     mov  r10, r8
-    sub  r10, [rel ntp_t1_fp]           ; T2-T1
+    sub  r10, r12           ; T2-T1
     jo   .reject_offset
     mov  r11, r9
     sub  r11, r13                       ; T3-T4
@@ -724,7 +797,7 @@ ntp_accept_reply:
     sar  r10, 1                         ; signed offset Q32.32
 
     mov  r11, r13
-    sub  r11, [rel ntp_t1_fp]           ; T4-T1
+    sub  r11, r12           ; T4-T1
     jo   .reject_delay
     test r11, r11
     js   .reject_delay
@@ -766,24 +839,10 @@ ntp_accept_reply:
     call q32_to_us
     test rax, rax
     jz   .reject_offset
-    ; Retain only parser-accepted T1/T4, in sample order. T2/T3 remain on
-    ; the wire; these raw Q32.32 values let an independent capture compute
-    ; every guest delay. Rejected replies cannot overwrite a retained slot.
-    movzx ecx, byte [rel ntp_sample_count]
-    cmp  ecx, NTP_SAMPLE_TARGET
-    jae  .trace_full
-    lea  rdx, [rel ntp_sample_t1_1]
-    mov  rsi, [rel ntp_t1_fp]
-    mov  [rdx + rcx*8], rsi
-    lea  rdx, [rel ntp_sample_t4_1]
-    mov  [rdx + rcx*8], r13
-.trace_full:
-    mov  rdi, rax
     mov  rsi, rbx
     mov  rdx, r12
     mov  ecx, r15d
-    call ntp_grade_select_sample         ; no mutation until bounded selection
-    jmp  .accept_out
+    jmp  .view_out
 .reject_kod:
     mov  edi, NTP_R_KOD
     jmp  .reject
@@ -802,9 +861,11 @@ ntp_accept_reply:
 .reject_dispersion:
     mov  edi, NTP_R_DISPERSION
 .reject:
-    call ntp_set_reject
     mov  rax, -1
-.accept_out:
+    xor  esi, esi
+    xor  edx, edx
+    xor  ecx, ecx
+.view_out:
     pop  r15
     pop  r14
     pop  r13
@@ -1204,8 +1265,9 @@ ntp_selftest:
 ; Writable state: deferred to the page-isolated WDATA region (core/abi/wdata.inc).
 %macro WDATA_net_ntp_0 0
 align 8
-ntp_deadline_ms: dq 0
+ntp_deadline_ms: dq 0 ; reply expiry / legacy ARP ceiling; ARP uses start_us
 ntp_retry_ms:    dq 0
+ntp_arp_start_us: dq 0
 ; Accepted decision trace, reset together with sample_count. Each group is
 ; four contiguous Q32.32 words, with named scalar fields for NTPSTAT.
 ntp_sample_t1_1: dq 0

@@ -519,9 +519,11 @@ rpf_delete:
 
 ; rpf_read_rt -> RAX = the RT replay record's sequence when it is exactly a
 ;   record command_auth_replay_load accepts (attrs NV|BS|RT, 64 B, magic,
-;   version, size, this image's owner key, CRC, seq != 0); else 0. Never fails
+;   version, size, this command lineage's replay domain, CRC, seq != 0); else 0. Never fails
 ;   the floor: the RT record is an input, not an authority. rpf_rt_raw keeps the
 ;   value for the mirror's never-lower rule.
+; Pair mode retains the original primary's domain across signer replacement;
+; neither the selected signer nor a changing pair digest starts another floor.
 rpf_read_rt:
     push rbp
     mov  rbp, rsp
@@ -556,7 +558,11 @@ rpf_read_rt:
     jne  .invalid
     cmp  word [rel rpf_rt_buf + AUTH_REPLAY_SIZE_OFF], AUTH_REPLAY_SIZE
     jne  .invalid
+%ifdef BOOT_V2_COMMAND_PAIR_ABI
+    lea  rsi, [rel boot_v2_command_replay_domain_id]
+%else
     lea  rsi, [rel command_auth_owner_key_id]
+%endif
     lea  rdi, [rel rpf_rt_buf + AUTH_REPLAY_KEY_ID_OFF]
     mov  ecx, 32
     cld
@@ -655,7 +661,7 @@ rpf_read_password:
     ret
 
 ; rpf_mirror(RDI = F') -> EAX 0 when PaOSCommandAuthReplay holds F' (the same
-;   record command_auth_replay_persist writes: this image's key, time 0, flags
+;   record command_auth_replay_persist writes: the stable replay domain, time 0, flags
 ;   1) and reads back byte-exact with attributes NV|BS|RT; else -1.
 rpf_mirror:
     push rbp
@@ -674,7 +680,11 @@ rpf_mirror:
     mov  dword [rel rpf_rt_buf + AUTH_REPLAY_MAGIC_OFF], AUTH_REPLAY_MAGIC
     mov  word [rel rpf_rt_buf + AUTH_REPLAY_VERSION_OFF], AUTH_REPLAY_VERSION
     mov  word [rel rpf_rt_buf + AUTH_REPLAY_SIZE_OFF], AUTH_REPLAY_SIZE
+%ifdef BOOT_V2_COMMAND_PAIR_ABI
+    lea  rsi, [rel boot_v2_command_replay_domain_id]
+%else
     lea  rsi, [rel command_auth_owner_key_id]
+%endif
     lea  rdi, [rel rpf_rt_buf + AUTH_REPLAY_KEY_ID_OFF]
     mov  ecx, 32
     rep  movsb

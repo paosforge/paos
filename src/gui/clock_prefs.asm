@@ -1,6 +1,6 @@
 ;; MODULE gui/clock_prefs
 ;; LAYER 6
-;; EXPORTS clock_prefs_load, clock_prefs_persist, clock_prefs_state
+;; EXPORTS clock_prefs_load, clock_prefs_persist, clock_prefs_state, clock_prefs_clock_match
 ;; IMPORTS gui/window, sec/principal, core/lib/hkdf_sha256, core/lib/hmac_sha256, core/lib/mem, boot/nvram_access, boot/serial, core/time
 ;; CAPS
 ;; OWNER saga:gui
@@ -97,6 +97,25 @@ clock_prefs_load:
     call serial_string
 .out:
     xor  eax, eax
+    ret
+
+; Read-only EAX=1 only for a verified legacy snapshot matching current raw
+; selection; EDX=raw state. State NVRAM alone also includes an absent variable.
+clock_prefs_clock_match:
+    xor eax, eax
+    movzx edx, byte [rel clock_prefs_state]
+    cmp edx, CKP_ST_NVRAM
+    jne .out
+    cmp byte [rel clock_prefs_saved_valid], 1
+    jne .out
+    mov ecx, [rel clock_tz_min]
+    cmp ecx, [rel clock_prefs_saved_min]
+    jne .out
+    mov cl, [rel clock_tz_zone]
+    cmp cl, [rel clock_prefs_saved_zone]
+    jne .out
+    inc eax
+.out:
     ret
 
 ; clock_prefs_persist -> EAX 0 saved or nothing to save, -1 not saved. Called after an

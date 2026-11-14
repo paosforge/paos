@@ -1,7 +1,7 @@
 ;; MODULE dev/net/e1000e
 ;; LAYER 3
-;; EXPORTS e1000e_fw_snapshot, e1000e_fw_txring, e1000e_trace, e1000e_create, e1000e_hw_prepare, e1000e_hw_bringup, e1000e_link_refresh, e1000e_snapshot_telemetry, e1000e_tx_ring, e1000e_rx_ring, e1000e_rx_buffers, e1000e_tx_buffer, e1000e_desc_ring_status, e1000e_stats_snapshot, e1000e_phy_snapshot, e1000e_tx_frames, e1000e_rx_frames, e1000e_rx_poll_calls, e1000e_frame_stats
-;; IMPORTS boot/native_driver_gate, net/netdev, bus/pci, bus/hal, core/dma, boot/serial, core/time, core/lib/mem, bus/pci_claim
+;; EXPORTS e1000e_82540_terminal_quiesce, e1000e_i219_terminal_quiesce, e1000e_fw_snapshot, e1000e_fw_txring, e1000e_trace, e1000e_create, e1000e_hw_prepare, e1000e_hw_bringup, e1000e_link_refresh, e1000e_snapshot_telemetry, e1000e_tx_ring, e1000e_rx_ring, e1000e_rx_buffers, e1000e_tx_buffer, e1000e_desc_ring_status, e1000e_stats_snapshot, e1000e_phy_snapshot, e1000e_tx_frames, e1000e_rx_frames, e1000e_rx_poll_calls, e1000e_frame_stats, e1000e_carrier_ready, e1000e_carrier_read, e1000e_carrier_write, e1000e_carrier_link
+;; IMPORTS dev/net/e1000e_bus_route, boot/native_driver_gate, net/netdev, bus/pci, bus/hal, core/dma, boot/serial, core/time, core/lib/mem, bus/pci_claim, hv/pci_assign
 ;; CAPS mmio dma
 ;; OWNER saga:net
 %include "boot/native_driver_gate.inc"
@@ -275,6 +275,20 @@ E1000_TXD_STA_DD  equ 0x01           ; Descriptor Done (also RX status byte bit0
 ; ordinary producers use admission, lifecycle replacement refuses while bound.
 ; BSP polling only, with no detached lifetime or public callback address.
 %macro E1K_POWER_GATE 1
+    cmp dword [rel e1000e_82540_terminal_gate],0
+    je %%backend_open
+    mov rax,-1
+    stc
+    cld
+    ret
+%%backend_open:
+    cmp dword [rel e1000e_i219_terminal_gate],0
+    je %%terminal_open
+    mov rax,-1
+    stc
+    cld
+    ret
+%%terminal_open:
     cmp qword [rel e1000e_power_gate], 0
     je %%out
     pushfq
@@ -325,9 +339,215 @@ E1000_TXD_STA_DD  equ 0x01           ; Descriptor Done (also RX status byte bit0
 %%out:
 %endmacro
 
+
+; BEGIN CARRIER_DRILL_LEAVES
+; Fixed page0 BMCR0, exact supported driver handle, existing power gate.
+; I219 holds the software/firmware flag across the PHY transaction; 82574L
+; and 82540EM use the direct MDIC path. Emulation is never physical proof.
+e1000e_carrier_ready:
+    NATIVE_DRIVER_REFUSE 6
+    E1K_POWER_GATE 1
+    lea rax, [rel e1000e_dev]
+    cmp rdi, rax
+    jne .bad
+    cmp byte [rel e1000e_mac_ok], 1
+    jne .bad
+    cmp byte [rel e1000e_rings_ok], 1
+    jne .bad
+    cmp qword [rel e1000e_region + HAL_R_BAR_BASE], 0
+    je .bad
+    cmp byte [rel e1000e_phy_addr], 31
+    ja .bad
+    mov eax, 1
+    ret
+.bad:
+    xor eax, eax
+    ret
+e1000e_carrier_read:
+    call e1000e_carrier_ready
+    cmp eax, 1
+    jne e1000e_carrier_bad
+    xor edx, edx
+    xor eax, eax
+    jmp e1000e_carrier_phy
+e1000e_carrier_write:
+    call e1000e_carrier_ready
+    cmp eax, 1
+    jne e1000e_carrier_bad
+    test esi, 0xffff0000
+    jnz e1000e_carrier_bad
+    mov edx, esi
+    mov eax, 1
+e1000e_carrier_phy:
+    push r12
+    push r13
+    push r14
+    mov r12d, eax                    ; read=0, write=1
+    mov r13d, edx                    ; exact saved BMCR word
+    xor r14d, r14d                   ; semaphore ownership/request
+    cmp byte [rel e1000e_is_qemu], 1
+    je .access
+    cmp byte [rel e1000e_is_82574l], 1
+    je .access
+    call e1000e_carrier_flag_acquire
+    test eax, eax
+    jnz .bad
+    mov r14d, 1
+.access:
+    movzx edx, byte [rel e1000e_phy_addr]
+    shl edx, E1000_MDIC_PHY_SHIFT
+    test r12d, r12d
+    jnz .write
+    or edx, E1000_MDIC_OP_READ
+    jmp .issue
+.write:
+    or edx, E1000_MDIC_OP_WRITE
+    or edx, r13d
+.issue:
+    mov esi, E1000_MDIC
+    call e1k_wr
+    jc .bad
+    ; Same finite 1920 x 50us bound for reads and writes, all HAL errors checked.
+    mov r13d, E1000_GEN_POLL_TIMEOUT * 3
+.poll:
+    mov edi, 50
+    call e1k_delay_us
+    mov esi, E1000_MDIC
+    call e1k_rd
+    jc .bad
+    cmp eax, -1
+    je .bad
+    test eax, E1000_MDIC_READY
+    jnz .ready
+    dec r13d
+    jnz .poll
+.bad:
+    mov r12, -1
+    jmp .release
+.ready:
+    test eax, E1000_MDIC_ERROR
+    jnz .bad
+    test r12d, r12d
+    jnz .written
+    movzx r12d, ax
+    jmp .release
+.written:
+    xor r12d, r12d
+.release:
+    test r14d, r14d
+    jz .out
+    call e1000e_carrier_flag_release
+    test eax, eax
+    jz .out
+    mov r12, -1                    ; release refusal is failure too
+.out:
+    mov rax, r12
+    pop r14
+    pop r13
+    pop r12
+    ret
+
+; Checked SWFLAG protocol: wait-free, request, wait-grant; withdraw after an
+; ambiguous request or grant timeout. Every read and write checks HAL CF and
+; all-ones. Keep unrelated EXTCNF bits. Bounds match existing I219 helpers.
+e1000e_carrier_flag_acquire:
+    push r12
+    mov r12d, PHY_CFG_TIMEOUT
+.free:
+    mov esi, E1000_EXTCNF_CTRL
+    call e1k_rd
+    jc .bad
+    cmp eax, -1
+    je .bad
+    test eax, E1000_EXTCNF_CTRL_SWFLAG
+    jz .request
+    dec r12d
+    jz .bad
+    mov edi, 1000
+    call e1k_delay_us
+    jmp .free
+.request:
+    mov edx, eax
+    or edx, E1000_EXTCNF_CTRL_SWFLAG
+    mov esi, E1000_EXTCNF_CTRL
+    call e1k_wr
+    jc .withdraw
+    mov r12d, SW_FLAG_TIMEOUT
+.grant:
+    mov esi, E1000_EXTCNF_CTRL
+    call e1k_rd
+    jc .withdraw
+    cmp eax, -1
+    je .withdraw
+    test eax, E1000_EXTCNF_CTRL_SWFLAG
+    jnz .ok
+    dec r12d
+    jz .withdraw
+    mov edi, 1000
+    call e1k_delay_us
+    jmp .grant
+.withdraw:
+    call e1000e_carrier_flag_release
+.bad:
+    mov rax, -1
+    pop r12
+    ret
+.ok:
+    xor eax, eax
+    pop r12
+    ret
+
+e1000e_carrier_flag_release:
+    mov esi, E1000_EXTCNF_CTRL
+    call e1k_rd
+    jc .bad
+    cmp eax, -1
+    je .bad
+    test eax, E1000_EXTCNF_CTRL_SWFLAG
+    jz .ok
+    mov edx, eax
+    and edx, ~E1000_EXTCNF_CTRL_SWFLAG
+    mov esi, E1000_EXTCNF_CTRL
+    call e1k_wr
+    jc .bad
+    mov esi, E1000_EXTCNF_CTRL
+    call e1k_rd
+    jc .bad
+    cmp eax, -1
+    je .bad
+    test eax, E1000_EXTCNF_CTRL_SWFLAG
+    jnz .bad
+.ok:
+    xor eax, eax
+    ret
+.bad:
+    mov rax, -1
+    ret
+
+e1000e_carrier_link:
+    call e1000e_carrier_ready
+    cmp eax, 1
+    jne .bad
+    mov esi, E1000_STATUS
+    call e1k_rd
+    jc .bad
+    cmp eax, -1
+    je .bad
+    mov edx, eax
+    shr eax, 1
+    and eax, 1
+    ret
+.bad:
+    mov rdx, -1
+e1000e_carrier_bad:
+    mov rax, -1
+    ret
+; END CARRIER_DRILL_LEAVES
+
 e1000e_create:
     NATIVE_DRIVER_REFUSE 6
     E1K_POWER_GATE 1
+    PCIA_NATIVE_COLD_REFUSE
     lea  rdi, [rel e1000e_ops]
     lea  rax, [rel e1000e_init]
     mov  [rdi + netdev_ops.init], rax
@@ -434,6 +654,7 @@ e1000e_mdic_read:
 ;   and R12-R15; clobbers RAX,RCX,RDX,RSI,RDI,R8..R11.
 e1000e_snapshot_discover_bar:
     E1K_POWER_GATE 1
+    PCIA_NATIVE_COLD_REFUSE 0
     push rbx
     xor  ebx, ebx                                 ; ebx = dev*8 + fn (bus 0)
 .disc_scan:
@@ -533,6 +754,16 @@ e1000e_snapshot_telemetry:
     xor  r14d, r14d                               ; no region restore owed yet
     xor  r15d, r15d                               ; no ULP wake tried yet
     mov  byte [rel e1000e_snapshot_status_lu_read], 0
+%ifdef PAOS_PCIA_GRP_AUTHORITY
+    ; A completed native prepare is already represented by the original
+    ; BOUND/FAILED claim. BAR presence alone cannot authorize cold telemetry.
+    cmp byte [rel e1000e_hw_prepared], 1
+    je .snap_native_owned
+    call pcia_grp_any_held
+    test eax, eax
+    jnz .snap_store                              ; truthful unavailable snapshot
+.snap_native_owned:
+%endif
     ; --- ensure the BAR is mapped. Post-EBS (hw_bringup ran) it already is; PRE-EBS
     ;     self-discover it so the reliable pre-EBS append carries a LIVE snapshot. ---
     xor  r11d, r11d                               ; r11b = BAR available (1/0)
@@ -649,6 +880,7 @@ e1000e_snapshot_telemetry:
 ;   boot selftest never wedges. Preserves callee-saved (RBX/R12 pushed).
 e1000e_early_kick:
     E1K_POWER_GATE 1
+    PCIA_NATIVE_COLD_REFUSE
     cmp  byte [rel e1000e_early_kicked], 1
     je   .skip
     cmp  byte [rel e1000e_nic_absent], 1
@@ -798,14 +1030,19 @@ e1000e_early_kick:
     ; classify 3 variants: 82540EM (CTRL.RST + EEPROM/EERD MAC); 82574L (CTRL.RST auto-loads
     ; MAC into RAL0 + skip I219 DCTL); I219 (no reset / ULP-wake, RAL0 MAC, DCTL bit25).
     mov  byte [rel e1000e_is_qemu], 0
+    ; Page-zero MDIC address is family-specific, not the PCH default for all
+    ; Intel NICs. See gauntlet_v2/docs/RC_E1000E_PHY_ADDRESS.md (Intel BSD).
+    mov  byte [rel e1000e_phy_addr], 2              ; PCH; existing ladder may latch another responder
     cmp  dword [rel e1000e_devid], E1000_QEMU_DEVID
     jne  .not_qemu
     mov  byte [rel e1000e_is_qemu], 1
+    mov  byte [rel e1000e_phy_addr], 1              ; 82540EM page-zero PHY
 .not_qemu:
     mov  byte [rel e1000e_is_82574l], 0
     cmp  dword [rel e1000e_devid], E1000_82574L_DEVID
     jne  .not_82574l
     mov  byte [rel e1000e_is_82574l], 1
+    mov  byte [rel e1000e_phy_addr], 1              ; 82574L page-zero PHY
 .not_82574l:
     ; --- 2. BAR0 (offset 0x10): strip type bits -> MMIO base; build HAL region.
     ;     RCQ-10: an I/O BAR, a zero base or a 64-bit BAR above 4 GiB is no usable
@@ -994,6 +1231,7 @@ e1000e_hw_prepare:
     E1K_POWER_GATE 1
     cmp  byte [rel e1000e_hw_prepared], 1
     je   .ret
+    PCIA_NATIVE_COLD_REFUSE                        ; do not consume preparation on refusal
     mov  byte [rel e1000e_hw_prepared], 1
     call e1000e_early_kick
     push rbx
@@ -1274,6 +1512,10 @@ e1000e_hw_prepare:
 e1000e_hw_bringup:
     NATIVE_DRIVER_REFUSE 6
     E1K_POWER_GATE 1
+    cmp byte [rel e1000e_hw_prepared], 1
+    je .native_prepared
+    PCIA_NATIVE_COLD_REFUSE                        ; no fallthrough after held prepare
+.native_prepared:
     call e1000e_hw_prepare
     push rbx
     push r12
@@ -1345,6 +1587,770 @@ boot_nic_early_kick_link_ready_kat:
     call serial_string
 .kat_fail:
     ret
+
+; BEGIN I219 TERMINAL QUIESCE
+; Original native ownership and bounded independent completion. Trusted BSP/IF0
+; caller only, RDI=128B, EAX0 inactive/other backend,1 terminal,-1 no effect,
+; -2 fenced/attempted/unknown. No resume/reset/PHY/D3/free/replay. Exact ABI and
+; clean-room hardware facts: gauntlet_v2/docs/E1000E_I219_TERMINAL.md.
+e1000e_i219_terminal_quiesce:
+    cld
+    test rdi,rdi
+    jz .null
+    push rbx
+    push rbp
+    push r12
+    push r13
+    push r14
+    push r15
+    sub rsp,40
+    mov rbx,rdi
+    xor eax,eax
+    mov ecx,16
+    rep stosq
+    ; Actual original RAM observations, available even before a refused effect.
+    movzx eax,byte [rel e1000e_nic_absent]
+    movzx edx,byte [rel e1000e_mac_ok]
+    shl edx,8
+    or eax,edx
+    movzx edx,byte [rel e1000e_rings_ok]
+    shl edx,16
+    or eax,edx
+    movzx edx,byte [rel e1000e_bar_bad]
+    shl edx,24
+    or eax,edx
+    mov [rbx+100],eax
+    mov eax,[rel e1000e_tx_tail]
+    mov [rbx+104],eax
+    mov eax,[rel e1000e_rx_tail_sw]
+    mov [rbx+108],eax
+    cmp qword [rel e1000e_tx_pending],0
+    setne al
+    movzx eax,al
+    mov [rbx+112],eax
+    xor ecx,ecx
+    cmp qword [rel e1000e_region],0
+    sete al
+    movzx eax,al
+    shl eax,0
+    or ecx,eax
+    cmp qword [rel e1000e_region+8],0
+    sete al
+    movzx eax,al
+    shl eax,1
+    or ecx,eax
+    cmp qword [rel e1000e_tx_ring],0
+    sete al
+    movzx eax,al
+    shl eax,2
+    or ecx,eax
+    cmp qword [rel e1000e_rx_ring],0
+    sete al
+    movzx eax,al
+    shl eax,3
+    or ecx,eax
+    cmp qword [rel e1000e_rx_buffers],0
+    sete al
+    movzx eax,al
+    shl eax,4
+    or ecx,eax
+    cmp qword [rel e1000e_tx_buffer],0
+    sete al
+    movzx eax,al
+    shl eax,5
+    or ecx,eax
+    cmp qword [rel e1000e_tx_pending],0
+    sete al
+    movzx eax,al
+    shl eax,6
+    or ecx,eax
+    cmp qword [rel e1000e_power_gate],0
+    sete al
+    movzx eax,al
+    shl eax,7
+    or ecx,eax
+    cmp byte [rel e1000e_tx_busy],0
+    sete al
+    movzx eax,al
+    shl eax,8
+    or ecx,eax
+    cmp byte [rel e1000e_rx_busy],0
+    sete al
+    movzx eax,al
+    shl eax,9
+    or ecx,eax
+    cmp byte [rel e1000e_tx_enabled],0
+    sete al
+    movzx eax,al
+    shl eax,10
+    or ecx,eax
+    cmp byte [rel e1000e_mac_ok],0
+    sete al
+    movzx eax,al
+    shl eax,11
+    or ecx,eax
+    cmp byte [rel e1000e_rings_ok],0
+    sete al
+    movzx eax,al
+    shl eax,12
+    or ecx,eax
+    mov [rbx+120],ecx
+    mov dword [rbx+124],0x1fff ; all13 original RAM comparisons observed
+    or dword [rbx+8],1
+    mov dword [rbx+12],1
+    pushfq
+    pop rax
+    test eax,0x200                    ; I219 terminal IF0 requirement
+    jnz .refused_unlocked
+    cmp dword [rel e1000e_i219_terminal_latched],0
+    jne .replay
+    ; Other original backends retain their own accepted terminal paths.
+    cmp byte [rel e1000e_is_82574l],1
+    jne .not_82574
+    cmp byte [rel e1000e_is_qemu],0
+    jne .refused_unlocked
+    cmp dword [rel e1000e_devid],E1000_82574L_DEVID
+    jne .refused_unlocked
+    jmp .not_applicable
+.not_82574:
+    cmp byte [rel e1000e_is_qemu],1
+    jne .ours
+    cmp dword [rel e1000e_devid],E1000_QEMU_DEVID
+    jne .refused_unlocked
+.not_applicable:
+    xor eax,eax
+    mov dword [rbx+12],0
+    jmp .out
+.ours:
+    mov dword [rbx+12],4
+    xor eax,eax
+    mov edx,1
+    lock cmpxchg [rel e1000e_i219_terminal_gate],edx
+    jne .refused_unlocked
+    cmp qword [rel e1000e_power_gate],0
+    jne .refused                     ; never borrow/replace a retained owner
+    cmp byte [rel e1000e_tx_busy],0
+    jne .refused
+    cmp byte [rel e1000e_rx_busy],0
+    jne .refused
+    cmp byte [rel e1000e_nic_absent],1
+    je .inactive
+    mov dword [rbx+12],2
+    cmp byte [rel e1000e_nic_absent],0
+    jne .refused
+    cmp byte [rel e1000e_is_qemu],0
+    jne .refused
+    cmp byte [rel e1000e_is_82574l],0
+    jne .refused
+    cmp byte [rel e1000e_bar_bad],0
+    jne .refused
+    cmp byte [rel e1000e_mac_ok],1
+    jne .refused
+    cmp byte [rel e1000e_rings_ok],1
+    jne .refused
+    cmp dword [rel e1000e_devid],0x15bc
+    je .supported
+    cmp dword [rel e1000e_devid],0x15d7
+    jne .unsupported
+.supported:
+    cmp dword [rel e1000e_pci_dev],31
+    ja .refused
+    cmp dword [rel e1000e_pci_fn],7
+    ja .refused
+    mov esi,[rel e1000e_pci_dev]
+    mov edx,[rel e1000e_pci_fn]
+    call e1000e_bus_identity
+    cmp eax,0                        ; qualified I219 original bus0 only
+    jne .refused
+    mov [rbx+116],eax
+    mov eax,[rel e1000e_pci_dev]
+    shl eax,8
+    or eax,[rel e1000e_pci_fn]
+    mov [rbx+16],eax                  ; bus16/dev8/fn raw exact report ABI
+    ; Claim module uses its original packed bus8/dev3/fn encoding.
+    mov eax,[rel e1000e_pci_dev]
+    shl eax,3
+    or eax,[rel e1000e_pci_fn]
+    mov edi,eax
+    mov esi,1
+    call e1000e_i219_terminal_claims
+    test eax,eax
+    jnz .refused
+    mov [rbx+20],edx
+    or dword [rbx+8],2
+    lea rdi,[rel e1000e_dev]
+    lea rsi,[rel e1000e_ops]
+    call netdev_power_member
+    test rax,rax
+    jz .refused
+    mov [rsp],rax
+    mov [rsp+8],rdx
+    mov [rbx+24],rdx
+    or dword [rbx+8],4
+    mov dword [rbx+12],5
+    xor ecx,ecx
+    call e1000e_i219_terminal_pci
+    mov [rbx+32],eax
+    mov edx,[rel e1000e_devid]
+    shl edx,16
+    or edx,0x8086
+    cmp eax,edx
+    jne .refused
+    mov ecx,8
+    call e1000e_i219_terminal_pci
+    shr eax,16
+    cmp eax,0x0200
+    jne .refused
+    cmp qword [rel e1000e_region+8],0x20000
+    jne .refused
+    mov rax,[rel e1000e_region]
+    test rax,rax
+    jz .refused
+    test eax,0x1ffff
+    jnz .refused
+    shr rax,32
+    jnz .refused
+    mov ecx,0x10
+    call e1000e_i219_terminal_pci
+    test eax,15                      ; exact original32-bit memory BAR
+    jnz .refused
+    cmp rax,[rel e1000e_region]
+    jne .refused
+    mov ecx,4
+    call e1000e_i219_terminal_pci
+    cmp eax,-1
+    je .refused
+    movzx eax,ax
+    mov [rbx+36],eax
+    and eax,6
+    cmp eax,6
+    jne .refused
+    or dword [rbx+8],8
+    mov dword [rbx+12],6
+    ; Four retained page-rounded allocations, no new allocation/cached identity.
+    lea rdi,[rel e1000e_tx_ring]
+    xor ecx,ecx
+.dma:
+    mov rax,[rdi+rcx*8]
+    test rax,rax
+    jz .refused
+    test eax,4095
+    jnz .refused
+    lea rsi,[rel e1000e_i219_terminal_spans]
+    mov r8,rax
+    add r8,[rsi+rcx*8]
+    jc .refused
+    xor edx,edx
+.overlap:
+    cmp edx,ecx
+    jae .dma_next
+    mov r9,[rdi+rdx*8]
+    mov r10,r9
+    add r10,[rsi+rdx*8]
+    cmp rax,r10
+    jae .separate
+    cmp r8,r9
+    ja .refused
+.separate:
+    inc edx
+    jmp .overlap
+.dma_next:
+    inc ecx
+    cmp ecx,4
+    jb .dma
+    mov dword [rbx+12],7
+    call e1000e_i219_terminal_rings
+    test eax,eax
+    jnz .refused
+    or dword [rbx+8],16
+    mov dword [rbx+12],8
+    mov esi,E1000_IMS
+    call e1000e_i219_terminal_rd
+    jc .refused
+    mov [rbx+44],eax
+    test eax,eax
+    jnz .refused
+    mov esi,E1000_CTRL
+    call e1000e_i219_terminal_rd
+    jc .refused
+    mov [rbx+48],eax
+    test eax,E1000_CTRL_GIO_MASTER_DISABLE | E1000_CTRL_RST | E1000_CTRL_PHYRST
+    jnz .refused
+    mov esi,E1000_RCTL
+    call e1000e_i219_terminal_rd
+    jc .refused
+    mov [rbx+60],eax
+    mov esi,E1000_TCTL
+    call e1000e_i219_terminal_rd
+    jc .refused
+    mov [rbx+68],eax
+    or dword [rbx+8],32
+    ; Same lifetime/claim generation after admission closure, before first effect.
+    lea rdi,[rel e1000e_dev]
+    lea rsi,[rel e1000e_ops]
+    call netdev_power_member
+    cmp rax,[rsp]
+    jne .refused
+    cmp rdx,[rsp+8]
+    jne .refused
+    mov eax,[rel e1000e_pci_dev]
+    shl eax,3
+    or eax,[rel e1000e_pci_fn]
+    mov edi,eax
+    mov esi,1
+    call e1000e_i219_terminal_claims
+    test eax,eax
+    jnz .refused
+    cmp edx,[rbx+20]
+    jne .refused
+    cmp byte [rel e1000e_tx_busy],0
+    jne .refused
+    cmp byte [rel e1000e_rx_busy],0
+    jne .refused
+    cmp qword [rel e1000e_power_gate],0
+    jne .refused
+    mov dword [rel e1000e_i219_terminal_latched],1
+    mov dword [rel e1000e_i219_terminal_gate],2
+    mov dword [rbx+4],1
+    ; DD is the original legacy descriptor completion, no buffer/ring rewrite.
+    mov dword [rbx+12],9
+    mov ebp,1000
+.tx_wait:
+    inc dword [rbx+88]
+    mov rdi,[rel e1000e_tx_ring]
+    xor ecx,ecx
+    xor edx,edx
+.tx_desc:
+    cmp word [rdi+rcx+8],0
+    je .tx_next
+    test byte [rdi+rcx+12],E1000_TXD_STA_DD
+    jz .tx_pending
+    mov eax,ecx
+    shr eax,4
+    bts edx,eax
+.tx_next:
+    add ecx,E1000_DESC_SIZE
+    cmp ecx,E1000_NUM_TX*E1000_DESC_SIZE
+    jb .tx_desc
+    mov [rbx+84],edx
+    or dword [rbx+8],64
+    mov dword [rbx+4],2
+    jmp .disable_queues
+.tx_pending:
+    mov [rbx+84],edx
+    or dword [rbx+8],64
+    mov edi,100
+    call e1k_delay_us
+    dec ebp
+    jnz .tx_wait
+    jmp .uncertain
+.disable_queues:
+    mov dword [rbx+12],10
+    mov esi,E1000_RXDCTL
+    call e1000e_i219_terminal_rd
+    jc .uncertain
+    and eax,~E1000_TXDCTL_QUEUE_ENABLE
+    mov edx,eax
+    mov esi,E1000_RXDCTL
+    call e1000e_i219_terminal_wr
+    jc .uncertain
+    mov esi,E1000_TXDCTL
+    call e1000e_i219_terminal_rd
+    jc .uncertain
+    and eax,~E1000_TXDCTL_QUEUE_ENABLE
+    mov edx,eax
+    mov esi,E1000_TXDCTL
+    call e1000e_i219_terminal_wr
+    jc .uncertain
+    mov ebp,100
+.queue_wait:
+    inc dword [rbx+92]
+    mov esi,E1000_RXDCTL
+    call e1000e_i219_terminal_rd
+    jc .uncertain
+    mov [rbx+76],eax
+    mov r12d,eax
+    mov esi,E1000_TXDCTL
+    call e1000e_i219_terminal_rd
+    jc .uncertain
+    mov [rbx+80],eax
+    or eax,r12d
+    or dword [rbx+8],128
+    test eax,E1000_TXDCTL_QUEUE_ENABLE
+    jz .queues_off
+    mov edi,100
+    call e1k_delay_us
+    dec ebp
+    jnz .queue_wait
+    jmp .uncertain
+.queues_off:
+    mov dword [rbx+4],3
+    mov dword [rbx+12],11
+    mov edx,[rbx+60]
+    and edx,~2
+    mov esi,E1000_RCTL
+    call e1000e_i219_terminal_wr
+    jc .uncertain
+    mov esi,E1000_RCTL
+    call e1000e_i219_terminal_rd
+    jc .uncertain
+    mov [rbx+64],eax
+    test eax,2
+    jnz .uncertain
+    mov edx,[rbx+68]
+    and edx,~2
+    mov esi,E1000_TCTL
+    call e1000e_i219_terminal_wr
+    jc .uncertain
+    mov esi,E1000_TCTL
+    call e1000e_i219_terminal_rd
+    jc .uncertain
+    mov [rbx+72],eax
+    test eax,2
+    jnz .uncertain
+    mov esi,E1000_IMS
+    call e1000e_i219_terminal_rd
+    jc .uncertain
+    mov [rbx+44],eax
+    test eax,eax
+    jnz .uncertain
+    or dword [rbx+8],256
+    mov dword [rbx+4],4
+    mov dword [rbx+12],12
+    mov edx,[rbx+48]
+    or edx,E1000_CTRL_GIO_MASTER_DISABLE
+    mov esi,E1000_CTRL
+    call e1000e_i219_terminal_wr
+    jc .uncertain
+    mov esi,E1000_CTRL
+    call e1000e_i219_terminal_rd
+    jc .uncertain
+    mov [rbx+52],eax
+    test eax,E1000_CTRL_GIO_MASTER_DISABLE
+    jz .uncertain
+    mov ebp,800
+.master_wait:
+    inc dword [rbx+96]
+    mov esi,E1000_STATUS
+    call e1000e_i219_terminal_rd
+    jc .uncertain
+    mov [rbx+56],eax
+    test eax,E1000_STATUS_GIO_MASTER_ENABLE
+    jz .master_off
+    mov edi,100
+    call e1k_delay_us
+    dec ebp
+    jnz .master_wait
+    jmp .uncertain
+.master_off:
+    or dword [rbx+8],512
+    mov dword [rbx+4],5
+    mov dword [rbx+12],13
+    mov ecx,4
+    call e1000e_i219_terminal_pci
+    cmp eax,-1
+    je .uncertain
+    movzx eax,ax
+    cmp eax,[rbx+36]
+    jne .uncertain
+    and eax,~4
+    mov [rsp+16],eax
+    mov r8d,eax                       ; zero Status W1C half
+    xor edi,edi
+    mov esi,[rel e1000e_pci_dev]
+    mov edx,[rel e1000e_pci_fn]
+    mov ecx,4
+    call pci_cfg_write32
+    mov ecx,4
+    call e1000e_i219_terminal_pci
+    cmp eax,-1
+    je .uncertain
+    movzx eax,ax
+    mov [rbx+40],eax
+    or dword [rbx+8],1024
+    cmp eax,[rsp+16]
+    jne .uncertain
+    mov dword [rbx+4],6
+    mov dword [rbx+12],0
+    mov eax,1
+    jmp .out
+.inactive:
+    ; Native never-owned decision: no retained controller/MMIO/DMA/producer and
+    ; a complete locked census with no E1000E claim. Not physical PCI absence.
+    mov dword [rbx+12],2
+    cmp qword [rel e1000e_region],0
+    jne .refused
+    cmp qword [rel e1000e_region+8],0
+    jne .refused
+    cmp byte [rel e1000e_mac_ok],0
+    jne .refused
+    cmp byte [rel e1000e_rings_ok],0
+    jne .refused
+    cmp byte [rel e1000e_tx_enabled],0
+    jne .refused
+    cmp qword [rel e1000e_tx_pending],0
+    jne .refused
+    lea rdi,[rel e1000e_tx_ring]
+    mov ecx,4
+.inactive_dma:
+    cmp qword [rdi],0
+    jne .refused
+    add rdi,8
+    loop .inactive_dma
+    cmp dword [rel e1000e_dev+dev.class],0
+    jne .inactive_registered
+    cmp qword [rel e1000e_dev+dev.ops],0
+    jne .refused
+    jmp .inactive_claims
+.inactive_registered:
+    cmp dword [rel e1000e_dev+dev.class],CLASS_NET
+    jne .refused
+    lea rax,[rel e1000e_ops]
+    cmp [rel e1000e_dev+dev.ops],rax
+    jne .refused
+    cmp dword [rel e1000e_dev+dev.health],HEALTH_DEGRADED
+    jne .refused
+    test dword [rel e1000e_dev+dev.flags],NETDEV_F_ABSENT
+    jz .refused
+.inactive_claims:
+    xor edi,edi
+    xor esi,esi
+    call e1000e_i219_terminal_claims
+    test eax,eax
+    jnz .refused
+    or dword [rbx+8],2
+    mov dword [rel e1000e_i219_terminal_gate],0
+    xor eax,eax
+    mov dword [rbx+12],0
+    jmp .out
+.unsupported:
+    mov dword [rbx+12],3
+.refused:
+    mov dword [rel e1000e_i219_terminal_gate],0
+.refused_unlocked:
+    mov eax,-1
+    jmp .out
+.replay:
+    mov dword [rbx+4],1
+    mov dword [rbx+12],14
+.uncertain:
+    mov eax,-2
+.out:
+    mov [rbx],eax
+    add rsp,40
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbp
+    pop rbx
+    ret
+.null:
+    mov eax,-1
+    ret
+
+e1000e_i219_terminal_pci:
+    xor edi,edi
+    mov esi,[rel e1000e_pci_dev]
+    mov edx,[rel e1000e_pci_fn]
+    jmp pci_cfg_read32
+; Direct checked HAL, not gated native accessors after our one-way fence.
+e1000e_i219_terminal_rd:
+    push rdi                         ; aligned HAL call; POP preserves carry
+    lea rdi,[rel e1000e_region]
+    call hal_mmio_read32
+    pop rdi
+    jc .out
+    cmp eax,-1
+    je .unavailable
+    clc
+.out: ret
+.unavailable:
+    stc
+    ret
+e1000e_i219_terminal_wr:
+    lea rdi,[rel e1000e_region]
+    jmp hal_mmio_write32
+
+e1000e_i219_terminal_rings:
+    push r12
+    mov r12,[rel e1000e_tx_ring]
+    mov esi,E1000_TDBAL
+    call e1000e_i219_terminal_rd
+    jc .bad
+    cmp eax,r12d
+    jne .bad
+    mov r12,[rel e1000e_tx_ring]
+    shr r12,32
+    mov esi,E1000_TDBAH
+    call e1000e_i219_terminal_rd
+    jc .bad
+    cmp eax,r12d
+    jne .bad
+    mov r12,[rel e1000e_rx_ring]
+    mov esi,E1000_RDBAL
+    call e1000e_i219_terminal_rd
+    jc .bad
+    cmp eax,r12d
+    jne .bad
+    mov r12,[rel e1000e_rx_ring]
+    shr r12,32
+    mov esi,E1000_RDBAH
+    call e1000e_i219_terminal_rd
+    jc .bad
+    cmp eax,r12d
+    jne .bad
+    mov esi,E1000_TDLEN
+    call e1000e_i219_terminal_rd
+    jc .bad
+    cmp eax,E1000_NUM_TX*E1000_DESC_SIZE
+    jne .bad
+    mov esi,E1000_RDLEN
+    call e1000e_i219_terminal_rd
+    jc .bad
+    cmp eax,E1000_NUM_RX*E1000_DESC_SIZE
+    jne .bad
+    mov esi,E1000_TDT
+    call e1000e_i219_terminal_rd
+    jc .bad
+    cmp eax,E1000_NUM_TX
+    jae .bad
+    cmp eax,[rel e1000e_tx_tail]
+    jne .bad
+    mov esi,E1000_RDT
+    call e1000e_i219_terminal_rd
+    jc .bad
+    cmp eax,E1000_NUM_RX
+    jae .bad
+    cmp dword [rel e1000e_rx_tail_sw],E1000_NUM_RX
+    jae .bad
+    ; Posted descriptors still name the original shared native bounce buffer.
+    mov rdi,[rel e1000e_tx_ring]
+    xor ecx,ecx
+.tx_owned:
+    movzx eax,word [rdi+rcx+8]
+    test eax,eax
+    jz .tx_owned_next
+    cmp eax,E1000_TX_BUF
+    ja .bad
+    mov rax,[rdi+rcx]
+    cmp rax,[rel e1000e_tx_buffer]
+    jne .bad
+.tx_owned_next:
+    add ecx,E1000_DESC_SIZE
+    cmp ecx,E1000_NUM_TX*E1000_DESC_SIZE
+    jb .tx_owned
+    ; Pending pointer must designate the original descriptor, never arbitrary RAM.
+    mov rax,[rel e1000e_tx_pending]
+    test rax,rax
+    jz .good
+    sub rax,[rel e1000e_tx_ring]
+    jc .bad
+    cmp rax,E1000_NUM_TX*E1000_DESC_SIZE
+    jae .bad
+    test eax,15
+    jnz .bad
+    mov rdi,[rel e1000e_tx_pending]
+    cmp word [rdi+8],0
+    je .bad
+.good:
+    xor eax,eax
+    pop r12
+    ret
+.bad:
+    mov eax,-1
+    pop r12
+    ret
+e1000e_i219_terminal_claims:
+    push rbx
+    push r12
+    push r13
+    sub rsp,512
+    mov r12d,edi
+    mov r13d,esi
+    mov rdi,rsp
+    call pci_claim_snapshot
+    test edx,edx
+    jnz .bad
+    cmp eax,32
+    ja .bad
+    mov r9d,eax
+    xor r10d,r10d
+    xor r11d,r11d
+    xor ecx,ecx
+.record:
+    cmp ecx,r9d
+    jae .done
+    mov ebx,ecx
+    shl ebx,4
+    add rbx,rsp
+    cmp dword [rbx],0xffff
+    ja .bad
+    mov eax,[rbx+4]
+    cmp eax,1
+    jb .bad
+    cmp eax,PCI_DRV_LAST
+    ja .bad
+    mov edx,[rbx+8]
+    cmp edx,PCI_CLAIM_BOUND
+    jb .bad
+    cmp edx,PCI_CLAIM_FAILED
+    ja .bad
+    cmp dword [rbx+12],0
+    je .bad
+    xor edx,edx
+.duplicate:
+    cmp edx,ecx
+    jae .driver
+    mov eax,edx
+    shl eax,4
+    mov eax,[rsp+rax]
+    cmp eax,[rbx]
+    je .bad
+    inc edx
+    jmp .duplicate
+.driver:
+    test r13d,r13d
+    jz .driver_id
+    mov eax,[rbx]
+    cmp eax,r12d
+    jne .driver_id
+    cmp dword [rbx+4],PCI_DRV_E1000E
+    jne .bad
+.driver_id:
+    cmp dword [rbx+4],PCI_DRV_E1000E
+    jne .next
+    test r13d,r13d
+    jz .bad
+    cmp [rbx],r12d
+    jne .bad
+    cmp dword [rbx+8],PCI_CLAIM_BOUND
+    jne .bad
+    inc r10d
+    mov r11d,[rbx+12]
+.next:
+    inc ecx
+    jmp .record
+.done:
+    cmp r10d,r13d
+    jne .bad
+    xor eax,eax
+    mov edx,r11d
+    jmp .out
+.bad:
+    mov eax,-1
+.out:
+    add rsp,512
+    pop r13
+    pop r12
+    pop rbx
+    ret
+; END I219 TERMINAL QUIESCE
+
+; Trusted BSP/IF0, RDI160B; EAX0 exact peer/never-owned,-1 refusal,-2 uncertain.
+; Dedicated producer gate and original pinned ownership; no native1 path.
+e1000e_82540_terminal_quiesce:
+%include "dev/net/e1000e_82540_terminal.inc"
 
 ; --- netdev_ops implementations ------------------------------------------------
 ; init/start/stop: the real bring-up already ran in e1000e_create (against the
@@ -3031,6 +4037,11 @@ e1000e_rx_poll_calls: dq 0                         ; rx_poll invocations (Dell w
 e1000e_rx_frames:  dq 0                            ; RX frames accepted off the ring (the 1099 UDP surface reads this; 0 until real rx_poll lands, 1029)
 e1000e_region:     dq 0                            ; HAL region .bar_base
                    dq 0                            ; HAL region .bar_size
+e1000e_82540_terminal_gate: dd 0
+e1000e_82540_terminal_latched: dd 0
+e1000e_i219_terminal_gate: dd 0
+e1000e_i219_terminal_latched: dd 0
+e1000e_i219_terminal_spans: dq 4096,4096,32768,4096
 e1000e_power_gate: dq 0                            ; trusted opt-in native power admission
 e1000e_pci_dev:    dd 0                            ; PCI dev number of the found NIC
 e1000e_pci_fn:     dd 0                            ; PCI function of the found NIC (I219-V = 6)

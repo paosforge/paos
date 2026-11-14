@@ -1,7 +1,7 @@
 ;; MODULE fs/ntfs_disk
 ;; LAYER 4
-;; EXPORTS ntfs_disk_refusal_stage, ntfs_disk_selection_state, ntfs_disk_select_exact, ntfs_disk_register, ntfs_disk_handle, ntfs_disk_write_state, nt_path_refusal, ntfs_disk_source_device, ntfs_disk_source_bind, ntfs_disk_source_token, ntfs_disk_source_current, ntfs_disk_source_stat, ntfs_disk_source_read, ntfs_disk_source_dir, ntfs_disk_source_next, ntfs_disk_source_node, ntfs_disk_source_tree_forget, ntfs_disk_source_mtime, ntfs_disk_format_ops
-;; IMPORTS fs/ext4_disk, fs/blockdev, fs/storage_access, fs/vfs, core/lib/crc32, core/lib/mem, core/unicode_edit, boot/serial
+;; EXPORTS ntfs_disk_select_removable_gpt_ro, ntfs_disk_select_removable_mbr_ro, ntfs_disk_refusal_stage, ntfs_disk_selection_state, ntfs_disk_select_exact, ntfs_disk_register, ntfs_disk_handle, ntfs_disk_write_state, nt_path_refusal, ntfs_disk_source_device, ntfs_disk_source_bind, ntfs_disk_source_token, ntfs_disk_source_current, ntfs_disk_source_stat, ntfs_disk_source_read, ntfs_disk_source_dir, ntfs_disk_source_next, ntfs_disk_source_node, ntfs_disk_source_tree_forget, ntfs_disk_source_mtime, ntfs_disk_format_ops
+;; IMPORTS fs/fs_identify, fs/ext4_disk, fs/blockdev, fs/storage_access, fs/vfs, core/lib/crc32, core/lib/mem, core/unicode_edit, boot/serial
 ;; CAPS CAP_BLOCK_READ, CAP_BLOCK_WRITE
 ;; OWNER saga:desktop_bringup
 ; ============================================================================
@@ -113,6 +113,7 @@ NT_WREF_FLUSH    equ 11                        ; persistence unconfirmed; writer
 ; mount "ntfs0". -> RAX = mount handle / -1 (no volume: [fs.ntfs.skipped]).
 ; ---------------------------------------------------------------------------
 ntfs_disk_register:
+    mov byte [rel nt_sel_active],0
     push rbx
     push r12
     push r13
@@ -194,6 +195,274 @@ ntfs_disk_register:
     pop  r13
     pop  r12
     pop  rbx
+    ret
+
+; First-context late read-only NTFS. BSP/non-reentrant after boot registration.
+; RDI is an opaque registered removable dev, never a controller or row number.
+; Existing singleton context/handle is busy and remains byte-identical. No
+; second context, scan ranking, request authority, writer arm, write or flush.
+; Return >=0 handle, -1 unsupported/invalid, -2 busy (never fall through).
+ntfs_disk_select_removable_gpt_ro:
+    mov esi,1
+    jmp nt_sel_begin
+ntfs_disk_select_removable_mbr_ro:
+    xor esi,esi
+nt_sel_begin:
+    push rbx
+    push r12
+    mov r12d,esi
+    mov rbx,rdi
+    mov al,[rel hv_linux_running]
+    or al,[rel hv_linux_start_active]
+    or al,[rel hv_linux_run_req]
+    or al,[rel vtd_owner_guest]
+    test al,al
+    jnz .busy
+    call vfs_copy_busy
+    test eax,eax
+    jnz .busy
+    call storage_access_binding_busy
+    test eax,eax
+    jnz .busy
+    cmp dword [rel ntfs_disk_handle],-1
+    jne .busy
+    cmp byte [rel nt_mounted],0
+    jne .busy
+    cmp byte [rel nt_sel_active],0
+    jne .busy
+    mov [rel nt_sel_gpt],r12b
+    mov rdi,rbx
+    call nt_sel_member
+    test rax,rax
+    jz .no
+    mov rdi,rbx
+    call guest_volume_native_allowed
+    test rax,rax
+    jnz .no
+    mov rax,[rbx+dev.info]
+    mov [rel nt_sel_identity],rax
+    mov rdx,[rbx+dev.ops]
+    mov [rel nt_sel_identity+8],rdx
+    mov rdx,[rbx+dev.priv]
+    mov [rel nt_sel_identity+16],rdx
+    mov rdx,[rax+blk_info.media_generation]
+    test rdx,rdx
+    jz .no
+    mov [rel nt_sel_identity+24],rdx
+    mov rdx,[rax+blk_info.lba_max]
+    mov [rel nt_sel_identity+32],rdx
+    mov [rel nt_sel_device],rbx
+    mov byte [rel nt_sel_active],1
+    call nt_sel_current
+    test rax,rax
+    jnz .fail
+    mov rdi,rbx
+    lea rcx,[rel nt_sel_primary]
+    call nt_sel_query
+    test rax,rax
+    jnz .fail
+    mov [rel nt_dev],rbx
+    mov rax,[rel nt_sel_primary+16]
+    mov [rel nt_part_lba],rax
+    mov rax,[rel nt_sel_primary+24]
+    mov [rel nt_part_sectors],rax
+    mov eax,[rel nt_sel_primary+36]
+    mov [rel nt_scheme],eax
+    mov r12,[rel nt_read_failures]
+    call nt_mount_volume
+    ; Original clean-boot eligibility is never authority for this selector.
+    mov byte [rel nt_write_armed],0
+    test rax,rax
+    jnz .fail
+    cmp r12,[rel nt_read_failures]
+    jne .fail
+    mov rax,0x202020205346544e
+    cmp [rel nt_boot_buf+3],rax
+    jne .fail
+    cmp word [rel nt_boot_buf+510],0xaa55
+    jne .fail
+    call nt_sel_recheck
+    test rax,rax
+    jnz .fail
+    call nt_build_ops
+    lea rdi,[rel nt_ops]
+    lea rsi,[rel nt_ctx]
+    lea rdx,[rel str_nt_mount_name]
+    call vfs_register_mount
+    test rax,rax
+    js .fail
+    mov [rel ntfs_disk_handle],eax
+    mov [rel vfs_disk_handle],eax
+    lock inc qword [rel vfs_write_generation]
+    mov rdx,[rel vfs_write_generation]
+    mov [rel nt_binding_generation],rdx
+    mov byte [rel nt_lookup_pre],0
+    mov byte [rel nt_found],0
+    mov dword [rel nt_nruns],0
+    jmp .out
+.fail:
+    call nt_exact_invalidate
+.no:
+    mov rax,-1
+    jmp .out
+.busy:
+    mov rax,-2
+.out:
+    pop r12
+    pop rbx
+    ret
+
+; RCX=out96; MBR retains original48. GPT has no loose-parser fallback.
+nt_sel_query:
+    xor esi,esi
+    xor edx,edx
+    lea r8,[rel nt_sel_current]
+    cmp byte [rel nt_sel_gpt],0
+    je .mbr
+    mov esi,1
+    jmp fs_identify_single_gpt_checked
+.mbr:
+    push rcx
+    call fs_identify_primary_checked
+    pop rcx
+    test rax,rax
+    jnz .out
+    cmp dword [rcx+36],FS_SCHEME_MBR
+    jne .no
+    cmp dword [rcx+40],0x07
+    jne .no
+.out:
+    ret
+.no:
+    mov rax,-1
+    ret
+
+; Opaque dev -> current native readable removable dev / 0. No media I/O.
+nt_sel_member:
+    push rbx
+    push r12
+    mov r12,rdi
+    xor ebx,ebx
+.next:
+    mov rdi,rbx
+    mov esi,BLKCAP_READ
+    xor edx,edx
+    call blk_iter_after
+    test rax,rax
+    jz .out
+    mov rbx,rax
+    cmp rax,r12
+    jne .next
+    mov rdx,[rax+dev.info]
+    cmp byte [rdx+blk_info.removable],0
+    jne .out
+    test dword [rdx+blk_info.flags],BLKF_REMOVABLE
+    jnz .out
+    xor eax,eax
+.out:
+    pop r12
+    pop rbx
+    ret
+
+; Compare original registry incarnation before following captured info/ops.
+nt_sel_current:
+    mov rdi,[rel nt_sel_device]
+    call nt_sel_member
+    test rax,rax
+    jz .no
+    mov rdx,[rax+dev.info]
+    cmp rdx,[rel nt_sel_identity]
+    jne .no
+    mov rcx,[rax+dev.ops]
+    cmp rcx,[rel nt_sel_identity+8]
+    jne .no
+    mov rcx,[rax+dev.priv]
+    cmp rcx,[rel nt_sel_identity+16]
+    jne .no
+    mov rcx,[rdx+blk_info.media_generation]
+    cmp rcx,[rel nt_sel_identity+24]
+    jne .no
+    mov rcx,[rdx+blk_info.lba_max]
+    cmp rcx,[rel nt_sel_identity+32]
+    jne .no
+    cmp dword [rdx+blk_info.sector_size],512
+    jne .no
+    cmp dword [rdx+blk_info.logical_sector_bytes],512
+    jne .no
+    mov rdi,rax
+    call guest_volume_native_allowed
+    test rax,rax
+    jnz .no
+    xor eax,eax
+    ret
+.no:
+    mov rax,-1
+    ret
+
+nt_sel_recheck:
+    mov rdi,[rel nt_sel_device]
+    lea rcx,[rel nt_sel_again]
+    call nt_sel_query
+    test rax,rax
+    jnz .out
+    lea rdi,[rel nt_sel_primary]
+    lea rsi,[rel nt_sel_again]
+    mov ecx,6
+    cmp byte [rel nt_sel_gpt],0
+    je .compare
+    mov ecx,12
+.compare:
+    repe cmpsq
+    jne .no
+    mov rdi,[rel nt_sel_device]
+    mov rsi,[rel nt_sel_primary+16]
+    mov edx,1
+    lea rcx,[rel nt_sel_vbr]
+    call nt_dev_read
+    test rax,rax
+    jnz .out
+    lea rdi,[rel nt_boot_buf]
+    lea rsi,[rel nt_sel_vbr]
+    mov ecx,64
+    repe cmpsq
+    jne .no
+    jmp nt_sel_current
+.no:
+    mov rax,-1
+.out:
+    ret
+
+; Preserve all block-read operands; registry lookup precedes captured pointers.
+; Active persists for the lifetime of this read-only singleton, including VFS
+; reads outside a copy/space query. Explicit authorized rebind invalidates it.
+nt_sel_guard:
+    cmp byte [rel nt_sel_active],0
+    je .ok
+    cmp rdi,[rel nt_sel_device]
+    jne .no
+    push rdi
+    push rsi
+    push rdx
+    push rcx
+    push r8
+    push r9
+    push r10
+    push r11
+    call nt_sel_current
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    ret
+.no:
+    mov rax,-1
+    ret
+.ok:
+    xor eax,eax
     ret
 
 ; Explicit runtime binding. BSP-only like the command/storage transaction rails.
@@ -414,6 +683,7 @@ ntfs_disk_select_exact:
     ret
 
 nt_exact_invalidate:
+    mov byte [rel nt_sel_active],0
     mov  byte [rel nt_mounted], 0
     mov  byte [rel nt_write_armed], 0
     mov  byte [rel nt_dirty], 2
@@ -907,6 +1177,9 @@ nt_dev_read:
     mov  r14, rsi
     mov  r12, rdx
     mov  r15, rcx
+    call nt_sel_guard
+    test rax,rax
+    jnz .fail
     mov  rax, rsi
     add  rax, rdx
     jc   .fail
@@ -919,6 +1192,8 @@ nt_dev_read:
     call nt_src_block_read
     test rax, rax
     jz   .ok
+    cmp byte [rel nt_sel_active],0
+    jne .fail
     call nt_src_guard
     test rax, rax
     jnz  .fail
@@ -1003,9 +1278,20 @@ nt_lba_in_volume:
 ; nt_write(RSI=absolute lba, RDX=count, RCX=buf) -> RAX 0/-1. Range-checked,
 ; and NEVER below the volume's data area (the caller confines it to file runs).
 nt_write:
+    cmp byte [rel nt_sel_active],0
+    je .not_late
+    mov rax,-1
+    ret
+.not_late:
 %if NT_PUBLIC_READ_ONLY
     mov  rax, -1
     ret
+%else
+    call nt_volume_pin                  ; T5-15.4: NTFS is never the MSI's reserved partition
+    test rax, rax
+    jz   .pin_ok
+    ret
+.pin_ok:
 %endif
     push r12
     push r13
@@ -1206,6 +1492,10 @@ nt_mount_volume:
 .hib_done:
     ; $Volume and hiberfil traversal may have crossed a replacement too. A
     ; mixed mount is unusable, even when both media have identical geometry.
+    mov  rdi, [rel nt_dev]
+    call nt_sel_guard
+    test rax,rax
+    jnz .fail
     mov  rax, [rel nt_dev]
     mov  rax, [rax + dev.info]
     mov  rax, [rax + blk_info.media_generation]
@@ -1755,6 +2045,17 @@ nt_load_mft_runlist:
     lea  rdi, [rel nt_rec_buf]
     mov  esi, [rel nt_rec_bytes]
     call nt_fixup_file
+    test rax, rax
+    jnz  .fail
+    ; Record fixup establishes the actual FILE extent. Reuse the maintained
+    ; whole-chain bounds before the legacy finder or mapping-pair decoder.
+    ; Like nt_sx_record_valid, enter the shared bounds with a checked file kind.
+    lea  rdi, [rel nt_rec_buf]
+    cmp  word [rdi + 22], 1               ; ordinary in-use FILE, not directory/extension
+    jne  .fail
+    mov  r8d, [rel nt_rec_bytes]
+    lea  rsi, [rdi + r8]                  ; actual bytes read, never on-disk attr length
+    call nt_dir_record_valid.flags_ok
     test rax, rax
     jnz  .fail
     lea  rdi, [rel nt_rec_buf]
@@ -4135,10 +4436,35 @@ nt_save_current:
 .out:
     ret
 
+%if NT_PUBLIC_READ_ONLY == 0
+nt_volume_pin:
+    push rdi
+    push rsi
+    push rdx
+    push rcx
+    push r8
+    mov  rdi, [rel nt_dev]
+    xor  esi, esi
+    xor  edx, edx
+    xor  ecx, ecx
+    xor  r8d, r8d
+    call volume_pin_admits
+    pop  r8
+    pop  rcx
+    pop  rdx
+    pop  rsi
+    pop  rdi
+    ret
+%endif
+
 nt_save_authority:
 %if NT_PUBLIC_READ_ONLY
     mov  rax, -1
     ret
+%else
+    call nt_volume_pin
+    test rax, rax
+    jnz  .no
 %endif
     cmp  byte [rel nt_mounted], 1
     jne  .no
@@ -7585,6 +7911,9 @@ ntfs_disk_source_token:
     ret
 
 nt_src_guard:
+    call nt_sel_guard
+    test rax,rax
+    jnz .out
     cmp  qword [rel nt_src_reading], 0
     je   .ok
     call ntfs_disk_source_token
@@ -13114,3 +13443,16 @@ nt_nd_allocated: dd 0
 ntfs_disk_format_ops:
     lea  rax, [rel nt_ops]
     ret
+
+; Lifetime identity only; never storage authority.
+%macro WDATA_BSS_nt_late_selector 0
+nt_sel_gpt: resb 1
+nt_sel_active: resb 1
+alignb 8
+nt_sel_device: resq 1
+nt_sel_identity: resq 5
+nt_sel_primary: resb 96
+nt_sel_again: resb 96
+nt_sel_vbr: resb 512
+%endmacro
+WDATA_BSS_DEFER WDATA_BSS_nt_late_selector

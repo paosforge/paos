@@ -1,19 +1,28 @@
 ;; MODULE gui/config_prefs
 ;; LAYER 6
-;; EXPORTS config_prefs_load, config_prefs_save, config_prefs_state
+;; EXPORTS config_prefs_load, config_prefs_save, config_prefs_state, config_prefs_clock_record
 ;; IMPORTS gui/wallpaper_prefs, fs/data_config_provider, fs/data_config_authority, sec/data_config_local, sec/node_identity, sec/session, sec/principal, svc/command, svc/command_auth, gui/window, gui/kbd_prefs, gui/lang_prefs, core/lib/mem, boot/serial
 ;; CAPS CAP_GUI
 ;; OWNER rc-input-claude
 ;; CONTEXT: bsp_only
-; PAOS.CFG v1, exactly256B: PCFG/u16version/u16size, u64revision,
+; PAOS.CFG v1 / PAOS2.CFG v2, exactly256B: PCFG/u16version/u16size, u64revision,
 ; partitionstart+descriptor56 @16, timezone minutes i32@80, zone u8@84,
-; keyboard choice u8@85, stock wallpaper u8@86 (0default/1..9), zero@87, language padded ASCII8@88, zero96@96,
+; keyboard choice u8@85, stock wallpaper u8@86 (0default/1..9JPEG/10BMP), zero@87, language padded ASCII8@88,
+; v1 zero96@96; v2 predecessor v1 revision u64@96 (0 if absent), zero88@104,
 ; native node signature64@192 over preceding192B. Public preferences only.
 ; The local owner authorizes the action; the node authenticates saved bytes.
 ; No credential/boot policy, request-global swap, raw disk IO or exported key.
 ; DATA is primary when valid; legacy protected NVRAM remains compatibility.
 ; A malformed existing file is never silently replaced. Uncertainty is sticky
 ; until restart/read-only boot reconciliation; no automatic resend or worker.
+; v2 keeps every v1 field/meaning (including deferred keyboard selections).
+; Boot is read-only: prefer v2 with its validated v1 predecessor. Select v1
+; on confirmed v2 absence or a newer signed v1 after rollback. The next
+; explicit owner Save writes v2 even for unchanged v1 values. Never rewrite or
+; delete v1, including after promotion: conservative retention covers the next
+; generation too. No untrusted handoff flag or inferred promotion enables GC.
+; Unknown/malformed values refuse with the existing Settings failure state;
+; nothing is silently defaulted, so this lossless conversion needs no loss note.
 
 CFP_SIZE equ 256
 CFP_SIGNED equ 192
@@ -79,6 +88,22 @@ config_prefs_load:
     xor eax, eax
     ret
 
+; Read-only public snapshot: RAX=validated 256-byte DATA record or zero,
+; EDX=raw state. No IO, authority, retry or secret leaves this module.
+config_prefs_clock_record:
+    xor eax, eax
+    movzx edx, byte [rel config_prefs_state]
+    cmp byte [rel cfp_busy], 0
+    jne .out
+    cmp edx, CFP_LOADED
+    je .record
+    cmp edx, CFP_SAVED
+    jne .out
+.record:
+    lea rax, [rel cfp_old]
+.out:
+    ret
+
 ; RDI=captured local OWNER PID, RSI=captured session epoch. One human action.
 ; ->0 DATA saved/unchanged,1 unavailable,-1 refused/failed before effect,
 ; -2 busy,-3 uncertain. A later click cannot implicitly retry an uncertain IO.
@@ -109,6 +134,9 @@ config_prefs_save:
     jnz .failed
     mov ebp, 1
     mov rbx, [rel cfp_old+8]
+    cmp rbx, [rel cfp_revision_floor]
+    jae .snapshot
+    mov rbx, [rel cfp_revision_floor]
     jmp .snapshot
 .missing:
     xor ebp, ebp
@@ -119,7 +147,7 @@ config_prefs_save:
     mov edx, CFP_SIZE
     call memset
     mov dword [rel cfp_new], 'PCFG'
-    mov word [rel cfp_new+4], 1
+    mov word [rel cfp_new+4], 2
     mov word [rel cfp_new+6], CFP_SIZE
     ; Start with a valid placeholder revision; advance only for a change.
     mov qword [rel cfp_new+8], 1
@@ -141,12 +169,31 @@ config_prefs_save:
     test rax, rax
     jz .failed
     mov [rel cfp_new+88], rax
+    test ebp, ebp
+    jz .fields
+    mov rax, [rel cfp_old+96]
+    cmp word [rel cfp_old+4], 1
+    jne .predecessor
+    mov rax, [rel cfp_old+8]
+.predecessor:
+    mov [rel cfp_new+96], rax
+.fields:
+    ; Validate field values with a nonwrapping prospective revision so the
+    ; signed predecessor is strictly older than the new record.
+    mov rax, rbx
+    cmp rax, -1
+    je .prospective_revision
+    inc rax
+.prospective_revision:
+    mov [rel cfp_new+8], rax
     lea rdi, [rel cfp_new]
     call cfp_fields
     test eax, eax
     jnz .failed
     test ebp, ebp
     jz .changed
+    cmp word [rel cfp_old+4], 2
+    jne .changed                       ; migrate v1 even when values match
     lea rdi, [rel cfp_new+80]
     lea rsi, [rel cfp_old+80]
     mov edx, 16
@@ -177,7 +224,7 @@ config_prefs_save:
     test eax, eax
     jnz .failed
     lea rdi, [rel cfp_token]
-    lea rsi, [rel cfp_name]
+    lea rsi, [rel cfp_name_v2]
     lea rdx, [rel cfp_new]
     mov ecx, CFP_SIZE
     mov r8, r12
@@ -261,14 +308,68 @@ cfp_local_owner:
 ; ->0 valid current record,1 confirmed missing,-1 all other outcomes.
 cfp_read:
     sub rsp, 8
-    lea rdi, [rel cfp_token]
+    mov qword [rel cfp_revision_floor], 0
+    lea rsi, [rel cfp_name_v2]
+    mov edx, 2
+    call cfp_read_version
+    cmp eax, 1
+    je .legacy
+    test eax, eax
+    jnz .out
+    mov rax, [rel cfp_old+8]
+    mov [rel cfp_revision_floor], rax
+    lea rdi, [rel cfp_v2]
+    lea rsi, [rel cfp_old]
+    mov edx, CFP_SIZE
+    call memcpy
     lea rsi, [rel cfp_name]
+    mov edx, 1
+    call cfp_read_version
+    cmp eax, 1
+    je .legacy_missing
+    test eax, eax
+    jnz .out
+    mov rax, [rel cfp_old+8]
+    cmp rax, [rel cfp_v2+96]
+    ja .newer_legacy                    ; owner edited after older-image rollback
+    jne .bad                           ; never silently accept an older predecessor
+    jmp .v2
+.legacy_missing:
+    cmp qword [rel cfp_v2+96], 0
+    jne .bad                           ; migration never removes its predecessor
+.v2:
+    lea rdi, [rel cfp_old]
+    lea rsi, [rel cfp_v2]
+    mov edx, CFP_SIZE
+    call memcpy
+.newer_legacy:
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, -1
+    jmp .out
+.legacy:
+    ; Unavailable, corrupt, foreign, future or short v2 is not absence.
+    lea rsi, [rel cfp_name]
+    mov edx, 1
+    call cfp_read_version
+.out:
+    add rsp, 8
+    ret
+
+; RSI=fixed name11, EDX=its exact format. Preserve the caller's revision.
+cfp_read_version:
+    push rbx
+    mov ebx, edx
+    lea rdi, [rel cfp_token]
     lea rdx, [rel cfp_old]
     mov ecx, CFP_SIZE
     call data_config_read
     cmp rax, -4
     je .missing
     cmp rax, CFP_SIZE
+    jne .bad
+    cmp word [rel cfp_old+4], bx
     jne .bad
     lea rdi, [rel cfp_old]
     call cfp_valid
@@ -279,7 +380,7 @@ cfp_read:
 .bad:
     mov eax, -1
 .out:
-    add rsp, 8
+    pop rbx
     ret
 
 ; RDI complete256B kernel record. Structural validation precedes verification.
@@ -318,7 +419,10 @@ cfp_fields:
     cmp dword [rdi], 'PCFG'
     jne .bad
     cmp word [rdi+4], 1
+    je .version
+    cmp word [rdi+4], 2
     jne .bad
+.version:
     cmp word [rdi+6], CFP_SIZE
     jne .bad
     cmp qword [rdi+8], 0
@@ -331,11 +435,17 @@ cfp_fields:
     ja .bad
     cmp byte [rdi+85], INPUT_LAYOUT_COUNT
     jae .bad
-    cmp byte [rdi+86], 9
+    cmp byte [rdi+86], 10
     ja .bad
     cmp byte [rdi+87], 0
     jne .bad
     mov ecx, 96
+    cmp word [rdi+4], 1
+    je .zero
+    mov rax, [rdi+96]
+    cmp rax, [rdi+8]
+    jae .bad
+    mov ecx, 104
 .zero:
     cmp byte [rdi+rcx], 0
     jne .bad
@@ -355,6 +465,7 @@ cfp_fields:
     ret
 
 cfp_name: db 'PAOS    CFG'
+cfp_name_v2: db 'PAOS2   CFG'
 cfp_s_loaded: db '[config.data.loaded]',13,10,0
 cfp_s_pending: db '[config.data.pending]',13,10,0
 cfp_s_refused: db '[config.data.refused]',13,10,0
@@ -365,6 +476,8 @@ align 8, db 0
 cfp_token: times 112 db 0
 cfp_old: times CFP_SIZE db 0
 cfp_new: times CFP_SIZE db 0
+cfp_v2: times CFP_SIZE db 0
+cfp_revision_floor: dq 0
 cfp_busy: db 0
 config_prefs_state: db CFP_UNLOADED
 %endmacro

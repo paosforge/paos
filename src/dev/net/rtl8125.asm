@@ -1,10 +1,11 @@
 ;; MODULE dev/net/rtl8125
 ;; LAYER 3
-;; EXPORTS rtl8125_hw_bringup, rtl8125_ops, rtl8125_inst, rtl8125_bound, rtl8125_matches, rtl8125_frame_stats, rtl8125_link_status, rtl8125_carrier_prepare, rtl8125_carrier_set, rtl8125_carrier_observation
-;; IMPORTS boot/native_driver_gate, net/netdev, bus/pci, bus/hal, core/dma, core/time, boot/serial, bus/pci_claim
+;; EXPORTS rtl8125_link_rearm_counts, rtl8125_witness, rtl8125_hw_bringup, rtl8125_ops, rtl8125_inst, rtl8125_bound, rtl8125_matches, rtl8125_released, rtl8125_frame_stats, rtl8125_link_status, rtl8125_carrier_prepare, rtl8125_carrier_set, rtl8125_carrier_observation, rtl8125_carrier_ready, rtl8125_carrier_read, rtl8125_carrier_write, rtl8125_carrier_link, rtl8125_terminal_quiesce
+;; IMPORTS boot/native_driver_gate, net/netdev, bus/pci, bus/hal, core/dma, core/time, boot/serial, bus/pci_claim, hv/nic_assignment, hv/pci_assign
 ;; CAPS mmio dma
 ;; OWNER saga:net
 %include "boot/native_driver_gate.inc"
+%include "dev/net/realtek_link_rearm.inc"
 ; ============================================================================
 ; PaOS RTL8125 clean-room protocol from pinned BSD facts and PaOS interfaces.
 ; Firmware-left PHY state remains an experiment requiring separate metal proof.
@@ -88,6 +89,10 @@ struc r5i
     .rx_ring:    resq 1
     .tx_buffer:  resq 1
     .rx_buffers: resq 1
+    .isr_seen: resq 1               ; OR of actual existing ACK observations
+    .rx_poll_calls: resq 1
+    .rx_status_acks: resq 1          ; observed RX ISR classes before existing W1C
+    .tx_status_acks: resq 1          ; observed TX ISR classes, not delivered IRQs
     .tx_frames:  resq 1
     .rx_frames:  resq 1
     .tx_drops:   resq 1
@@ -104,6 +109,7 @@ struc r5i
     .obs_phys:   resq 1                ; last actual PHYstatus read, -2 none
     .obs_seq:    resq 1                ; accepted set operations, saturating
     .obs_final:  resq 1                ; 0 / -1, -2 unreturned
+    .link_rearm: resb REALTEK_LR_SIZE ; ordinary down/up state and counters
     .rxcfg:      resd 1
     .xid:        resd 1
     .tx_head:    resd 1
@@ -228,6 +234,280 @@ r5_contain_dma:
     ret
 
 ; r5_self(RDI=handle) -> RBX=instance or ZF set when RDI is not one of ours.
+
+; Trusted BSP observation: RDI exact selected handle, RSI 20-qword output.
+; EAX=0 complete, -1 unavailable (output may be partial; caller keeps validity
+; separate). Existing terminal/policy admission; no waits, PHY/OCP transactions,
+; MMIO writes, interrupt clears, DMA ownership writes or readiness decisions.
+; Schema: family, software TX cursor, tail(-1 unavailable), active TX slots,
+; OWN bitmap, RX cursor, current RX status, live PHY, ISR, IMR, TX/RX frames,
+; RX/TX status-ACK class counts (poll mode, NOT delivered IRQs), command,
+; service-derived new ISR bits, ACK ISR OR, TX timeouts, owner mismatches, RX polls.
+rtl8125_witness:
+    push rbx
+    call r5_self
+    jz .bad
+    cmp byte [rel rtl8125_terminal_latched], 0
+    jne .bad
+    mov al, 1
+    xchg al, [rbx + r5i.tx_busy]
+    test al, al
+    jnz .bad
+    call rtl8125_witness_active
+    mov byte [rbx + r5i.tx_busy], 0
+    pop rbx
+    ret
+.bad:
+    mov rax, -1
+    pop rbx
+    ret
+rtl8125_witness_active:
+    cmp byte [rel rtl8125_terminal_latched], 0
+    je .open
+    mov rax, -1
+    ret
+.open:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r13, rsi
+    call rtl8125_carrier_ready
+    cmp eax, 1
+    jne .bad
+    call r5_self
+    mov r12, [rbx + r5i.tx_ring]
+    test r12, r12
+    jz .bad
+    mov r14, [rbx + r5i.rx_ring]
+    test r14, r14
+    jz .bad
+    mov eax, [rbx + r5i.tx_head]
+    cmp eax, 32
+    jae .bad
+    mov [r13 + 8], rax
+    mov eax, [rbx + r5i.rx_cursor]
+    cmp eax, 64
+    jae .bad
+    mov [r13 + 40], rax
+    shl rax, 5
+    add r14, rax
+    clflush [r14]
+    mfence
+    mov eax, [r14 + 28]
+    mov [r13 + 48], rax
+    xor r15d, r15d
+    xor ecx, ecx
+.own:
+    clflush [r12]
+    mfence
+    mov eax, [r12]
+    test eax, 0x80000000
+    jz .next
+    bts r15, rcx
+.next:
+    add r12, 32
+    inc ecx
+    cmp ecx, 32
+    jb .own
+    mov [r13 + 32], r15
+    mov qword [r13 + 16], -1
+    mov qword [r13 + 24], 32
+    mov esi, 108
+    call r5_rd
+    jc .bad
+    and eax, 0xffff
+    mov [r13 + 56], rax
+    mov esi, 60
+    call r5_rd
+    jc .bad
+    mov [r13 + 64], rax
+    mov esi, 56
+    call r5_rd
+    jc .bad
+    mov [r13 + 72], rax
+    mov esi, 52
+    call r5_rd
+    jc .bad
+    shr eax, 24
+    mov [r13 + 112], rax
+    mov rax, [rbx + r5i.tx_frames]
+    mov [r13 + 80], rax
+    mov rax, [rbx + r5i.rx_frames]
+    mov [r13 + 88], rax
+    mov rax, [rbx + r5i.rx_status_acks]
+    mov [r13 + 96], rax
+    mov rax, [rbx + r5i.tx_status_acks]
+    mov [r13 + 104], rax
+    mov qword [r13 + 120], -1          ; service derives 8168 new ISR bits
+    mov rax, [rbx + r5i.isr_seen]
+    mov [r13 + 128], rax
+    mov rax, [rbx + r5i.tx_timeouts]
+    mov [r13 + 136], rax
+    mov rax, [rbx + r5i.owner_mismatches]
+    mov [r13 + 144], rax
+    mov rax, [rbx + r5i.rx_poll_calls]
+    mov [r13 + 152], rax
+    mov qword [r13], 8125
+    xor eax, eax
+    jmp .out
+.bad:
+    mov rax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; BEGIN CARRIER_DRILL_LEAVES
+; Trusted BSP leaves: coordinator admits exact membership+epoch before every
+; call. These also reject foreign handles and unarmed/recovering instances.
+rtl8125_carrier_ready:
+    NATIVE_DRIVER_REFUSE 6
+    push rbx
+    call r5_self
+    jz .bad
+    cmp byte [rbx + r5i.registered], 1
+    jne .bad
+    cmp byte [rbx + r5i.hw_ok], 1
+    jne .bad
+    cmp byte [rbx + r5i.rings_ok], 1
+    jne .bad
+    cmp byte [rbx + r5i.recover_busy], 0
+    jne .bad
+    mov eax, 1
+    pop rbx
+    ret
+.bad:
+    xor eax, eax
+    pop rbx
+    ret
+rtl8125_carrier_read:
+    push rbx
+    call r5_self
+    jz .refuse
+    cmp byte [rel rtl8125_terminal_latched], 0
+    jne .refuse
+    mov al, 1
+    xchg al, [rbx+r5i.tx_busy]
+    test al, al
+    jnz .refuse
+    cmp byte [rel rtl8125_terminal_latched], 0
+    jne .release_refuse
+    call rtl8125_carrier_read_active
+    mov byte [rbx+r5i.tx_busy], 0
+    pop rbx
+    ret
+.release_refuse:
+    mov byte [rbx+r5i.tx_busy], 0
+.refuse:
+    mov rax, -1
+    pop rbx
+    ret
+rtl8125_carrier_read_active:
+    push rbx
+    call rtl8125_carrier_ready
+    cmp eax, 1
+    jne .bad
+    call r5_self
+    mov edi, C25_BMCR_OCP
+    call r5_phy_read
+    jc .bad
+    pop rbx
+    ret
+.bad:
+    mov rax, -1
+    pop rbx
+    ret
+rtl8125_carrier_write:
+    push rbx
+    call r5_self
+    jz .refuse
+    cmp byte [rel rtl8125_terminal_latched], 0
+    jne .refuse
+    mov al, 1
+    xchg al, [rbx+r5i.tx_busy]
+    test al, al
+    jnz .refuse
+    cmp byte [rel rtl8125_terminal_latched], 0
+    jne .release_refuse
+    call rtl8125_carrier_write_active
+    mov byte [rbx+r5i.tx_busy], 0
+    pop rbx
+    ret
+.release_refuse:
+    mov byte [rbx+r5i.tx_busy], 0
+.refuse:
+    mov rax, -1
+    pop rbx
+    ret
+rtl8125_carrier_write_active:
+    push rbx
+    call rtl8125_carrier_ready
+    cmp eax, 1
+    jne .bad
+    test esi, 0xffff0000
+    jnz .bad
+    call r5_self
+    mov edx, esi
+    mov edi, C25_BMCR_OCP
+    call r5_phy_write
+    jc .bad
+    pop rbx
+    ret
+.bad:
+    mov rax, -1
+    pop rbx
+    ret
+rtl8125_carrier_link:
+    push rbx
+    call r5_self
+    jz .refuse
+    cmp byte [rel rtl8125_terminal_latched], 0
+    jne .refuse
+    mov al, 1
+    xchg al, [rbx+r5i.tx_busy]
+    test al, al
+    jnz .refuse
+    cmp byte [rel rtl8125_terminal_latched], 0
+    jne .release_refuse
+    call rtl8125_carrier_link_active
+    mov byte [rbx+r5i.tx_busy], 0
+    pop rbx
+    ret
+.release_refuse:
+    mov byte [rbx+r5i.tx_busy], 0
+.refuse:
+    mov rax, -1
+    pop rbx
+    ret
+rtl8125_carrier_link_active:
+    push rbx
+    call rtl8125_carrier_ready
+    cmp eax, 1
+    jne .bad
+    call r5_self
+    ; Passive physical observation: no cached-link or DNS policy mutation.
+    mov esi, C25_PHY_STATUS
+    call r5_rd16
+    jc .bad
+    movzx edx, ax
+    cmp edx, 0xffff
+    je .bad
+    shr eax, 1
+    and eax, 1
+    pop rbx
+    ret
+.bad:
+    mov rdx, -1
+    mov rax, -1
+    pop rbx
+    ret
+; END CARRIER_DRILL_LEAVES
+
 r5_self:
     lea  rbx, [rel rtl8125_inst]
     cmp  rdi, rbx
@@ -270,6 +550,11 @@ rtl8125_frame_stats:
 ; second producer refuses at once; admission is released on every later path,
 ; while a timed-out descriptor keeps OWN and its bounce bytes.
 rtl8125_tx:
+    cmp byte [rel rtl8125_terminal_latched], 0
+    je .active_entry
+    mov rax, -1
+    ret
+.active_entry:
     push rbx
     push r12
     push r13
@@ -298,6 +583,21 @@ rtl8125_tx:
     jb   .drop
     cmp  r14, R5_FRAME_MAX
     ja   .drop
+    call r5_lr_tick
+    test eax, eax
+    jnz .drop
+    ; Never publish a new OWN descriptor while carrier is down/unknown.
+    ; A timed-out slot stays chip-owned and cannot be reused by the caller.
+    ; Use a checked fresh PHY status, preserving the caller's frame pointer.
+    mov  r12, rsi
+    mov  esi, 0x6c
+    call r5_rd16
+    mov  rsi, r12
+    jc   .drop
+    cmp  eax, 0xffff
+    jae  .drop
+    test eax, 2
+    jz   .drop
     mov  r13d, [rbx + r5i.tx_head]
     cmp  r13d, R5_NUM_TX
     jae  .owner_bad
@@ -378,6 +678,28 @@ rtl8125_tx:
 ; RDI=self, RSI=destination, RDX=capacity -> RAX length/0/-1.
 rtl8125_rx_poll:
     push rbx
+    call r5_self
+    jz .refuse
+    cmp byte [rel rtl8125_terminal_latched], 0
+    jne .refuse
+    mov al, 1
+    xchg al, [rbx+r5i.tx_busy]
+    test al, al
+    jnz .refuse
+    cmp byte [rel rtl8125_terminal_latched], 0
+    jne .release_refuse
+    call rtl8125_rx_poll_active
+    mov byte [rbx+r5i.tx_busy], 0
+    pop rbx
+    ret
+.release_refuse:
+    mov byte [rbx+r5i.tx_busy], 0
+.refuse:
+    mov rax, -1
+    pop rbx
+    ret
+rtl8125_rx_poll_active:
+    push rbx
     push r12
     push r13
     push r14
@@ -390,6 +712,10 @@ rtl8125_rx_poll:
     je   .bad_handle
     cmp  qword [rbx + r5i.rx_buffers], 0
     je   .bad_handle
+    call r5_lr_tick
+    test eax, eax
+    jnz .bad_handle
+    inc qword [rbx + r5i.rx_poll_calls]
     mov  r12, rsi                         ; caller destination
     mov  r13, rdx                         ; caller capacity
     mov  r15d, [rbx + r5i.rx_cursor]
@@ -496,6 +822,15 @@ r5_ack_status:
     jc   .out
     test eax, eax
     jz   .out
+    or [rbx + r5i.isr_seen], rax
+    test eax, 3                       ; RX OK/error class, one observed W1C
+    jz .no_rx_count
+    inc qword [rbx + r5i.rx_status_acks]
+.no_rx_count:
+    test eax, 12                      ; TX OK/error class
+    jz .no_tx_count
+    inc qword [rbx + r5i.tx_status_acks]
+.no_tx_count:
     mov  edx, eax
     call r5_wr                         ; exact observed W1C bits, no IMR write
 .out:
@@ -547,9 +882,34 @@ r5_link_refresh:
 rtl8125_link_status:
     push rbx
     call r5_self
+    jz .refuse
+    cmp byte [rel rtl8125_terminal_latched], 0
+    jne .refuse
+    mov al, 1
+    xchg al, [rbx+r5i.tx_busy]
+    test al, al
+    jnz .refuse
+    cmp byte [rel rtl8125_terminal_latched], 0
+    jne .release_refuse
+    call rtl8125_link_status_active
+    mov byte [rbx+r5i.tx_busy], 0
+    pop rbx
+    ret
+.release_refuse:
+    mov byte [rbx+r5i.tx_busy], 0
+.refuse:
+    mov rax, -1
+    pop rbx
+    ret
+rtl8125_link_status_active:
+    push rbx
+    call r5_self
     jz   .down
     cmp  byte [rbx + r5i.hw_ok], 1
     jne  .down
+    call r5_lr_tick
+    test eax, eax
+    jnz .unknown
     call r5_link_refresh
     test eax, eax
     jnz  .unknown
@@ -562,6 +922,8 @@ rtl8125_link_status:
     jmp  .out
 .unknown:
     mov  rax, -1                       ; consumers compare the full register
+    mov  byte [rbx + r5i.link_up], 0    ; rearm refusal also invalidates cached status
+    mov  dword [rbx + r5i.link_speed], 0
     jmp  .out
 .down:
     xor  eax, eax
@@ -574,6 +936,28 @@ rtl8125_link_status:
 ; the one MMIO write, never PHY configuration or data. A powered-down or
 ; isolated BMCR, unknown or offline link, or recovery in progress refuses.
 rtl8125_carrier_prepare:
+    push rbx
+    call r5_self
+    jz .refuse
+    cmp byte [rel rtl8125_terminal_latched], 0
+    jne .refuse
+    mov al, 1
+    xchg al, [rbx+r5i.tx_busy]
+    test al, al
+    jnz .refuse
+    cmp byte [rel rtl8125_terminal_latched], 0
+    jne .release_refuse
+    call rtl8125_carrier_prepare_active
+    mov byte [rbx+r5i.tx_busy], 0
+    pop rbx
+    ret
+.release_refuse:
+    mov byte [rbx+r5i.tx_busy], 0
+.refuse:
+    mov rax, -1
+    pop rbx
+    ret
+rtl8125_carrier_prepare_active:
     push rbx
     call r5_self
     jz   .refuse
@@ -608,6 +992,28 @@ rtl8125_carrier_prepare:
 ; not be up (restore runs during the outage). Stages and raw returns are
 ; retained for carrier_observation; nothing here synthesizes link state.
 rtl8125_carrier_set:
+    push rbx
+    call r5_self
+    jz .refuse
+    cmp byte [rel rtl8125_terminal_latched], 0
+    jne .refuse
+    mov al, 1
+    xchg al, [rbx+r5i.tx_busy]
+    test al, al
+    jnz .refuse
+    cmp byte [rel rtl8125_terminal_latched], 0
+    jne .release_refuse
+    call rtl8125_carrier_set_active
+    mov byte [rbx+r5i.tx_busy], 0
+    pop rbx
+    ret
+.release_refuse:
+    mov byte [rbx+r5i.tx_busy], 0
+.refuse:
+    mov rax, -1
+    pop rbx
+    ret
+rtl8125_carrier_set_active:
     push rbx
     push r12
     call r5_self
@@ -1098,6 +1504,28 @@ r5_no_link:
 
 ; recover(self=RDI) -> RAX 0 / -1. Reset, same-MAC identity, re-arm, link read.
 rtl8125_recover:
+    push rbx
+    call r5_self
+    jz .refuse
+    cmp byte [rel rtl8125_terminal_latched], 0
+    jne .refuse
+    mov al, 1
+    xchg al, [rbx+r5i.tx_busy]
+    test al, al
+    jnz .refuse
+    cmp byte [rel rtl8125_terminal_latched], 0
+    jne .release_refuse
+    call rtl8125_recover_active
+    mov byte [rbx+r5i.tx_busy], 0
+    pop rbx
+    ret
+.release_refuse:
+    mov byte [rbx+r5i.tx_busy], 0
+.refuse:
+    mov rax, -1
+    pop rbx
+    ret
+rtl8125_recover_active:
     NATIVE_DRIVER_REFUSE 6
     push rbx
     call r5_self
@@ -1481,6 +1909,56 @@ r5_ops_init:
     mov  [rel rtl8125_info], rax
     ret
 
+; U3b r5_release(RBX=inst): a probed port that no attach pass tried, because another
+; port already registered. PaOS policy keeps one native RTL8125 so the other can be
+; assigned to a guest. Rings were never armed and no DMA was allocated. Clear Bus Master
+; Enable the same way .fail_bm does (other Command bits kept, Status W1C bits not echoed).
+; Print one marker, then zero the slot so terminal quiesce and the inactive observation
+; see an inactive slot. The caller marks it released, so no pci_claim is recorded.
+; Preserves RBX, R12, R13.
+r5_release:
+    push rbx
+    push r12
+    push r13
+    mov  eax, [rbx + r5i.bdf]
+    mov  r13d, eax
+    shr  r13d, 16
+    and  r13d, 0xFF                      ; bus
+    mov  r12d, eax
+    shr  r12d, 8
+    and  r12d, 0x1F                      ; device
+    and  eax, 7
+    push rax                             ; function
+    sub  rsp, 8
+    mov  edi, r13d
+    mov  esi, r12d
+    mov  edx, [rsp + 8]
+    mov  ecx, 0x04
+    call pci_cfg_read32
+    and  eax, 0x0000FFFB
+    mov  r8d, eax
+    mov  edi, r13d
+    mov  esi, r12d
+    mov  edx, [rsp + 8]
+    mov  ecx, 0x04
+    call pci_cfg_write32
+    add  rsp, 16
+    lea  rdi, [rel str_r5_released]
+    call serial_string
+    mov  rdi, [rbx + r5i.bdf]
+    call serial_hex64
+    lea  rdi, [rel str_r5_released_tail]
+    call serial_string
+    mov  rdi, rbx
+    mov  ecx, r5i_size
+    xor  eax, eax
+    cld
+    rep  stosb
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+
 ; Final PCI reporting for each bounded match, in discovery/probe order.
 ; Includes unsuccessful probes: their BDF was stored before the first effect.
 ; Preserves all general-purpose registers; pci_claim_packed16 does likewise.
@@ -1502,6 +1980,8 @@ r5_record_claims:
 .claim_loop:
     cmp  r12d, r13d
     jae  .out
+    bt   dword [rel rtl8125_released_mask], r12d
+    jc   .next                           ; U3b: released for passthrough, never claimed
     mov  edi, [rbx + r5i.bdf]
     mov  ecx, PCI_DRV_RTL8125
     mov  r8d, PCI_CLAIM_FAILED
@@ -1528,6 +2008,12 @@ r5_record_claims:
 ; rtl8125_hw_bringup — every target: absent -> one marker, nothing registered.
 ; ============================================================================
 rtl8125_hw_bringup:
+    PCIA_NATIVE_COLD_REFUSE                        ; no unattempted FAILED claim/slot reset
+    cmp byte [rel rtl8125_terminal_latched], 0
+    je .active_entry
+    mov rax, -1
+    ret
+.active_entry:
     NATIVE_DRIVER_REFUSE 6
     push rbx
     push r12
@@ -1535,6 +2021,8 @@ rtl8125_hw_bringup:
     call r5_ops_init
     mov  dword [rel rtl8125_matches], 0
     mov  dword [rel rtl8125_bound], 0
+    mov  dword [rel rtl8125_released], 0
+    mov  dword [rel rtl8125_released_mask], 0
     lea  rdi, [rel rtl8125_inst]
     mov  ecx, r5i_size * R5_MAX_INST
     xor  eax, eax
@@ -1584,6 +2072,8 @@ rtl8125_hw_bringup:
     jne  .linked_next
     cmp  byte [rbx + r5i.link_up], 1
     jne  .linked_next
+    cmp  dword [rel rtl8125_bound], 0     ; U3b: one native port; the rest stay free
+    jne  .linked_next
     call r5_attach
 .linked_next:
     inc  r12d
@@ -1594,7 +2084,7 @@ rtl8125_hw_bringup:
     xor  r12d, r12d
 .rest:
     cmp  r12d, r13d
-    jae  .done
+    jae  .release_rest
     imul ebx, r12d, r5i_size
     lea  rax, [rel rtl8125_inst]
     add  rbx, rax
@@ -1602,10 +2092,30 @@ rtl8125_hw_bringup:
     jne  .rest_next
     cmp  byte [rbx + r5i.attach_attempted], 0
     jne  .rest_next
+    cmp  dword [rel rtl8125_bound], 0
+    jne  .rest_next
     call r5_attach
 .rest_next:
     inc  r12d
     jmp  .rest
+.release_rest:                                    ; U3b: release the never-attempted ports
+    xor  r12d, r12d
+.release:
+    cmp  r12d, r13d
+    jae  .done
+    imul ebx, r12d, r5i_size
+    lea  rax, [rel rtl8125_inst]
+    add  rbx, rax
+    cmp  byte [rbx + r5i.probed], 1
+    jne  .release_next
+    cmp  byte [rbx + r5i.attach_attempted], 0
+    jne  .release_next
+    call r5_release
+    bts  dword [rel rtl8125_released_mask], r12d
+    inc  dword [rel rtl8125_released]
+.release_next:
+    inc  r12d
+    jmp  .release
 .done:
     call r5_record_claims
     pop  r13
@@ -1613,13 +2123,442 @@ rtl8125_hw_bringup:
     pop  rbx
     ret
 
+; Terminal shutdown only. Trusted caller supplies 160 writable bytes, IF=0.
+; Stack snapshots and current registry epochs are never serialized as pointers.
+; No buffers, descriptors or mappings are released, even on complete shutdown.
+rtl8125_terminal_quiesce:
+    push rbx
+    push rbp
+    push r12
+    push r13
+    push r14
+    push r15
+    sub rsp, 1088
+    mov rbp, rsp
+    mov r12, rdi
+    xor eax, eax
+    mov ecx, 40
+    cld
+    rep stosd
+    mov dword [r12], 1
+    mov dword [r12+32], -1            ; unvisited is never verified inactive
+    mov dword [r12+96], -1
+    mov dword [rbp+1040], 0           ; temporary held producer gates
+    mov dword [rbp+1048], 0           ; verified applicable instances
+    cmp byte [rel rtl8125_terminal_latched], 0
+    jne .uncertain
+    pushfq
+    pop rax
+    test eax, 0x200
+    jnz .refuse
+%ifdef PAOS_NIC_ASSIGNMENT
+    call nic_assignment_owned
+    test eax, eax
+    jnz .refuse
+%endif
+    mov rdi, rbp
+    call pci_claim_snapshot
+    test edx, edx
+    jnz .refuse
+    cmp eax, 32
+    ja .refuse
+    mov [rbp+1044], eax
+    mov [r12+20], eax
+    cmp dword [rel rtl8125_matches], R5_MAX_INST
+    ja .refuse
+    cmp dword [rel rtl8125_bound], R5_MAX_INST
+    ja .refuse
+    xor r13d, r13d
+    lea rbx, [rel rtl8125_inst]
+    lea r15, [r12+32]
+.preflight:
+    mov dword [r15], -1
+    cmp byte [rbx+r5i.registered], 1
+    je .member
+    ; An inactive slot must have no retained bind, DMA, hardware or class state.
+    ; Passive operands for this original scan; no address or second scan.
+    movzx eax, byte [rbx+r5i.registered]
+    mov [r15+12], eax
+    mov dword [r15+16], r5i_size
+    mov eax, [rel rtl8125_matches]
+    mov [r15+32], eax
+    mov eax, [rel rtl8125_bound]
+    mov [r15+36], eax
+    mov eax, [rbp+1044]
+    mov [r15+40], eax
+    mov rdi, rbx
+    mov ecx, r5i_size
+    xor eax, eax
+    repe scasb
+    ; MOV/SETZ preserve the original ZF consumed by the following JNE.
+    mov [r15+20], ecx
+    setz byte [r15+24]
+    mov dword [r15+8], (1 << 7) | (1 << 8)
+    jne .refuse
+    mov dword [r15], 0
+    jmp .next
+.member:
+    cmp byte [rbx+r5i.hw_ok], 1
+    jne .refuse
+    cmp byte [rbx+r5i.rings_ok], 1
+    jne .refuse
+    cmp byte [rbx+r5i.recover_busy], 0
+    jne .refuse
+    mov al, 1
+    xchg al, [rbx+r5i.tx_busy]
+    test al, al
+    jnz .refuse
+    bts dword [rbp+1040], r13d
+    mov rdi, [rbx+r5i.tx_ring]
+    mov esi, R5_NUM_TX*R5_DESC_SIZE
+    call r5_dma_range_ok
+    cmp eax, 1
+    jne .refuse
+    mov rdi, [rbx+r5i.rx_ring]
+    mov esi, R5_NUM_RX*R5_DESC_SIZE
+    call r5_dma_range_ok
+    cmp eax, 1
+    jne .refuse
+    mov rdi, [rbx+r5i.tx_buffer]
+    mov esi, R5_TX_BUF
+    call r5_dma_range_ok
+    cmp eax, 1
+    jne .refuse
+    mov rdi, [rbx+r5i.rx_buffers]
+    mov esi, R5_NUM_RX*R5_RX_BUF
+    call r5_dma_range_ok
+    cmp eax, 1
+    jne .refuse
+    mov edi, [rbx+r5i.bdf]
+    test edi, 0xff00e0f8
+    jnz .refuse
+    mov [r15+12], edi
+    xor r14d, r14d
+    xor ecx, ecx
+.claim:
+    cmp ecx, [rbp+1044]
+    jae .claim_done
+    mov eax, ecx
+    shl eax, 4
+    add rax, rbp
+    cmp [rax], edi
+    jne .claim_next
+    inc r14d
+    cmp dword [rax+4], PCI_DRV_RTL8125
+    jne .refuse
+    cmp dword [rax+8], PCI_CLAIM_BOUND
+    jne .refuse
+    mov edx, [rax+12]
+    test edx, edx
+    jz .refuse
+    mov [r15+16], edx
+.claim_next:
+    inc ecx
+    jmp .claim
+.claim_done:
+    cmp r14d, 1
+    jne .refuse
+    or dword [r15+8], 1
+    mov rdi, rbx
+    lea rsi, [rel rtl8125_ops]
+    call netdev_power_member
+    test rax, rax
+    jnz .registry
+    mov rdi, rbx
+    lea rsi, [rel rtl8125_ops]
+    call netdev_link_wait_member
+    test rax, rax
+    jz .refuse
+.registry:
+    test rdx, rdx
+    jz .refuse
+    cmp rdx, -1
+    je .refuse
+    mov [rbp+1024+r13*8], rax
+    mov [r15+20], rdx
+    or dword [r15+8], 2
+    mov ecx, 0
+    call r5_terminal_cfg
+    mov [r15+28], eax
+    cmp eax, R5_VENDEV
+    jne .refuse
+    mov ecx, 4
+    call r5_terminal_cfg
+    cmp eax, -1
+    je .refuse
+    movzx eax, ax
+    mov [r15+36], eax
+    test eax, 2                        ; memory decoding required for HAL
+    jz .refuse
+    mov ecx, 0x18
+    call r5_terminal_cfg
+    test al, 1
+    jnz .refuse
+    mov edx, eax
+    and edx, 0xfffffff0
+    cmp rdx, [rbx+r5i.region]
+    jne .refuse
+    test edx, edx
+    jz .refuse
+    test al, 4
+    jz .bar_ok
+    mov ecx, 0x1c
+    call r5_terminal_cfg
+    test eax, eax
+    jnz .refuse
+.bar_ok:
+    cmp qword [rbx+r5i.region+8], 0x10000
+    jne .refuse
+    or dword [r15+8], 4
+    mov esi, C25_TXCFG
+    call r5_rd
+    jc .refuse
+    mov [r15+32], eax
+    and eax, C25_REV_MASK
+    cmp eax, C25_REV_A
+    je .revision
+    cmp eax, C25_REV_B
+    jne .refuse
+.revision:
+    shr eax, 20
+    cmp eax, [rbx+r5i.xid]
+    jne .refuse
+    or dword [r15+8], 8
+    ; Poll-mode is the only admitted native interrupt configuration.
+    mov esi, C25_MASK
+    call r5_rd
+    jc .refuse
+    test eax, eax
+    jnz .refuse
+    inc dword [rbp+1048]
+.next:
+    inc r13d
+    add rbx, r5i_size
+    add r15, 64
+    cmp r13d, R5_MAX_INST
+    jb .preflight
+    ; Complete snapshot must contain exactly these RTL functions, no extras.
+    xor ecx, ecx
+    xor edx, edx
+.count_claims:
+    cmp ecx, [rbp+1044]
+    jae .counted
+    mov eax, ecx
+    shl eax, 4
+    cmp dword [rbp+rax+4], PCI_DRV_RTL8125
+    jne .count_next
+    inc edx
+.count_next:
+    inc ecx
+    jmp .count_claims
+.counted:
+    cmp edx, [rbp+1048]
+    jne .refuse
+    cmp edx, [rel rtl8125_bound]
+    jne .refuse
+    mov eax, [rel rtl8125_matches]
+    sub eax, [rel rtl8125_released]        ; U3b: released ports carry no claim
+    cmp edx, eax
+    jne .refuse
+    mov [r12+8], edx
+    ; Revalidate full claim census, including sequence, after all producer gates.
+    lea rdi, [rbp+512]
+    call pci_claim_snapshot
+    test edx, edx
+    jnz .refuse
+    cmp eax, [rbp+1044]
+    jne .refuse
+    mov ecx, eax
+    shl ecx, 1
+    mov rsi, rbp
+    lea rdi, [rbp+512]
+    repe cmpsq
+    jne .refuse
+    cmp dword [rbp+1048], 0
+    je .inactive
+    xor r13d, r13d
+    lea r15, [r12+32]
+.epochs:
+    bt dword [rbp+1040], r13d
+    jnc .epoch_next
+    mov rax, [rbp+1024+r13*8]
+    mov rdx, [r15+20]
+    cmp [rax], rdx
+    jne .refuse
+.epoch_next:
+    inc r13d
+    add r15, 64
+    cmp r13d, R5_MAX_INST
+    jb .epochs
+    ; Irreversible boot-local latch. Every hardware producer takes the same gate.
+    mov al, 1
+    xchg al, [rel rtl8125_terminal_latched]
+    test al, al
+    jnz .uncertain
+    xor r13d, r13d
+    lea rbx, [rel rtl8125_inst]
+    lea r15, [r12+32]
+.effects:
+    bt dword [rbp+1040], r13d
+    jnc .effect_next
+    mov dword [r15], -2
+    mov dword [r15+4], 1
+    call r5_terminal_effect
+    cmp eax, 1
+    jne .uncertain
+    mov dword [r15], 1
+    inc dword [r12+12]
+.effect_next:
+    inc r13d
+    add rbx, r5i_size
+    add r15, 64
+    cmp r13d, R5_MAX_INST
+    jb .effects
+    mov eax, 1
+    jmp .out
+.inactive:
+    xor eax, eax
+    jmp .out
+.refuse:
+    ; No latch or device write has occurred. Release only our temporary gates.
+    xor r13d, r13d
+    lea rbx, [rel rtl8125_inst]
+.release:
+    bt dword [rbp+1040], r13d
+    jnc .released
+    mov byte [rbx+r5i.tx_busy], 0
+.released:
+    inc r13d
+    add rbx, r5i_size
+    cmp r13d, R5_MAX_INST
+    jb .release
+    mov eax, -1
+    mov dword [r12+16], 1
+    jmp .out
+.uncertain:
+    mov eax, -2
+    mov dword [r12+16], 2
+.out:
+    mov [r12+4], eax
+    add rsp, 1088
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbp
+    pop rbx
+    ret
+
+; RBX exact admitted instance, ECX configuration offset. Preserve nonvolatiles.
+r5_terminal_cfg:
+    mov rdi, [rbx+r5i.bdf]
+    mov edx, edi
+    and edx, 7
+    mov esi, edi
+    shr esi, 8
+    and esi, 31
+    shr edi, 16
+    and edi, 255
+    jmp pci_cfg_read32
+
+; Trusted effect after all producer gates + latch. Exact-width HAL CF checked.
+; OpenBSD pinned rge_reset reset completion: 100 polls, 100us each. Omitted
+; optional FIFO drains are not claimed; terminal reset+CR/IMR+own-function BME
+; readbacks are required and descriptor memory remains pinned unconditionally.
+r5_terminal_effect:
+    mov esi, C25_MASK
+    xor edx, edx
+    call r5_wr
+    jc .failed
+    mov esi, C25_RXCFG
+    mov edx, 0x3f
+    call r5_andn
+    jc .failed
+    mov esi, C25_RX_GATE
+    mov edx, 8
+    call r5_byte_or
+    jc .failed
+    mov esi, C25_COMMAND
+    mov edx, 0x10
+    call r5_wr8
+    jc .failed
+    mov dword [r15+4], 2
+    mov r14d, 100
+.poll:
+    mov edi, 100
+    call tsc_delay_us
+    inc dword [r15+52]
+    mov esi, C25_COMMAND
+    call r5_rd8
+    jc .failed
+    mov [r15+48], eax
+    or dword [r15+8], 16
+    test al, 0x10
+    jz .reset
+    dec r14d
+    jnz .poll
+    jmp .failed
+.reset:
+    test al, 0x0c
+    jnz .failed
+    mov dword [r15+4], 3
+    mov esi, C25_MASK
+    xor edx, edx
+    call r5_wr
+    jc .failed
+    mov esi, C25_MASK
+    call r5_rd
+    jc .failed
+    mov [r15+44], eax
+    or dword [r15+8], 32
+    test eax, eax
+    jnz .failed
+    mov dword [r15+4], 4
+    mov ecx, 4
+    call r5_terminal_cfg
+    cmp eax, -1
+    je .failed
+    and eax, 0xfffb
+    mov r8d, eax
+    ; PCI status is W1C: high16 remain zero, only own function Command changes.
+    mov rdi, [rbx+r5i.bdf]
+    mov edx, edi
+    and edx, 7
+    mov esi, edi
+    shr esi, 8
+    and esi, 31
+    shr edi, 16
+    and edi, 255
+    mov ecx, 4
+    call pci_cfg_write32
+    mov ecx, 4
+    call r5_terminal_cfg
+    cmp eax, -1
+    je .failed
+    movzx eax, ax
+    mov [r15+40], eax
+    or dword [r15+8], 64
+    test eax, 4
+    jnz .failed
+    mov dword [r15+4], 5
+    mov eax, 1
+    ret
+.failed:
+    mov dword [r15+56], 2
+    mov eax, -2
+    ret
+
 ; --- rtl8125 data (in-image writable) ---------------------------------------------
 align 8
 rtl8125_inst:      times r5i_size * R5_MAX_INST db 0
 rtl8125_scan_bdf:  times R5_MAX_SCAN dq 0
 rtl8125_ops:       times netdev_ops_size db 0     ; filled at runtime (no image-absolute pointers)
+rtl8125_terminal_latched: db 0
+align 4
 rtl8125_matches:   dd 0
 rtl8125_bound:     dd 0
+rtl8125_released:  dd 0                    ; U3b: probed ports left free for passthrough
+rtl8125_released_mask: dd 0               ; bit i = instance slot i released
 align 8
 rtl8125_info:
     dq 0                               ; name: filled at runtime
@@ -1645,6 +2584,8 @@ str_r5_nolink_bmcr: db " bmcr=", 0
 str_r5_nolink_kick: db " pdown_cleared=", 0      ; PaOS diagnostic codes: 0 none, 1 acknowledged, 2 timeout
 str_r5_nolink_ll:  db " ll_rdy_timeout=", 0
 str_r5_nolink_tail: db " [netdev.rtl8125.nolink]", 13, 10, 0
+str_r5_released:   db "[PAOS64] L2 netdev: RTL8125 left unclaimed for device assignment bdf=", 0
+str_r5_released_tail: db " [netdev.rtl8125.released]", 13, 10, 0
 str_r5_probefail:  db "[PAOS64] L2 netdev: RTL8125 probe refused -> not registered bdf=", 0
 str_r5_probefail_why: db " reason=", 0
 str_r5_probefail_tail: db " [netdev.rtl8125.probe_fail]", 13, 10, 0
@@ -1653,3 +2594,87 @@ str_r5_why_bar_4g: db "bar_above_4g", 0
 str_r5_why_bar_zero: db "bar_zero", 0
 str_r5_why_reset:  db "reset_timeout", 0
 str_r5_why_mac:    db "bad_mac", 0
+
+; Ordinary link maintenance, called only while this instance's producer gate
+; is held. No ring/bounce allocation and no descriptor mutation before reset.
+r5_lr_tick:
+    NATIVE_DRIVER_REFUSE 6
+    lea rax, [rbx+r5i.link_rearm]
+    REALTEK_LINK_REARM_BODY r5
+r5_lr_sample:
+    cmp byte [rbx+r5i.rings_ok], 1
+    jne .bad
+    cmp qword [rbx+r5i.tx_ring], 0
+    je .bad
+    mov esi, C25_PHY_STATUS
+    call r5_rd16
+    jc .bad
+    movzx eax, ax
+    mov [rbx+r5i.phys_raw], eax
+    mov [rbx+r5i.obs_phys], rax    ; retain every actual read, including unavailable 0xffff
+    cmp eax, 0xffff
+    je .bad
+    shr eax, 1
+    and eax, 1
+    ret
+.bad:
+    mov rax, -1
+    ret
+r5_lr_own:
+    mov r8, [rbx+r5i.tx_ring]
+    xor eax, eax
+    xor ecx, ecx
+.loop:
+    clflush [r8]
+    mfence
+    test dword [r8], C25_OWN
+    jz .next
+    bts eax, ecx
+.next:
+    add r8, R5_DESC_SIZE
+    inc ecx
+    cmp ecx, R5_NUM_TX
+    jb .loop
+    ret
+r5_lr_phy_read:
+    call r5_phy_read
+    jc .bad
+    ret
+.bad:
+    mov rax, -1
+    ret
+r5_lr_phy_write:
+    call r5_phy_write
+    jc .bad
+    xor eax, eax
+    ret
+.bad:
+    mov rax, -1
+    ret
+r5_lr_advertise:
+    xor eax, eax                 ; retain this port's existing advertisement
+    ret
+r5_lr_wake:
+    REALTEK_PHY_WAKE_BODY r5
+r5_lr_ready:
+    REALTEK_PHY_READY_BODY r5
+r5_lr_reset:
+    mov rdi, rbx
+    jmp rtl8125_recover_active
+r5_lr_close:
+    jmp r5_contain_dma
+
+; Read-only aggregate over the two independently admitted ports. Five qwords:
+; down/up/rearmed/stuckOWN/failures. Diagnostic counts, not atomic proof.
+rtl8125_link_rearm_counts:
+    lea r8, [rel rtl8125_inst+r5i.link_rearm+16]
+    lea r9, [r8+r5i_size]
+    xor ecx, ecx
+.copy:
+    mov rax, [r8+rcx*8]
+    add rax, [r9+rcx*8]
+    mov [rdi+rcx*8], rax
+    inc ecx
+    cmp ecx, 5
+    jb .copy
+    ret

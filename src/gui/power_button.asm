@@ -1,7 +1,7 @@
 ;; MODULE gui/power_button
 ;; LAYER 6
 ;; EXPORTS pwr_m1_sleep_exec, pwr_m1_restore_on_signin, power_events_tick, power_remote_shutdown_tick, power_lid_changes, power_bl_verb_id, cmd_verb_backlight
-;; IMPORTS svc/m1_checkpoint, gui/session_restore, svc/command_auth, fs/vfs, core/sched, dev/power/ec_power, svc/command, svc/command_shutdown, gui/power_exec, core/time, sec/principal, sec/session, config/keep_config, gui/lock_screen, boot/header, boot/boot_v2_handoff, boot/boot_v2_health, boot/serial, gui/window, gui/command_gui, bus/acpi
+;; IMPORTS svc/m1_checkpoint, gui/session_restore, svc/command_auth, fs/vfs, core/sched, dev/power/ec_power, svc/command, svc/command_shutdown, gui/power_exec, gui/terminal_app, core/time, sec/principal, sec/session, config/keep_config, gui/lock_screen, boot/header, boot/boot_v2_handoff, boot/boot_v2_health, boot/serial, gui/window, gui/command_gui, bus/acpi
 ;; CAPS CAP_GUI
 ;; OWNER saga:rc_power
 ; ============================================================================
@@ -169,8 +169,8 @@ power_events_tick:
 ; PWR_BTN_GRACE_MS grace; power_events_tick then runs the same power_execute. The
 ; gates are the press's own and are not re-run: the grace only delays, it never
 ; extends or cancels. A second routed press inside the grace, or no calibrated clock,
-; executes at once. Nothing outside this module reads or writes the grace state, so no
-; verb can hold it. Why: the box answers UDP for ~1 s after the route, so a 200 ms
+; executes at once. No observer writes the grace state, so no verb can hold it.
+; Why: the box answers UDP for ~1 s after the route, so a 200 ms
 ; STATUS poller sees ROUTED 0->1 between the press and the power-off.
 PWR_BTN_GRACE_MS equ 1000
 pwr_button_pressed:
@@ -434,11 +434,13 @@ pwr_busy_job:
 .out:
     ret
 
-; cmd_verb_backlight(RDI=req, RSI=rsp): BACKLIGHT [pct]
+; cmd_verb_backlight(RDI=req, RSI=rsp): BACKLIGHT [pct | DUTY nonzero-duty]
 cmd_verb_backlight:
     call cmd_handler_prologue
     push rbx
     push r12
+    push r13
+    xor  r13d, r13d
     mov  r12, rsi
     mov  rbx, [rdi + REQ_ARG]
     xor  eax, eax
@@ -446,6 +448,13 @@ cmd_verb_backlight:
     jz   .noarg
     cmp  byte [rbx], 0
     je   .noarg
+    cmp  dword [rbx], 0x59545544             ; DUTY (existing owner verb)
+    jne  .percent
+    cmp  byte [rbx+4], ' '
+    jne  .badarg
+    add  rbx, 5
+    mov  r13d, 1
+.percent:
     xor  ecx, ecx                            ; value
     xor  edx, edx                            ; digits
 .digit:
@@ -456,20 +465,36 @@ cmd_verb_backlight:
     cmp  r8d, 9
     ja   .badarg
     inc  edx
-    cmp  edx, 3
+    cmp  edx, 5
     ja   .badarg
     imul ecx, ecx, 10
     add  ecx, r8d
     inc  rbx
     jmp  .digit
 .parsed:
+    test edx, edx
+    jz   .badarg
+    test r13d, r13d
+    jnz  .duty
+    cmp  edx, 3
+    ja   .badarg
     cmp  ecx, 100
     ja   .badarg
     mov  edi, ecx
     call ecp_bl_set_pct
+    jmp  .set_result
+.duty:
+    cmp  ecx, 65535
+    ja   .badarg
+    mov  edi, ecx
+    call ecp_bl_set_duty
+.set_result:
     test eax, eax
     jnz  .unavailable
 .noarg:
+    call ecp_bl_observe
+    test eax, eax
+    jz   .unavailable
     mov  qword [r12 + RSP_CODE], CMDE_OK
     mov  eax, [rel ecp_bl_duty]
     mov  [r12 + RSP_VAL], rax
@@ -488,32 +513,36 @@ cmd_verb_backlight:
     mov  qword [r12 + RSP_EXPECTED], 100
     mov  [r12 + RSP_HINT], rax
 .out:
+    pop  r13
     pop  r12
     pop  rbx
     ret
 
 ; power_remote_shutdown_tick: an owner-signed remote SHUTDOWN accepted by
 ; svc/command_shutdown runs here, in the idle loop, after the UDP frame that
-; sent "SHUTDOWN accepted <nonce>" has returned. A 100 ms grace lets that frame
-; leave the NIC, then power_execute(POWER_SHUTDOWN), the Start > Power path:
-; storage quiesce, ACPI S5, else firmware shutdown. It returns only when nothing
-; powered off; the nonce then reports "failed <nonce> <reason>".
+; sent its acceptance has returned. An optional return plan instead commits
+; after the original BOOT WIN ACK. A 100 ms grace lets that frame leave the
+; NIC, then power_execute runs the selected restart/shutdown through the
+; existing quiesce/wipe/reset/S5 paths. Refusal records the nonce and reason.
 power_remote_shutdown_tick:
     call pwr_m1_sleep_tick                   ; RCQ-27 M1-3: the SLEEP verb (every target)
     call command_shutdown_take
     test eax, eax
     jz   .out
+    push rdx                                ; selected kind survives logging/delay
     lea  rdi, [rel pwr_remote_go]
     call serial_string
     mov  edi, 100000
     call tsc_delay_us
-    mov  edi, POWER_SHUTDOWN
+    pop  rdi                                ; legacy3, prepared return2/3
     call power_execute                       ; RAX = why nothing happened
     push rax
     lea  rdi, [rel pwr_remote_failed]
     call serial_string
     mov  rdi, [rsp]
     call serial_string
+    mov  rdi,[rsp]
+    call terminal_power_refusal             ; actual reason, original live Linux Terminal only
     pop  rdi
     call command_shutdown_failed
 .out:
@@ -1083,7 +1112,7 @@ pwr_inited:      db 0
 pwr_untimed_said: db 0
 align 8
 pwr_verb_backlight: db "BACKLIGHT", 0
-pwr_bl_grammar:  db "BACKLIGHT [0..100]", 0
+pwr_bl_grammar:  db "BACKLIGHT [0..100 | DUTY 1..65535]", 0
 pwr_bl_unavailable: db "backlight unavailable or read-back mismatch", 0
 pwr_bl_lid_dark: db "backlight held off by the lid (closed, or its restore waits for a valid PWM)", 0
 pwr_s_lid:       db "[PAOS64] power: lid ", 0

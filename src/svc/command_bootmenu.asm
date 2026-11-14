@@ -1,7 +1,7 @@
 ;; MODULE svc/command_bootmenu
 ;; LAYER 5
 ;; EXPORTS bootmenu_declare, bootmenu_selftest, bootmenu_udp_try, bm_out_buf, bm_out_ready, bm_reboot_pending, bm_m_render, bm_m_paths, bm_m_canon, bm_m_select
-;; IMPORTS svc/recovery_boot, boot/serial, boot/boot_menu, boot/chainload, svc/command, core/lib/fmt, core/lib/str, fs/storage_access, boot/nvram_access
+;; IMPORTS svc/recovery_boot, svc/driver_domain_return, boot/serial, boot/boot_menu, boot/chainload, svc/command, core/lib/fmt, core/lib/str, fs/storage_access, boot/nvram_access, boot/paging, boot/header, core/lib/sha256
 ;; CAPS
 ;; OWNER saga:boot_menu_chainload
 ; ============================================================================
@@ -449,6 +449,7 @@ bootmenu_udp_try:
     jne  .no_bootlinux
     push r12
     call bm_out_reset
+    mov  byte [rel bm_reset_admitted], 0
     lea  rdi, [rel str_bm_o_bootlinux]
     call bm_out_str
     cmp  byte [rel pbm_runtime_code_mapped], 1
@@ -461,20 +462,26 @@ bootmenu_udp_try:
     call bm_bootnext_gate
     test rax, rax
     jnz  .bl_nvram_refused
+    call bm_reset_admit               ; ROOT109558: after the gate, before any arm
+    test eax, eax
+    jnz  .bl_guest_live
     call chainload_linux_arm_bootnext ; runtime-mapped chain: firmware BootNext=ubuntu (SB-safe)
     test rax, rax
     jnz  .bl_cmos
+    mov  ax, [rel cl_linux_selected_boot]   ; the verified UINT16 a refusal may delete
+    movzx edx, byte [rel bm_bootnext_granted] ; the exact intent its BootNext gate was passed
+    call driver_return_bootnext_armed       ; SEC109848: owned value, intent and marker in one step
     lea  rdi, [rel str_bm_o_tolinux_bn]
     call bm_out_str
     jmp  .bl_queued
 .bl_cmos:
+    call bm_reset_admit               ; once per request: no-op after the BootNext path admitted
+    test eax, eax
+    jnz  .bl_guest_live
     lea  rdi, [rel str_bm_o_tolinux]
     call bm_out_str
-    mov  dil, BM_CMOS_OVERRIDE
     mov  esi, BM_OVR_LINUX
-    call chainload_cmos_wr
-    mov  dil, BM_CMOS_OVERRIDE        ; LIVE read-back -> the reply grades the byte
-    call chainload_cmos_rd
+    call bm_cmos_arm_override         ; AL = LIVE read-back -> the reply grades the byte
     movzx r12d, al
     lea  rdi, [rel str_bm_o_ovrrb]    ; " cmos76="
     call bm_out_str
@@ -484,13 +491,21 @@ bootmenu_udp_try:
     call bm_out_str
 .bl_queued:
     mov  byte [rel bm_reboot_pending], 1
+    call bm_out_uncertain
     mov  byte [rel bm_out_ready], 1
+    pop  r12
+    mov  eax, 1
+    ret
+.bl_guest_live:
+    call bm_out_uncertain
+    mov  byte [rel bm_out_ready], 1   ; refusal text staged by bm_reset_admit; nothing armed
     pop  r12
     mov  eax, 1
     ret
 .bl_nvram_refused:
     lea  rdi, [rel str_bm_o_bootnext_refused]
     call bm_out_str
+    call bm_out_uncertain
     mov  byte [rel bm_out_ready], 1
     pop  r12
     mov  eax, 1
@@ -557,6 +572,10 @@ cmd_verb_bootmode:
     push rdi
     push rsi
     call bm_out_reset
+    mov rdi, [rdi+REQ_ARG]
+    call bm_fw_observe
+    test eax, eax
+    jnz .bootmode_ready
     call bm_out_mode                   ; " mode=<...>"
     lea  rdi, [rel str_bm_o_diag]      ; " diag="
     call bm_out_str
@@ -567,6 +586,13 @@ cmd_verb_bootmode:
     ; 1262a: read-only post-Manager consumption witness. Coupled with the
     ; Manager handoff serial markers and this request's nonce, absent BootNext
     ; proves firmware consumed the owned one-shot before child dispatch.
+    cmp byte [rel pbm_runtime_read_mapped], 1
+    jne .bootnext_not_absent
+    mov rax, [rel runtime_services]
+    test rax, rax
+    jz .bootnext_not_absent
+    cmp qword [rax+0x48], 0
+    je .bootnext_not_absent
     call chainload_manager_require_bootnext_absent
     test eax, eax
     jnz  .bootnext_not_absent
@@ -576,6 +602,7 @@ cmd_verb_bootmode:
     lea  rdi, [rel str_bm_o_manager_unconsumed]
 .bootnext_emit:
     call bm_out_str
+.bootmode_ready:
     mov  byte [rel bm_out_ready], 1
     pop  rsi
     pop  rdi
@@ -597,6 +624,7 @@ cmd_verb_boot:
     mov  rbx, [rdi + REQ_ARG]          ; raw token ptr (ARGT_TEXT; may be empty)
     call bm_bootnext_intent_capture    ; RDI=request -> bm_bootnext_intent
     call bm_out_reset
+    mov  byte [rel bm_reset_admitted], 0
     test rbx, rbx
     jz   .help
     cmp  byte [rbx], 0
@@ -686,9 +714,15 @@ cmd_verb_boot:
     call bm_bootnext_gate              ; BootNext is SENSITIVE (EFI_GLOBAL): SPECIAL only, audited
     test rax, rax
     jnz  .win_nvram_refused
+    call bm_reset_admit                ; ROOT109558: after the gate, before any arm
+    test eax, eax
+    jnz  .guest_live
     call chainload_windows_arm_bootnext
     test eax, eax
     jnz  .win_refused
+    mov  ax, [rel cl_manager_selected_boot] ; the verified UINT16 a refusal may delete
+    movzx edx, byte [rel bm_bootnext_granted] ; the exact intent its BootNext gate was passed
+    call driver_return_bootnext_armed       ; SEC109848: owned value, intent and marker in one step
     lea  rdi, [rel str_bm_o_towin_bootnext]
     call bm_out_str
     mov  byte [rel bm_reboot_pending], 1
@@ -719,9 +753,15 @@ cmd_verb_boot:
     call bm_bootnext_gate              ; BootNext is SENSITIVE (EFI_GLOBAL): SPECIAL only, audited
     test rax, rax
     jnz  .linux_nvram_refused
+    call bm_reset_admit                ; ROOT109558: after the gate, before any arm
+    test eax, eax
+    jnz  .guest_live
     call chainload_linux_arm_bootnext
     test rax, rax
     jnz  .linux_cmos
+    mov  ax, [rel cl_linux_selected_boot]   ; the verified UINT16 a refusal may delete
+    movzx edx, byte [rel bm_bootnext_granted] ; the exact intent its BootNext gate was passed
+    call driver_return_bootnext_armed       ; SEC109848: owned value, intent and marker in one step
     lea  rdi, [rel str_bm_o_tolinux_bn]
     call bm_out_str
     mov  byte [rel bm_reboot_pending], 1
@@ -741,13 +781,17 @@ cmd_verb_boot:
     mov  esi, BM_OVR_DIAG
     lea  rdi, [rel str_bm_o_todiag]
 .set_ovr:
+    push rsi
+    push rdi
+    call bm_reset_admit                ; once per request, before any text or CMOS write
+    pop  rdi
+    pop  rsi
+    test eax, eax
+    jnz  .guest_live
     push rsi                           ; keep the override value across the emit
     call bm_out_str
     pop  rsi
-    mov  dil, BM_CMOS_OVERRIDE
-    call chainload_cmos_wr
-    mov  dil, BM_CMOS_OVERRIDE         ; LIVE read-back -> the reply grades the byte
-    call chainload_cmos_rd
+    call bm_cmos_arm_override          ; AL = LIVE read-back -> the reply grades the byte
     movzx r12d, al
     lea  rdi, [rel str_bm_o_ovrrb]     ; " cmos76="
     call bm_out_str
@@ -756,7 +800,15 @@ cmd_verb_boot:
     lea  rdi, [rel str_bm_o_reboot]    ; " one_shot=1 warm_cf9=queued"
     call bm_out_str
     mov  byte [rel bm_reboot_pending], 1
+    jmp  .stage
+.guest_live:
+    mov  byte [rel bm_manager_command], 1
+    mov  byte [rel bm_manager_error], BM_RC_GUEST_LIVE
+    cmp  byte [rel driver_return_uncertain], 0
+    je   .stage
+    mov  byte [rel bm_manager_error], BM_RC_GUEST_LIVE_TARGET
 .stage:
+    call bm_out_uncertain
     mov  byte [rel bm_out_ready], 1
     pop  r12
     pop  rbx
@@ -780,6 +832,78 @@ cmd_verb_boot:
 
 BM_RC_STORAGE_REFUSED equ 9           ; BootNext refused by the storage gate (NVRAM SENSITIVE class)
 BM_RC_RETIRED         equ 10          ; BOOT MANAGER: the E02 Manager row is retired (Vault recovery only)
+BM_RC_GUEST_LIVE      equ 11          ; ROOT109558: a live guest was not retired; nothing armed, no reset
+BM_RC_GUEST_LIVE_TARGET equ 12        ; SEC109734: refused as 11, and an earlier one-shot target may still be set
+
+; ROOT109558 (1), SEC109572 S1: a reset verb admits after its own gates and before
+; its first state write. EAX 0 admitted (once per request), 1 refused: the honest
+; reason is staged and nothing is armed or queued.
+bm_reset_admit:
+    cmp  byte [rel bm_reset_admitted], 1
+    je   .ok
+    call driver_return_verb_admit      ; verified cleanup retry, then the live-guest admit
+    test eax, eax
+    jnz  .refused
+    mov  byte [rel bm_reset_admitted], 1
+.ok:
+    xor  eax, eax
+    ret
+.refused:
+    lea  rdi, [rel str_bm_o_guest_live]
+    call bm_out_str
+    cmp  byte [rel driver_return_admit_reason], 4
+    je   .unverified
+    lea  rdi, [rel str_bm_o_stop_refused]
+    call bm_out_str
+    movzx edi, byte [rel driver_return_admit_blocker]
+    call bm_out_dec
+    mov  eax, 1
+    ret
+.unverified:
+    lea  rdi, [rel str_bm_o_stop_unverified]
+    call bm_out_str
+    mov  eax, 1
+    ret
+
+; ESI = override value -> AL = the LIVE override byte read back. SEC109572 S2:
+; record the byte it replaces (the first one, if this reset already armed CMOS)
+; so a refused fire can put it back. SEC109734: a write the boot-constant CMOS
+; gate drops marks nothing; a marked arm read back equal supersedes an earlier
+; uncertain CMOS undo.
+bm_cmos_arm_override:
+    push rsi
+    test byte [rel driver_return_armed], DRA_CMOS
+    jnz  .write
+    mov  dil, BM_CMOS_OVERRIDE
+    call chainload_cmos_rd
+    mov  [rel driver_return_cmos_prior], al
+.write:
+    mov  esi, [rsp]
+    mov  dil, BM_CMOS_OVERRIDE
+    call chainload_cmos_wr
+    call chainload_cmos_nvram_ok
+    jne  .readback
+    or   byte [rel driver_return_armed], DRA_CMOS
+.readback:
+    mov  dil, BM_CMOS_OVERRIDE
+    call chainload_cmos_rd
+    pop  rsi
+    cmp  al, sil
+    jne  .out
+    test byte [rel driver_return_armed], DRA_CMOS
+    jz   .out
+    and  byte [rel driver_return_uncertain], ~DRA_CMOS
+.out:
+    ret
+
+; SEC109734 (3.2): every reply while an undo is unconfirmed says so.
+bm_out_uncertain:
+    cmp  byte [rel driver_return_uncertain], 0
+    je   .none
+    lea  rdi, [rel str_bm_o_target_uncertain]
+    jmp  bm_out_str
+.none:
+    ret
 
 ; bm_bootnext_intent_capture(RDI=request) — the explicit authority of THIS BOOT
 ; request for the firmware-global BootNext write: SPECIAL when a verified OWNER
@@ -815,6 +939,10 @@ bm_bootnext_gate:
     lea  rsi, [rel cl_linux_bootnext_name]
     lea  rcx, [rel str_bm_nvg_tag]
     call storage_access_nvram_require
+    test rax, rax
+    jnz  .gate_refused
+    mov  [rel bm_bootnext_granted], dl     ; only a permitted BootNext grant's own EDX (so only SPECIAL)
+.gate_refused:
     pop  rdi
     pop  rsi
     pop  rcx
@@ -912,10 +1040,16 @@ align 8
 bm_out_cur:        dq 0               ; live staged-reply cursor
 bm_out_ready:      db 0               ; a reply line is staged in bm_out_buf
 bm_reboot_pending: db 0               ; BOOT verb queued a warm CF9 (fired post-ack)
+bm_reset_admitted: db 0               ; this request's reset admit already passed
 bm_manager_command: db 0              ; current BOOT request took MANAGER branch
 bm_manager_error:   db 0              ; 0 success; chainload rc; 7 bad nonce
 align 8
-bm_out_buf:        times 512 db 0
+%include "core/abi/wdata.inc"
+%macro WDATA_BSS_svc_bootstate_out 0
+alignb 16
+bm_out_buf: resb 10240
+%endmacro
+WDATA_BSS_DEFER WDATA_BSS_svc_bootstate_out
 
 ; --- verb names (matched verbatim by command_lookup) ---
 str_verb_crashstatus: db "CRASH_STATUS", 0
@@ -969,9 +1103,14 @@ str_bm_o_help:     db " boot options: PAOS|WIN|LINUX|DIAG|MANAGER <nonce> (one-s
 str_bm_o_paos:     db " boot=PAOS already running (no reset)", 0
 str_bm_o_towin_bootnext: db " boot=WIN bootnext=verified-windows one_shot=1 reset=queued", 0
 str_bm_o_towin_refused: db " boot=WIN refused_rc=", 0
+str_bm_o_guest_live: db " reset=refused guest=live warm_cf9=not-queued reason=", 0
+str_bm_o_stop_refused: db "stop_refused blocker=", 0
+str_bm_o_stop_unverified: db "stop_unverified", 0
+str_bm_o_target_uncertain: db " one_shot_target=may-be-set cleanup=uncertain", 0
 str_bm_o_bootnext_refused: db " bootnext=REFUSED storage_not_permitted warm_cf9=not-queued [storage.nvram.refused]", 0
 str_bm_nvg_tag: db "boot_verb_bootnext", 0
 bm_bootnext_intent: db 0
+bm_bootnext_granted: db 0             ; SA_INTENT_* of the last permitted BootNext gate
 str_bm_o_towin_noreset: db " warm_cf9=not-queued bootnext=inspect-if-write-uncertain", 0
 str_bm_o_tolinux:  db " boot=LINUX override staged", 0
 str_bm_o_bootlinux: db " BOOTLINUX intercept (no registry arg path)", 0
@@ -1015,3 +1154,5 @@ str_bm_mk_linux_cross: db "[PAOS64] P1 boot: two-ESP renumber/absence/malformed/
 
 str_bm_recovery_ok: db "recovery policy accepted; explicit owner grant; silence_s=180 absolute_s=1800",0
 str_bm_recovery_no: db "recovery policy refused; require exact current signed grant, owner, boot/generation/operation and live deadline",0
+
+%include "src/svc/command_bootstate.inc"

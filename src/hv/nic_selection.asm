@@ -14,6 +14,8 @@
 ;
 ; nic_select_snapshot(EDI=exact packed segment0 BDF, RSI=out592, RDX=capacity)
 ; -> EAX=0 captured, ISO_* 1..9, or NICS_* 10..14. Refusal leaves output intact.
+; ISO7 secondary RCX/EDX retain only this call's actual group pointer/272;
+; all other outcomes clear that pair. No config bytes accompany refusal.
 ; 1 means verified firmware exposes neither DMAR nor IVRS, with valid root;
 ; missing/unready software on present hardware is 2, uncertain firmware is 3.
 ; Neither reason is PASS. No selection by a guest pointer/name/vendor heuristic.
@@ -44,6 +46,7 @@ nic_select_snapshot:
     mov r12d,edi
     mov r13,rsi
     mov rbp,rsp
+    mov qword [rbp+1104],0          ; no diagnostic inherited from a prior call
     cmp edi,0xFFFF
     ja .argument
     test rsi,rsi
@@ -79,6 +82,13 @@ nic_select_snapshot:
     lea rsi,[rbp+320]
     mov edx,272
     call pcia_group_snapshot
+    cmp eax,7
+    jne .group_result
+    cmp edx,272
+    jne .out
+    mov [rbp+1104],rcx
+    jmp .out
+.group_result:
     cmp eax,1                       ; owner absent != verified hardware absent
     je .backend
     test eax,eax
@@ -207,6 +217,12 @@ nic_select_snapshot:
     jmp .out
 .claims: mov eax,NICS_E_CLAIMS
 .out:
+    mov rcx,[rbp+1104]
+    xor edx,edx
+    test rcx,rcx
+    jz .return
+    mov edx,272
+.return:
     add rsp,1112
     pop r15
     pop r14

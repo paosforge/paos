@@ -55,6 +55,21 @@ static int app_text(const unsigned char *p, uint32_t n) {
         if (p[i] != '\t' && p[i] != '\n' && (p[i] < 32 || p[i] > 126)) return 0;
     return 1;
 }
+/* Native already checked RSA and full PNG CRC/grammar/deflate. Keep the
+ * defensive guest envelope aligned without decoding pixels a second time. */
+static int app_png(const unsigned char *p, uint32_t n, uint32_t side) {
+    if (n < 33 || memcmp(p, "\211PNG\r\n\032\n", 8) ||
+        memcmp(p+8, "\0\0\0\015IHDR", 8)) return 0;
+    for (uint32_t i = 0; i < 2; ++i) {
+        const unsigned char *d = p+16+4*i;
+        if (d[0] || d[1] || d[2] || d[3] != side) return 0;
+    }
+    return p[24] == 8 && p[25] == 6 && !p[26] && !p[27] && p[28] <= 1;
+}
+static int app_reserved(const char *path, const char *name) {
+    size_t n = strlen(name);
+    return !memcmp(path, name, n) && app_zero((const unsigned char *)path+n, 64-n);
+}
 static int app_decode(const unsigned char *p, size_t n, struct app_payload *out) {
     struct app_payload v = {0};
     if (n < 64+256+2*80+256 || n > APP_MAX || memcmp(p, "PAOSAPP1", 8) ||
@@ -75,13 +90,16 @@ static int app_decode(const unsigned char *p, size_t n, struct app_payload *out)
     v.entry = (const char *)m+80;
     v.data_dir = (const char *)m+208;
     v.count = indexlen/80;
-    uint32_t cursor = 0, scripts = 0, forms = 0, icons = 0, grants = 0;
+    uint32_t cursor = 0, scripts = 0, forms = 0, icons = 0, grants = 0, icons2 = 0, notices = 0;
     for (uint32_t i = 0; i < v.count; ++i) {
         const unsigned char *r = p+320+80*i;
         uint32_t kind = app_u32(r), off = app_u32(r+4), len = app_u32(r+8);
         const char *path = (const char *)r+16;
-        if (kind < 1 || kind > 5 || off != cursor || off > bytes || !len || len > 8192 || len > bytes-off ||
-            !app_zero(r+12, 4) || !app_fixed(path, 64, 1)) return 0;
+        uint32_t cap = kind == 3 ? 12288 : kind == 6 ? 40960 : 8192;
+        int name_ok = kind == 6 ? app_reserved(path, "icon@2x.png") :
+                      kind == 7 ? app_reserved(path, "NOTICES.json") : app_fixed(path, 64, 1);
+        if (kind < 1 || kind > 7 || off != cursor || off > bytes || !len || len > cap || len > bytes-off ||
+            !app_zero(r+12, 4) || !name_ok) return 0;
         for (uint32_t j = 0; j < i; ++j) if (!strcmp(path, v.members[j].path)) return 0;
         const unsigned char *data = p+asset+off;
         if (kind == 1 && (++scripts != 1 || strcmp(path, v.entry) || len > 8192 || !app_text(data, len))) return 0;
@@ -90,7 +108,9 @@ static int app_decode(const unsigned char *p, size_t n, struct app_payload *out)
             if (++forms > 4 || length < 4 || strcmp(path+length-4, ".frm") || len > 4096 || !app_text(data, len)) return 0;
             for (uint32_t j = 0; j < len; ++j) if (data[j] == '\t') return 0;
         }
-        if (kind == 3 && (++icons != 1 || !has_icon || strcmp(path, (const char *)m+144) || len != 4096)) return 0;
+        if (kind == 3 && (++icons != 1 || !has_icon || strcmp(path, (const char *)m+144) || !app_png(data, len, 48))) return 0;
+        if (kind == 6 && (++icons2 != 1 || !app_png(data, len, 96))) return 0;
+        if (kind == 7 && ++notices != 1) return 0;
         if (kind == 4) {
             size_t length = strlen(v.data_dir);
             if (len > 8192 || strncmp(path, v.data_dir, length) || path[length] != '/') return 0;
@@ -102,7 +122,8 @@ static int app_decode(const unsigned char *p, size_t n, struct app_payload *out)
         v.members[i] = (struct app_member){kind, asset+off, len, path};
         cursor += len;
     }
-    if (cursor != bytes || scripts != 1 || grants != 1 || icons != (uint32_t)has_icon) return 0;
+    if (cursor != bytes || scripts != 1 || grants != 1 || icons != (uint32_t)has_icon ||
+        icons2 > icons || (icons && notices != 1)) return 0;
     *out = v;
     return 1;
 }

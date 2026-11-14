@@ -1,6 +1,6 @@
 ;; MODULE boot/boot_v2_handoff
 ;; LAYER 0
-;; EXPORTS boot_v2_handoff_probe, boot_v2_manifest_migration_aware, boot_v2_owner_modulus, boot_v2_apply_safe_runtime_profile, pbm_crc32, pbm_manager_launch, pbm_manager_sequence, pbm_attempt_nonce, pbm_state_generation, pbm_entry, pbm_profile, pbm_reason, pbm_flags, pbm_last_stage, pbm_safe_runtime_active, pbm_payload_sha, pbm_image_base, pbm_image_size, pbm_manager_gop_valid, pbm_manager_gop_status, pbm_try_media, pbm_manifest_floor, pbm_init_writer_version
+;; EXPORTS boot_v2_command_pair_get, boot_v2_command_pair_count, boot_v2_command_pair_epoch, boot_v2_command_pair_role, boot_v2_command_replay_domain_id, boot_v2_auth2_replay_domain_id, boot_v2_command_pair_digest, boot_v2_command_pair_entries, boot_v2_handoff_probe, boot_v2_manifest_migration_aware, boot_v2_owner_modulus, boot_v2_apply_safe_runtime_profile, pbm_crc32, pbm_manager_launch, pbm_manager_sequence, pbm_attempt_nonce, pbm_state_generation, pbm_entry, pbm_profile, pbm_reason, pbm_flags, pbm_last_stage, pbm_safe_runtime_active, pbm_payload_sha, pbm_image_base, pbm_image_size, pbm_manager_gop_valid, pbm_manager_gop_status, pbm_try_media, pbm_try_current, pbm_try_cert_sha, pbm_manifest_floor, pbm_init_writer_version
 ;; IMPORTS boot/header, boot/serial, bootmgr/rsa2048_verify
 ;; CAPS
 ;; OWNER saga:boot
@@ -25,6 +25,11 @@ boot_v2_handoff_probe:
     mov  byte [rel pbm_manager_launch], 0
     mov  byte [rel pbm_flags], 0
     mov  byte [rel pbm_try_media], 0
+    mov  byte [rel pbm_try_current], 0
+    lea rdi,[rel pbm_try_cert_sha]
+    xor eax,eax
+    mov ecx,4
+    rep stosq
     mov  byte [rel pbm_profile], PBM_PROFILE_NORMAL
     mov  byte [rel pbm_reason], PBM_REASON_HEALTHY
     mov  word [rel pbm_last_stage], 0
@@ -130,6 +135,26 @@ boot_v2_handoff_probe:
     mov  [rel pbm_last_stage], ax
     mov  rax, [r12 + PBM_HANDOFF_ATTEMPT_NONCE_OFF]
     mov  [rel pbm_attempt_nonce], rax
+    ; Projection of the actual Manager gate on this validated in-memory PBH1.
+    ; It is not a saved-proof import. Old Manager handoffs keep Try read-only
+    ; but cannot open its local session; no enrollment/restart is attempted.
+    cmp byte [rel pbm_try_media],1
+    jne .try_current_done
+    test rax,rax
+    jz .try_current_done
+    cmp word [r12 + PBM_HANDOFF_TRY_TRUST_OFF],PBM_HANDOFF_TRY_TRUST_TAG
+    jne .try_current_done
+    mov rax,[r12 + PBM_HANDOFF_TRY_CERT_OFF]
+    or rax,[r12 + PBM_HANDOFF_TRY_CERT_OFF + 8]
+    or rax,[r12 + PBM_HANDOFF_TRY_CERT_OFF + 16]
+    or rax,[r12 + PBM_HANDOFF_TRY_CERT_OFF + 24]
+    jz .try_current_done
+    lea rsi,[r12 + PBM_HANDOFF_TRY_CERT_OFF]
+    lea rdi,[rel pbm_try_cert_sha]
+    mov ecx,4
+    rep movsq
+    mov byte [rel pbm_try_current],1
+.try_current_done:
     mov  rax, [r12 + PBM_HANDOFF_STATE_GEN_OFF]
     mov  [rel pbm_state_generation], rax
     lea  rsi, [r12 + PBM_HANDOFF_PAYLOAD_SHA_OFF]
@@ -406,6 +431,58 @@ align 8
 boot_v2_owner_modulus:
     db BOOT_V2_OWNER_MODULUS_BYTES
     times -((($ - boot_v2_owner_modulus) - 256) * (($ - boot_v2_owner_modulus) - 256)) db 0  ; exactly 256 B
+; BEGIN COMMAND AUTHORITY PAIR ABI
+; Compiled public AUTH2 membership only; never grants PBMF, PMOD, release or DATA.
+; No default feature or emitted bytes. Legacy consumers keep the existing primary
+; ID. INPUT exports the stable replay label to SEC in both modes; D is not a key.
+%ifdef BOOT_V2_COMMAND_PAIR_ABI
+%if BOOT_V2_COMMAND_PAIR_ABI != 1
+%error "unsupported command pair ABI"
+%endif
+; RDI=index; RAX=modulus, RDX=SPKI ID, or both zero. No writes/calls.
+boot_v2_command_pair_get:
+    xor eax,eax
+    xor edx,edx
+    cmp rdi,2
+    jae .out
+    mov ecx,[rel boot_v2_command_pair_count]
+    cmp ecx,1
+    jb .out
+    cmp ecx,2
+    ja .out
+    cmp edi,ecx
+    jae .out
+    imul rcx,rdi,320
+    lea rax,[rel boot_v2_command_pair_entries]
+    add rax,rcx
+    cmp dword [rax+288],1
+    jne .refuse
+    cmp dword [rax+292],edi
+    jne .refuse
+    lea rdx,[rax+256]
+.out:
+    ret
+.refuse:
+    xor eax,eax
+    xor edx,edx
+    ret
+align 8
+boot_v2_command_pair_count:
+    db BOOT_V2_COMMAND_PAIR_COUNT_BYTES
+boot_v2_command_pair_epoch:
+    db BOOT_V2_COMMAND_PAIR_EPOCH_BYTES
+boot_v2_command_pair_role:
+    db BOOT_V2_COMMAND_PAIR_ROLE_BYTES
+boot_v2_auth2_replay_domain_id:
+boot_v2_command_replay_domain_id:
+    db BOOT_V2_COMMAND_REPLAY_DOMAIN_ID_BYTES
+boot_v2_command_pair_digest:
+    db BOOT_V2_COMMAND_PAIR_DIGEST_BYTES
+boot_v2_command_pair_entries:
+    db BOOT_V2_COMMAND_PAIR_ENTRIES_BYTES
+    times -((($ - boot_v2_command_pair_entries) - 640) * (($ - boot_v2_command_pair_entries) - 640)) db 0
+%endif
+; END COMMAND AUTHORITY PAIR ABI
 pbm_loaded_image:     dq 0
 pbm_image_base:       dq 0
 pbm_image_size:       dq 0
@@ -422,6 +499,8 @@ pbm_reason:           db PBM_REASON_HEALTHY
 pbm_flags:            db 0
 pbm_last_stage:       dw 0
 pbm_safe_runtime_active: db 0
+pbm_try_current:      db 0
+pbm_try_cert_sha:     times 32 db 0
 pbm_try_media:        db 0          ; RCQ-29: 1 = live Try boot; every persistent write refused
 pbm_init_writer_version: db PBM_INIT_VERSION
 pbm_manifest_floor:   db PBM_MFLOOR_UNREAD

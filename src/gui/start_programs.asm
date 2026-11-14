@@ -1,7 +1,7 @@
 ;; MODULE gui/start_programs
 ;; LAYER 6
-;; EXPORTS start_programs_init, start_programs_open_help, start_programs_tick, start_programs_cmd_formload, start_programs_click, start_programs_key_filter, sp_arm_holds, sp_disarm, sp_arm_card_wid, sp_ptr_up_x, sp_ptr_up_y, sp_ptr_up_seq, sp_ptr_inj_seq, sp_form_widgets_n
-;; IMPORTS gui/form_loader, gui/widget, gui/window_mgmt, gui/terminal_app, gui/power_exec, gui/settings_prefs, gui/help_view, gui/wifi_local, gui/wm_pointer, dev/input/ps2, boot/gop, svc/command, svc/command_cons, boot/serial
+;; EXPORTS start_programs_open_update_restart, start_programs_init, start_programs_open_help, start_programs_tick, start_programs_cmd_formload, start_programs_click, start_programs_key_filter, sp_arm_holds, sp_disarm, sp_arm_card_wid, sp_ptr_up_x, sp_ptr_up_y, sp_ptr_up_seq, sp_ptr_inj_seq, sp_form_widgets_n
+;; IMPORTS gui/settings_updates, gui/settings_update_backend, gui/app_reader, gui/form_loader, gui/widget, gui/window_mgmt, gui/terminal_app, gui/power_exec, gui/settings_prefs, gui/help_view, gui/wifi_local, gui/wm_pointer, dev/input/ps2, boot/gop, svc/command, svc/command_cons, boot/serial
 ;; CAPS CAP_GUI
 ;; OWNER saga:msi_start_programs_settings
 ; ============================================================================
@@ -62,7 +62,8 @@ SP_ARM_WIFI_NEXT    equ 4
 SP_ARM_WIFI_SAVE    equ 5
 SP_ARM_WIFI_CONNECT equ 6
 SP_ARM_WALL         equ 7
-SP_ARM_ROWS         equ 17
+SP_ARM_APP_REMOVE   equ 18              ; Settings > Apps confirm; after eleven wallpaper choices
+SP_ARM_ROWS         equ 24
 
 start_programs_init:
     ; FORMLOAD: extend the row in place (outside the Console's own wrapper);
@@ -92,6 +93,7 @@ start_programs_init:
     mov  [rel wm_pointer_note_hook], rax ; SEC R1 F1
     call help_view_init                 ; RCQ-38 H2: the helptext type, after every shipped type
     call text_view_init                 ; T5-15: the textview type, after it
+    call app_reader_init                ; G37: separate bounded app reader
     lea  rdi, [rel sp_ready_text]
     call serial_string
     ret
@@ -134,6 +136,37 @@ start_programs_open_apps:
     call settings_apps_show
     movzx eax, byte [rel sa_live]
     add  rsp, 8
+    ret
+
+;; start_programs_open_about(): Settings' About button, from its idle tick.
+;; Opens or raises the existing About this PC (form 3) with the same disarm as
+;; every FORMLOAD. -> EAX 1 opened, 0 the loader refused it.
+start_programs_open_about:
+    sub  rsp, 8
+    call sp_disarm
+    mov  edi, 3                         ; existing About this PC, not a new form
+    mov  edx, 1
+    call form_load_internal
+    xor  eax, eax
+    cmp  dword [rel form_error], FORM_ERR_NONE
+    sete al
+    add  rsp, 8
+    ret
+
+; Updates only reaches this after an explicit current-owner Restart press.
+; Original power confirmation still owns confirmation/quiesce/reset/return.
+start_programs_open_update_restart:
+    sub rsp, 8
+    call sp_disarm
+    mov edi, FORM_POWER_INDEX
+    mov edx, 1
+    call form_load_internal
+    cmp dword [rel form_error], FORM_ERR_NONE
+    jne .out
+    mov edi, POWER_RESTART
+    call sp_dialog_label
+.out:
+    add rsp, 8
     ret
 
 ;; sp_token_is(RDI arg, RSI lower-case keyword) -> EAX 1 when the first token
@@ -546,6 +579,22 @@ sp_apps_scan:
 .out:
     ret
 
+;; sp_apps_tick(): Settings > Apps has something to do this tick.
+sp_apps_tick:
+    mov  eax, [rel sa_state]
+    or   al, [rel sa_listing]
+    cmp  qword [rel sa_ticket], 0
+    jne  .work
+    test eax, eax
+    jz   .out
+.work:
+    sub  rsp, 8
+    call sp_apps_scan
+    call settings_apps_tick
+    add  rsp, 8
+.out:
+    ret
+
 ;; sp_dialog_label(EDI kind): the opened (or raised) confirmation asks about
 ;; this action, its button names it, and the keyboard rests on Cancel.
 sp_dialog_label:
@@ -607,6 +656,10 @@ start_programs_click:
     je   .cancel
 .settings:
     push rdi
+    call settings_updates_click
+    test eax, eax
+    jnz .settings_out
+    mov edi, [rsp]
     call wallpaper_prefs_click
     test eax, eax
     jnz .settings_out
@@ -713,7 +766,7 @@ sp_disarm:
     push rcx
     push rdx
     lea rdx, [rel sp_arm_rect + (SP_ARM_WALL << SP_ARM_SHIFT)]
-    mov ecx, 10
+    mov ecx, 11
 .wall:
     mov dword [rdx], -1
     add rdx, 1 << SP_ARM_SHIFT
@@ -722,6 +775,12 @@ sp_disarm:
     mov  dword [rel sp_arm_rect + (SP_ARM_APPLY << SP_ARM_SHIFT)], -1
     mov  dword [rel sp_arm_rect + (SP_ARM_RESET << SP_ARM_SHIFT)], -1
     mov  dword [rel sp_arm_rect + (SP_ARM_CARD << SP_ARM_SHIFT)], -1
+    mov  dword [rel sp_arm_rect + (SP_ARM_APP_REMOVE << SP_ARM_SHIFT)], -1
+%assign upd_arm 19
+%rep 5
+    mov dword [rel sp_arm_rect + (upd_arm << SP_ARM_SHIFT)], -1
+%assign upd_arm upd_arm+1
+%endrep
 %ifdef WIFI_LOCAL_GUI_BUILT
     mov dword [rel sp_arm_rect + (SP_ARM_WIFI_NEXT << SP_ARM_SHIFT)], -1
     mov dword [rel sp_arm_rect + (SP_ARM_WIFI_SAVE << SP_ARM_SHIFT)], -1
@@ -791,7 +850,7 @@ start_programs_pointer_note:
     call sp_arm_note
     pop rbx
     inc ebx
-    cmp ebx, 10
+    cmp ebx, 11
     jb .wall_note
 .wall_noted:
 %ifdef WIFI_LOCAL_GUI_BUILT
@@ -809,6 +868,31 @@ start_programs_pointer_note:
     call sp_arm_note
 .wifi_noted:
 %endif
+    call updates_scan
+    cmp eax, UPD_W_COUNT
+    jne .updates_noted
+    mov ebx, UPD_ARM_FIRST
+.updates_note:
+    mov ecx, ebx
+    sub ecx, UPD_ARM_FIRST
+    lea rax, [rel upd_ids+2*4]
+    cmp ecx, 4
+    jne .updates_widget
+    lea rax, [rel upd_ids+UPD_DAILY_INDEX*4]
+    xor ecx, ecx
+.updates_widget:
+    mov edi, [rax+rcx*4]
+    push rbx
+    call sp_arm_note
+    pop rbx
+    inc ebx
+    cmp ebx, UPD_ARM_FIRST+5
+    jb .updates_note
+.updates_noted:
+    call settings_apps_confirm_id
+    mov  edi, eax
+    mov  ebx, SP_ARM_APP_REMOVE
+    call sp_arm_note
     mov  ebx, SP_ARM_CARD               ; J2b-P: the card's Confirm, like Yes (-1: nothing)
     mov  edi, [rel sp_arm_card_wid]
     call sp_arm_note
@@ -948,6 +1032,11 @@ start_programs_key_filter:
     call wallpaper_prefs_key
     test eax, eax
     jnz .other_taken
+    mov edi, [rsp+8]
+    mov eax, [rsp]
+    call settings_updates_key
+    test eax, eax
+    jnz .other_taken
     call sp_settings_scan               ; RCQ-17: a key for the Settings Preferences
     mov  edi, [rsp + 8]
     mov  eax, [rsp]
@@ -961,6 +1050,12 @@ start_programs_key_filter:
     test eax, eax
     jnz .other_taken
 %endif
+    call sp_apps_scan                   ; Settings > Apps: Remove and its confirm
+    mov  edi, [rsp + 8]
+    mov  eax, [rsp]
+    call settings_apps_key
+    test eax, eax
+    jnz  .other_taken
     call sp_help_scan                   ; RCQ-38 H2: a key for Help (read-only navigation)
     mov  edi, [rsp + 8]
     mov  eax, [rsp]
@@ -990,10 +1085,15 @@ start_programs_key_filter:
 ;; start_programs_tick(): the idle loop. Acts on a pending answer once the
 ;; pointer/key path that recorded it has returned.
 start_programs_tick:
+    push rbx
+    call settings_updates_tick
+    call settings_update_backend_tick ; one bounded BSP/reentry-guarded native step
+    pop rbx
     call wallpaper_prefs_tick
 %ifdef WIFI_LOCAL_GUI_BUILT
     call wifi_local_tick
 %endif
+    call sp_apps_tick
     cmp  byte [rel stp_pending], 0
     je   .power
     call sp_settings_scan               ; RCQ-17: a recorded Settings action
@@ -1001,7 +1101,12 @@ start_programs_tick:
 .power:
     movzx eax, byte [rel sp_pending]
     test eax, eax
-    jz   .out
+    jnz  .answer
+    push rbx
+    call sp_power_watch_tick            ; read-only outcome of this dialog's managed request
+    pop rbx
+    jmp  .out
+.answer:
     mov  byte [rel sp_pending], SP_PEND_NONE
     push rbx
     mov  ebx, eax
@@ -1010,6 +1115,9 @@ start_programs_tick:
     je   .done
     cmp  ebx, SP_PEND_CANCEL
     jne  .confirm
+    call sp_power_watch_cancel         ; same original dialog/plan; before resident power step
+    cmp eax,-1
+    je .done                           ; never dismiss a replacement observed during cancel
     push rax
     lea  rdi, [rel sp_cancel_text]
     call serial_string
@@ -1017,25 +1125,17 @@ start_programs_tick:
     call wmx_close_slot
     jmp  .done
 .confirm:
+    call sp_power_watch_begin           ; capture the original window and widget lifetime
     mov  edi, [rel sp_kind]
-    call power_execute                  ; returns only when nothing happened: RAX = why
-    lea  rsi, [rel sp_f_windows]
-    lea  rcx, [rel power_r_windows]
-    cmp  rax, rcx
-    je   .say
-    lea  rsi, [rel sp_f_shutdown]
-    lea  rcx, [rel power_r_shutdown]
-    cmp  rax, rcx
-    je   .say
-    lea  rsi, [rel sp_f_restart]
-    lea  rcx, [rel power_r_reset]
-    cmp  rax, rcx
-    je   .say
-    lea  rsi, [rel sp_f_other]
-.say:
-    push rsi
-    call sp_dialog_scan                 ; still the same dialog?
-    pop  rsi
+    call power_execute_desktop          ; confirmed local OWNER opt-in; returns only when nothing happened: RAX = why
+    call power_failure_label            ; same actual reason, bounded public cause
+    mov  rsi, rax
+    sub rsp,16                         ; preserve the text and nested-call alignment
+    mov [rsp],rsi
+    call sp_power_watch_arm             ; only the actual managed pending result can arm
+    call sp_power_watch_same            ; no write into a reused window or widget
+    mov rsi,[rsp]
+    add rsp,16
     cmp  eax, -1
     je   .done
     push r12
@@ -1053,6 +1153,146 @@ start_programs_tick:
     call wmx_draw_all
 .done:
     pop  rbx
+.out:
+    ret
+
+; Observe only the managed request returned by this confirmed dialog. The
+; resident power tick owns stepping, recovery and commit. Cancel may request
+; the original plan's existing pre-commit recovery, never another power action.
+; No hardware rollback or readiness is inferred from a cancellation request.
+sp_power_watch_begin:
+    push rbx
+    mov byte [rel sp_power_watch],0
+    mov dword [rel sp_power_slot],-1
+    mov ebx,eax                         ; sp_dialog_scan already bounded the live slot
+    lea rcx,[rel wm_gen]
+    mov eax,[rcx+rbx*4]
+    test eax,eax
+    jz .out
+    cmp eax,-1
+    je .out
+    mov [rel sp_power_gen],eax
+    mov edi,[rel sp_w_question]
+    mov [rel sp_power_widget],edi
+    call wgt_birth_lifetime             ; rejects zero and saturated/recycled births
+    test rax,rax
+    jz .out
+    cmp rax,-1
+    je .out
+    mov [rel sp_power_birth],rax
+    mov [rel sp_power_slot],ebx
+.out:
+    pop rbx
+    ret
+
+sp_power_watch_same:
+    push rbx
+    call sp_dialog_scan
+    cmp eax,-1
+    je .bad
+    cmp eax,[rel sp_power_slot]
+    jne .bad
+    mov ebx,eax
+    lea rcx,[rel wm_gen]
+    mov eax,[rcx+rbx*4]
+    cmp eax,[rel sp_power_gen]
+    jne .bad
+    mov edi,[rel sp_w_question]
+    cmp edi,[rel sp_power_widget]
+    jne .bad
+    call wgt_birth_lifetime
+    test rax,rax
+    jz .bad
+    cmp rax,-1
+    je .bad
+    cmp rax,[rel sp_power_birth]
+    jne .bad
+    mov eax,ebx
+    pop rbx
+    ret
+.bad:
+    mov eax,-1
+    pop rbx
+    ret
+
+sp_power_watch_arm:
+    cmp dword [rel sp_power_slot],0
+    jl .out
+    lea rax,[rel power_label_pending]
+    cmp rsi,rax                         ; the actual returned bounded result, no mutable-state guess
+    jne .out
+    push rbx
+    call power_s5_status
+    dec eax
+    cmp eax,2                           ; WAIT / RECOVER / COMMIT only
+    ja .done
+    test rcx,rcx
+    jz .done
+    cmp rcx,-1
+    je .done
+    mov [rel sp_power_token],rcx         ; full64, never truncate to a slot/counter
+    mov byte [rel sp_power_watch],1
+.done:
+    pop rbx
+.out:
+    ret
+
+ ; The key/click callback has unwound. A cancellation recorded for this watched
+; dialog is processed before power_events_tick in the original idle loop. The
+; native boundary independently rechecks owner and the full64 parent token.
+; EAX retains the original live slot, or -1 if its lifetime was replaced.
+sp_power_watch_cancel:
+    cmp byte [rel sp_power_watch],1
+    jne .out                           ; ordinary unconfirmed dialog dismissal
+    push rbx
+    call sp_power_watch_same
+    cmp eax,-1
+    je .retire
+    call power_s5_status
+    cmp eax,1                          ; WAIT only; recovery/commit cannot be cancelled again
+    jne .same
+    cmp rcx,[rel sp_power_token]
+    jne .same
+    mov rdi,rcx
+    call power_s5_cancel_desktop        ; returns request outcome, never a restoration promise
+.same:
+    call sp_power_watch_same            ; native callback may invalidate the public window
+.retire:
+    mov byte [rel sp_power_watch],0     ; request at most once; normal resident recovery continues
+    pop rbx
+.out:
+    ret
+
+sp_power_watch_tick:
+    cmp byte [rel sp_power_watch],1
+    jne .out
+    push rbx
+    call sp_power_watch_same            ; retire on disappearance, even during recovery
+    cmp eax,-1
+    je .retire
+    call power_s5_status                ; read-only, same idle-loop producer as the power tick
+    cmp rcx,[rel sp_power_token]
+    jne .retire
+    dec eax
+    cmp eax,2
+    jbe .done                           ; active/recovering: retain progress, no repeated paint
+    mov byte [rel sp_power_watch],0      ; one terminal outcome, before any UI callback
+    call power_s5_failure_label         ; existing bounded labels; actual offline/commit facts
+    sub rsp,16
+    mov [rsp],rax
+    call sp_power_watch_same
+    mov rsi,[rsp]
+    add rsp,16
+    cmp eax,-1
+    je .done
+    mov edi,[rel sp_w_question]
+    call wgt_set_text
+    call wmx_draw_all
+    jmp .done
+.retire:
+    mov byte [rel sp_power_watch],0
+.done:
+    pop rbx
 .out:
     ret
 
@@ -1106,6 +1346,14 @@ sp_ptr_up_x:        dd 0                ; J2b-P: the last HUMAN left release, ra
 sp_ptr_up_y:        dd 0
 sp_ptr_up_seq:      dd 0
 sp_ptr_inj_seq:     dd 0                ; J2b-P (srcreview F1): non-HUMAN pointer events seen
+; Same-dialog managed shutdown outcome; data only, never an authorization.
+align 8, db 0
+sp_power_token:     dq 0
+sp_power_birth:     dq 0
+sp_power_slot:      dd -1
+sp_power_gen:       dd 0
+sp_power_widget:    dd -1
+sp_power_watch:     db 0
 sp_pending:         db 0
 sp_ptr_up_now:      db 0                ; J2b-P: this event is a HUMAN left release edge
 align 8, db 0

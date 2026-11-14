@@ -1,7 +1,7 @@
 ;; MODULE fs/guest_volume
 ;; LAYER 4
-;; EXPORTS guest_volume_acquire, guest_volume_current, guest_volume_read, guest_volume_write, guest_volume_flush, guest_volume_freeze, guest_volume_reclaim, guest_volume_snapshot, guest_volume_native_allowed, guest_volume_mount_allowed, guest_volume_registry_allowed
-;; IMPORTS fs/blockdev, fs/storage_access, fs/vfs, fs/owned_media, fs/fat32_disk, fs/ntfs_disk, fs/ext4_disk, fs/exfat_disk, core/lib/crc32
+;; EXPORTS guest_volume_format_scheme, guest_volume_acquire_format, guest_volume_acquire_check, guest_volume_acquire, guest_volume_current, guest_volume_read, guest_volume_write, guest_volume_flush, guest_volume_freeze, guest_volume_reclaim, guest_volume_snapshot, guest_volume_native_allowed, guest_volume_mount_allowed, guest_volume_registry_allowed
+;; IMPORTS fs/fs_identify, hv/settings_update_service, hv/app_vm, boot/boot_esp_guid, fs/blockdev, fs/storage_access, fs/vfs, fs/owned_media, fs/fat32_disk, fs/ntfs_disk, fs/ext4_disk, fs/exfat_disk, core/lib/crc32
 ;; CAPS CAP_BLOCK_READ, CAP_BLOCK_WRITE
 ;; OWNER saga:storage
 ;; CONTEXT: bsp_only
@@ -17,7 +17,8 @@
 ; An opaque tuple by itself grants nothing: acquisition retains an actual
 ; existing storage job window under that request's policy. No writer grant.
 ;
-; Initial scope: truthful 512B sector backend, GPT128 entries <=128, <=8sector
+; Scope: truthful 512B sector backend; legacy GPT128 entries <=128; format
+; adds removable ordinary GPT/MBR primaries. <=8sector
 ; IO/4096B bounce validated by VM. A full device fence excludes native aliases
 ; while the guest sees ONLY the exact partition. Registration freezes; unplug
 ; may deregister, which makes subsequent IO/reclaim refuse before dereference.
@@ -27,9 +28,35 @@ GV_ACTIVE equ 1
 GV_FROZEN equ 2
 GV_RELEASED equ 3
 GV_QUARANTINED equ 4
+GV_FORMAT_GPT equ 1
+GV_FORMAT_MBR equ 2
 
-; RDI=descriptor136 -> RAX=private monotonic native handle, 0 refused.
+; RDI=native FS_SCHEME (1 MBR, 2 GPT) -> RAX=format grant scheme
+; (2 MBR, 1 GPT), or -1. F1 and this lease share this sole translation site.
+guest_volume_format_scheme:
+    lea rax,[rdi-1]
+    cmp rax,1
+    ja .no
+    mov eax,edi
+    xor eax,3
+    ret
+.no:
+    mov rax,-1
+    ret
+
+; Format-only descriptor144: original136 + table kind u32@136, slot u32@140.
+; MBR disk id is the nonzero signature dword, zero-padded to 16 bytes;
+; its partition GUID is zero. No GUID is fabricated. Actual
+; principal/job/request/attachment tokens remain nonzero and OWNER+SPECIAL
+; supplies the same exact retained job window. F1 owns removable classification
+; and confirmation; F2 owns transport/stopped custody. No public verb here.
+guest_volume_acquire_format:
+    mov eax,1
+    jmp guest_volume_acquire.common
+; Legacy descriptor136 admission is unchanged (fixed GPT only).
 guest_volume_acquire:
+    xor eax,eax
+.common:
     push rbx
     push r12
     push r13
@@ -46,6 +73,38 @@ guest_volume_acquire:
     je .no
     test rdi,rdi
     jz .no
+    ; Mode is construction scratch. Retire a terminal handle before changing
+    ; it, including when the prospective descriptor fails early validation.
+    ; ACTIVE/FROZEN/QUARANTINED handles were refused above and remain intact.
+    mov qword [rel gv_handle],0 ; retire before changing receipt kind
+    mov [rel gv_format],eax
+    test eax,eax
+    jz .legacy_tokens
+    mov eax,[r12+136]
+    cmp eax,GV_FORMAT_MBR
+    je .mbr_tokens
+    cmp eax,GV_FORMAT_GPT
+    jne .no
+    cmp dword [r12+140],1
+    jb .no
+    cmp dword [r12+140],128
+    ja .no
+    jmp .legacy_tokens
+.mbr_tokens:
+    cmp dword [r12+140],1
+    jb .no
+    cmp dword [r12+140],4
+    ja .no
+    cmp dword [r12+32],0
+    je .no
+    mov eax,[r12+36]
+    or rax,[r12+40]
+    or rax,[r12+48]
+    or rax,[r12+56]
+    jnz .no
+    mov ecx,64
+    jmp .token
+.legacy_tokens:
     ; All identity tokens nonzero; attachment epochs never roll back/reissue.
     mov ecx,32
 .token:
@@ -97,10 +156,23 @@ guest_volume_acquire:
     and eax,BLKCAP_ALL_IO
     cmp eax,BLKCAP_ALL_IO
     jne .no
-    test dword [r14+blk_info.flags],BLKF_RO|BLKF_REMOVABLE
+    test dword [r14+blk_info.flags],BLKF_RO
     jnz .no
-    test dword [rbx+dev.flags],BLKF_RO|BLKF_REMOVABLE
+    test dword [rbx+dev.flags],BLKF_RO
     jnz .no
+    cmp dword [rel gv_format],1
+    je .format_removable
+    test dword [r14+blk_info.flags],BLKF_REMOVABLE
+    jnz .no
+    test dword [rbx+dev.flags],BLKF_REMOVABLE
+    jnz .no
+    jmp .media_ok
+.format_removable:
+    cmp byte [r14+blk_info.removable],0
+    jne .media_ok
+    test dword [r14+blk_info.flags],BLKF_REMOVABLE
+    jz .no
+.media_ok:
     mov rdi,rbx
     mov rsi,[r12+16]
     mov rdx,[r12+24]
@@ -109,9 +181,9 @@ guest_volume_acquire:
     jnz .range
     ; blk_validate_range's max transfer is not a partition size limit.
 .validated:
-    ; A new proof attempt ends the previous terminal readback handle before
-    ; reusing construction scratch; failure cannot relabel an old receipt.
-    mov qword [rel gv_handle],0
+    ; The previous terminal handle was retired before mode/token validation.
+    mov dword [rel gv_check],0
+    mov dword [rel gv_discover],0
     mov rdi,rbx
     lea rsi,[rel gv_identity]
     call blk_storage_identity
@@ -134,7 +206,12 @@ guest_volume_acquire:
     mov ecx,GV_DESC_SIZE/8
     cld
     rep movsq
-    call gv_probe_gpt
+    cmp dword [rel gv_format],0
+    je .probe
+    mov rax,[r12+136]
+    mov [rel gv_format_tuple],rax
+.probe:
+    call gv_probe_partition
     test eax,eax
     jnz .no
     ; Invalidate old native caches before publishing the exclusion fence.
@@ -261,6 +338,108 @@ gv_member:
     pop r12
     ret
 
+; Format uses the exported walk tuple and retains the actual MBR bytes for
+; its before/after join. No BPB precondition: format may replace the filesystem.
+gv_probe_partition:
+    cmp dword [rel gv_check],0
+    jne gv_probe_gpt
+    cmp dword [rel gv_format],1
+    jne gv_probe_gpt
+    push r12
+    sub rsp,48
+    ; After stop the class fence intentionally blocks ordinary blk_read.
+    ; gv_live already checked the original device/epoch; compare retained
+    ; full metadata through the private bounded reader, never rediscover.
+    cmp dword [rel gv_state],GV_QUARANTINED
+    je .admitted
+    cmp dword [rel gv_format_tuple],GV_FORMAT_MBR
+    jne .query
+    ; Bracket the shared walk with complete sector snapshots. A changed table
+    ; must not turn its old exact tuple into authority over new metadata.
+    mov rdi,rbx
+    xor esi,esi
+    mov edx,1
+    lea rcx,[rel gv_mbr]
+    call gv_probe_read
+    test rax,rax
+    jnz .no
+.query:
+    mov rdi,rbx
+    mov rsi,[rel gv_desc+16]
+    mov rdx,[rel gv_desc+24]
+    mov rcx,rsp
+    call fs_identify_primary
+    test rax,rax
+    jnz .no
+    mov rax,[rel gv_desc+8]
+    cmp [rsp+8],rax
+    jne .no
+    mov edi,[rsp+36]
+    call guest_volume_format_scheme
+    cmp eax,[rel gv_format_tuple]
+    jne .no
+    mov eax,[rel gv_format_tuple+4]
+    cmp [rsp+32],eax
+    jne .no
+.admitted:
+    cmp dword [rel gv_format_tuple],GV_FORMAT_GPT
+    jne .mbr
+    call gv_probe_gpt
+    jmp .out
+.mbr:
+    mov rdi,rbx
+    xor esi,esi
+    mov edx,1
+    lea rcx,[rel gv_header]
+    call gv_probe_read
+    test rax,rax
+    jnz .no
+    mov eax,[rel gv_format_tuple+4]
+    dec eax
+    shl eax,4
+    lea rdx,[rel gv_header+446]
+    add rdx,rax
+    ; Ordinary supported filesystem primaries only; hidden/active/ESP/RAID
+    ; types are never admitted just because the owner supplied a tuple.
+    mov eax,[rel gv_header+440]
+    test eax,eax
+    jz .no
+    cmp eax,[rel gv_desc+32]
+    jne .no
+    cmp byte [rdx],0
+    jne .no
+    movzx eax,byte [rdx+4]
+    cmp eax,0x01
+    je .type
+    cmp eax,0x04
+    je .type
+    cmp eax,0x06
+    je .type
+    cmp eax,0x0e
+    je .type
+    cmp eax,0x0b
+    je .type
+    cmp eax,0x0c
+    je .type
+    cmp eax,0x07
+    je .type
+    cmp eax,0x83
+    jne .no
+.type:
+    lea rdi,[rel gv_mbr]
+    lea rsi,[rel gv_header]
+    mov ecx,64
+    repe cmpsq
+    jne .no
+    xor eax,eax
+    jmp .out
+.no:
+    mov rax,-1
+.out:
+    add rsp,48
+    pop r12
+    ret
+
 ; Verify live primary GPT, its complete CRC-checked entry array, unique exact
 ; GUID+extent and no intersecting partition. Only reads before transfer; guest
 ; can never touch this metadata. Re-probed after stop before releasing fence.
@@ -298,6 +477,16 @@ gv_probe_gpt:
     call hotpatch_crc32
     cmp eax,r12d
     jne .no
+    cmp dword [rel gv_discover],0
+    je .disk_match
+    mov rax,[rel gv_header+56]
+    or rax,[rel gv_header+64]
+    jz .no
+    mov rax,[rel gv_header+56]
+    mov [rel gv_desc+32],rax
+    mov rax,[rel gv_header+64]
+    mov [rel gv_desc+40],rax
+.disk_match:
     lea rdi,[rel gv_header+56]
     lea rsi,[rel gv_desc+32]
     mov ecx,2
@@ -306,17 +495,23 @@ gv_probe_gpt:
     mov rax,[rel gv_header+40]
     cmp rax,34
     jb .no
+    cmp dword [rel gv_discover],0
+    jne .first_ok
     cmp rax,[rel gv_desc+16]
     ja .no
+.first_ok:
     mov rdx,[rel gv_header+48]
     cmp rdx,rax
     jb .no
+    cmp dword [rel gv_discover],0
+    jne .extent_ok
     mov rcx,[rel gv_desc+16]
     add rcx,[rel gv_desc+24]
     jc .no
     dec rcx
     cmp rcx,rdx
     ja .no
+.extent_ok:
     mov rax,[rbx+dev.info]
     mov rax,[rax+blk_info.lba_max]
     cmp [rel gv_header+32],rax
@@ -365,6 +560,13 @@ gv_probe_gpt:
     call hotpatch_crc32
     cmp eax,[rel gv_header+88]
     jne .no
+    cmp dword [rel gv_discover],0
+    je .entries
+    ; Same CRC-checked GPT, native boot GUID only. 1 means absent, -1 invalid.
+    call gvc_find_partition
+    test eax,eax
+    jnz .out
+.entries:
     lea r14,[rel gv_array]
     xor r15d,r15d
 .entry:
@@ -385,6 +587,27 @@ gv_probe_gpt:
     xor rsi,[rel gv_desc+56]
     or rcx,rsi
     jnz .other
+    cmp dword [rel gv_check],0
+    je .type_ok
+    mov rcx,[r14]
+    cmp rcx,[rel gvc_esp_type]
+    jne .no
+    mov rcx,[r14+8]
+    cmp rcx,[rel gvc_esp_type+8]
+    jne .no
+.type_ok:
+    cmp dword [rel gv_check],0
+    jne .slot_ok
+    cmp dword [rel gv_format],1
+    jne .slot_ok
+    ; Format144 binds a one-based entry slot as well as GUID and extent.
+    ; Reclaim must not accept a CRC-correct relocation of that same partition.
+    mov ecx,[rel gv_header+80]
+    sub ecx,r12d
+    inc ecx
+    cmp ecx,[rel gv_format_tuple+4]
+    jne .no
+.slot_ok:
     inc r15d
     cmp r15d,1
     jne .no
@@ -424,16 +647,29 @@ gv_probe_gpt:
     pop r12
     ret
 
-; Direct read is private to the lease's before/after GPT probe. Its callers
+; Direct read is private to the lease's before/after partition probe. Its callers
 ; have checked current membership and exact incarnation; it cannot write.
 gv_probe_read:
     push rcx
+    ; Construction reads are also under the exact original CHECK deadline.
+    ; Reclaim is a different lifetime: actual stopped128 was already checked
+    ; before QUARANTINED, so an expired UI cannot prevent read-only closure.
+    cmp dword [rel gv_check],0
+    je .range
+    cmp dword [rel gv_state],GV_QUARANTINED
+    je .range
+    call gvc_current
+    test rax,rax
+    jnz .refused
+.range:
     call blk_validate_range
     pop rcx
     test rax,rax
     jnz .out
     mov rax,[rdi+dev.ops]
     jmp [rax+blk_ops.read]
+.refused:
+    pop rcx
 .out:
     ret
 
@@ -463,8 +699,16 @@ gv_live:
     mov ecx,blk_ops_size/8
     repe cmpsq
     jne .bad
+    cmp dword [rel gv_check],0
+    je .writable
+    mov edx,[rbx+dev.flags]
+    cmp edx,[rel gvc_dev_flags]
+    jne .bad
+    jmp .flags_ok
+.writable:
     test dword [rbx+dev.flags],BLKF_RO
     jnz .bad
+.flags_ok:
     mov rsi,rax
     lea rdi,[rel gv_info]
     mov ecx,blk_info_size
@@ -506,6 +750,15 @@ gv_active:
     jne .no
     cmp dword [rel gv_state],GV_ACTIVE
     jne .no
+    cmp dword [rel gv_check],0
+    je .live
+    ; Exact native service original40/runtime128, never a worker tuple.
+    call gvc_current
+    test rax,rax
+    jz .live
+    mov dword [rel gv_state],GV_FROZEN
+    jmp .no
+.live:
     jmp gv_live
 .no:
     mov rax,-1
@@ -554,6 +807,11 @@ guest_volume_read:
     ret
 
 guest_volume_write:
+    cmp dword [rel gv_check],0
+    je .writer
+    mov rax,-1
+    ret
+.writer:
     push rbx
     mov rbx,rcx
     call gv_io
@@ -596,6 +854,11 @@ gv_fault:
     ret
 
 guest_volume_flush:
+    cmp dword [rel gv_check],0
+    je .writer
+    mov rax,-1
+    ret
+.writer:
     sub rsp,8
     call gv_active
     test rax,rax
@@ -652,31 +915,48 @@ guest_volume_reclaim:
     jne .no
     cmp dword [rel gv_state],GV_FROZEN
     jne .no
+    cmp dword [rel gv_check],0
+    je .live
+    ; No guest ACK, UI expiry or frozen bit substitutes for actual stopped128.
+    lea rdi,[rel gvc_original+40]
+    mov esi,128
+    call app_vm_updater_stopped
+    cmp eax,1
+    jne .no
+.live:
     call gv_live
     mov dword [rel gv_state],GV_QUARANTINED
     test rax,rax
     jnz .revoke_bad
+    cmp dword [rel gv_check],0
+    jne .probe
     call gv_physical_flush
     ; gv_fault may set FROZEN: terminal attempt still must remain consumed.
     mov dword [rel gv_state],GV_QUARANTINED
     test rax,rax
     jnz .revoke_bad
+.probe:
     mov rbx,[rel gv_desc]
-    call gv_probe_gpt
+    call gv_probe_partition
     test rax,rax
     jnz .revoke_bad
     cmp dword [rel gv_uncertain],0
     jne .revoke_bad
+    cmp dword [rel gv_check],0
+    jne .released
     mov rdi,[rel gv_job]
     call storage_access_job_revoke
     test rax,rax
     jnz .no
     mov qword [rel gv_job],0
+.released:
     mov dword [rel gv_state],GV_RELEASED
     xor eax,eax
     jmp .out
 .revoke_bad:
     mov dword [rel gv_uncertain],1
+    cmp dword [rel gv_check],0
+    jne .no
     mov rdi,[rel gv_job]
     call storage_access_job_revoke
     mov qword [rel gv_job],0
@@ -687,7 +967,8 @@ guest_volume_reclaim:
     ret
 
 ; Native supervisor descriptor readback; never copy a live handle to a guest.
-; RDI=handle, RSI=out136, RDX=capacity ->0/-1. Pure cached fact, no IO/regrant.
+; RDI=handle, RSI=out, RDX=capacity ->0/-1. Format requires/returns144;
+; legacy returns136. Pure cached fact, no IO/regrant.
 guest_volume_snapshot:
     test rdi,rdi
     jz .no
@@ -697,6 +978,22 @@ guest_volume_snapshot:
     jz .no
     cmp rdx,GV_DESC_SIZE
     jb .no
+    cmp dword [rel gv_check],0
+    jne .legacy
+    cmp dword [rel gv_format],1
+    jne .legacy
+    cmp rdx,144
+    jb .no
+    mov rdi,rsi
+    lea rsi,[rel gv_desc]
+    mov ecx,GV_DESC_SIZE/8
+    cld
+    rep movsq
+    mov rax,[rel gv_format_tuple]
+    stosq
+    xor eax,eax
+    ret
+.legacy:
     mov rdi,rsi
     lea rsi,[rel gv_desc]
     mov ecx,GV_DESC_SIZE/8
@@ -836,6 +1133,8 @@ guest_volume_mount_allowed:
     mov rax,-1
     ret
 
+%include "fs/update_check_lease.asm"
+
 %include "core/abi/wdata.inc"
 %macro WDATA_fs_guest_volume 0
 gv_caller: db "guest-volume",0
@@ -853,6 +1152,10 @@ gv_unit: resd 1
 gv_state: resd 1
 gv_uncertain: resd 1
 gv_dirty: resd 1
+gv_format: resd 1
+alignb 8
+gv_format_tuple: resq 1
+gv_mbr: resb 512
 gv_desc: resb GV_DESC_SIZE
 gv_info: resb blk_info_size
 gv_ops_contents: resb blk_ops_size

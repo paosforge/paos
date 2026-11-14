@@ -1,6 +1,6 @@
 ;; MODULE svc/app_package
 ;; LAYER 5
-;; EXPORTS app_package_stage, app_package_descriptor, app_package_copy, app_package_retire
+;; EXPORTS app_package_verify_unsigned_script, app_package_verify_trusted_script, app_package_stage, app_package_descriptor, app_package_copy, app_package_retire
 ;; IMPORTS svc/app_script, svc/app_bundle, core/lib/sha256, bootmgr/rsa2048_verify, core/heap, sec/session, core/smp
 ;; CAPS
 ;; OWNER saga:command
@@ -580,3 +580,33 @@ ap_verified_author: resd 1
 ap_busy: resb 1
 %endmacro
 WDATA_BSS_DEFER WDATA_BSS_app_package
+
+; Internal verifier composition used by the script snapshot, R12/R13 owned bytes.
+; Sharing bytes stay unmodified: full content hash, carried-modulus signature,
+; manifest/member parser AND exact current APPKEY modulus. Installed consent is
+; not an APPKEY enrollment; signed unknown-author bytes still refuse here.
+app_package_verify_trusted_script:
+    cmp dword [r12+40],3
+    jne .bad
+    call ap_verify
+    test eax,eax
+    jz .bad
+    call ap_author_now
+    cmp eax,1
+    jne .bad
+    mov eax,1
+    ret
+.bad:
+    xor eax,eax
+    ret
+
+; Pure canonical-unsigned verifier. Success authenticates format/content only,
+; never ownership, installation, an adoption choice or execution authority.
+; Only the fixed script installed lookup composes it with owner-sealed state.
+app_package_verify_unsigned_script:
+    cmp dword [r12+40],1
+    jne .bad
+    jmp ap_verify
+.bad:
+    xor eax,eax
+    ret

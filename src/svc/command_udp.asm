@@ -1,8 +1,8 @@
 ;; MODULE svc/command_udp
 %include "core/abi/build_profile.inc"
 ;; LAYER 5
-;; EXPORTS cmd_verb_bootlog, command_udp_progress_enter, command_udp_progress_complete, command_udp_progress_snapshot, udp_audit_redacted, udp_net_is_credential_verb, command_udp_init, command_udp_poll, command_udp_reset_request_state, command_udp_bind_domain, command_udp_unbind_domain, command_udp_domain_arp_probe, command_udp_capture_reply, command_udp_gres_reply_take, command_udp_gres_reply_retire, udp_boot_beacon_tick, udp_boot_beacon_observe, arp_frame_view, udp_parse_u64, hp_perf_declare, fault_verb_declare, hp_upload_arena_init, hp_upload_canaries_intact, hp_upload_bounds_selftest, ephform_bind_loader, ephform_transport_discard, ephform_selftest, udp_our_mac, udp_our_ip2, udp_our_ip3, udp_ingress_handle, command_udp_status_snapshot, command_acpi_public_observation, udp_primary_mac, netlist_buf, netlist_ready, netlist_cur, udp_display_probe_op, udp_display_serial, command_udp_arp_observation_current
-;; IMPORTS svc/command_parser_census, svc/command_hp_serial, svc/driver_domain_return, core/runtime_failure_record, svc/runtime_failure_sources, svc/device_reconnect_request, svc/device_reconnect, core/maintenance_record, svc/native_fault, svc/command_memory_consumer, svc/service_progress, svc/aer_poll, core/failure_record, core/idle_prof, svc/command_uac1_input_probe, svc/command_uac1_capture, svc/command_wav_playback, boot/serial, boot/gop, boot/header, boot/beacon, boot/pmod_loader, core/idt, core/diag, core/log, core/time, core/build_id, core/lib/fmt, core/lib/cksum, core/lib/crc32, core/csprng, lib/safe_buffer, net/netdev, net/dhcp, net/dns, net/ntp, net/icmp, net/tcp, net/tls13, dev/net/e1000e, dev/net/rtl8168, dev/net/rtl8125, boot/smbios, dev/blk/nvme, dev/blk/ahci, dev/net/virtio_domain, sec/job_receipt, svc/command, svc/command_pci_mmio, svc/command_cons, svc/command_auth, svc/clipboard, svc/command_ssh, svc/ssh, svc/command_web, svc/command_dns, svc/command_ntp, svc/command_netcheck, svc/command_tls13, svc/command_net_diag, svc/hotpatch, svc/command_blk, svc/command_scap, svc/command_filmstrip, svc/command_bootmenu, svc/command_guestfile, svc/command_datacrypto, svc/command_fs, svc/command_backup, svc/command_software_stop, fs/vfs, data/crypto_envelope, data/kvstore, hv/amdvi, hv/vtd, dev/blk/vmd, hv/guest_surface, hv/cdp_bridge, svc/command_privacy, svc/command_srvstat, svc/command_compat, bus/acpi, bus/superio, core/lib/sha256, net/arp_cache, svc/command_audit, svc/ssh_channel, dev/power/ec_power, svc/command_shutdown, sec/principal, svc/boot_gates, core/reset_wipe, boot/paging, sec/replay_floor, boot/boot_v2_handoff, boot/boot_v2_health, sec/ucode_preload, sec/cpu_microcode_boot
+;; EXPORTS command_udp_dhcp_accept, cmd_verb_bootlog, command_udp_progress_enter, command_udp_progress_complete, command_udp_progress_snapshot, udp_audit_redacted, udp_net_is_credential_verb, command_udp_init, command_udp_poll, command_udp_reset_request_state, command_udp_bind_domain, command_udp_unbind_domain, command_udp_domain_arp_probe, command_udp_capture_reply, command_udp_gres_reply_take, command_udp_gres_reply_retire, udp_boot_beacon_tick, udp_boot_beacon_observe, arp_frame_view, udp_parse_u64, hp_perf_declare, fault_verb_declare, hp_upload_arena_init, hp_upload_canaries_intact, hp_upload_bounds_selftest, ephform_bind_loader, ephform_transport_discard, ephform_selftest, udp_our_mac, udp_our_ip2, udp_our_ip3, udp_ingress_handle, command_udp_status_snapshot, command_acpi_public_observation, udp_primary_mac, netlist_buf, netlist_ready, netlist_cur, udp_display_probe_op, udp_display_serial, command_udp_arp_observation_current
+;; IMPORTS net/usb_command_member, svc/command_parser_census, hv/driver_domain, svc/command_hp_serial, svc/driver_domain_return, core/runtime_failure_record, svc/runtime_failure_sources, svc/device_reconnect_request, svc/device_reconnect, core/maintenance_record, svc/native_fault, svc/command_memory_consumer, svc/service_progress, svc/aer_poll, core/failure_record, core/idle_prof, svc/command_uac1_input_probe, svc/command_uac1_capture, svc/command_wav_playback, boot/serial, boot/gop, boot/header, boot/beacon, boot/pmod_loader, core/idt, core/diag, core/log, core/time, core/build_id, core/lib/fmt, core/lib/cksum, core/lib/crc32, core/csprng, lib/safe_buffer, net/netdev, net/dhcp, net/dns, net/ntp, net/icmp, net/tcp, net/tls13, dev/net/e1000e, dev/net/rtl8168, dev/net/rtl8125, boot/smbios, dev/blk/nvme, dev/blk/ahci, dev/net/virtio_domain, sec/job_receipt, svc/command, svc/command_pci_mmio, svc/command_cons, svc/command_auth, svc/clipboard, svc/command_ssh, svc/ssh, svc/command_web, svc/command_dns, svc/command_ntp, svc/command_netcheck, svc/command_tls13, svc/command_net_diag, svc/hotpatch, svc/command_blk, svc/command_scap, svc/command_filmstrip, svc/command_bootmenu, svc/command_guestfile, svc/command_datacrypto, svc/command_fs, svc/command_backup, svc/command_software_stop, fs/vfs, data/crypto_envelope, data/kvstore, hv/amdvi, hv/vtd, dev/blk/vmd, hv/guest_surface, hv/cdp_bridge, svc/command_privacy, svc/command_srvstat, svc/command_compat, bus/acpi, bus/superio, core/lib/sha256, net/arp_cache, svc/command_audit, svc/ssh_channel, dev/power/ec_power, svc/command_shutdown, sec/principal, svc/boot_gates, core/reset_wipe, boot/paging, sec/replay_floor, boot/boot_v2_handoff, boot/boot_v2_health, sec/ucode_preload, sec/cpu_microcode_boot
 ;; CAPS
 ;; OWNER saga:command
 
@@ -1394,7 +1394,7 @@ udp_select_fleet_address:
     jnz  .set_100
     jmp  .done
 .not_msi:
-    ; HP-PORT-4: HP EliteDesk 705 G5 (hp-elitedesk-705g5-SERIAL) owns its lab address
+    ; HP-PORT-4: the lab HP EliteDesk 705 G5 owns its lab address
     ; only for its exact onboard MAC (paos_hp primary_target.json:35-40).
     cmp  ecx, NETDEV_F_ADDR_HP
     jne  .not_hp
@@ -1407,7 +1407,7 @@ udp_select_fleet_address:
     ; HP CT (PETER 06:22): Peter's Intel Gigabit CT 82574L, now the HP's dedicated
     ; PaOS NIC. The e1000e backend selects this flag on AuthenticAMD metal; like
     ; every other metal profile the HP owns its lab address only for the card's exact MAC
-    ; (installed receipt <MAC redacted>, the same card the MSI profile pins).
+    ; (the installed receipt's MAC, the same card the MSI profile pins).
     cmp  ecx, NETDEV_F_ADDR_HP_CT
     jne  .done
     lea  rsi, [rel udp_expected_mac_hp_ct]
@@ -1575,6 +1575,11 @@ command_udp_select_ingress_mac:
     mov  rax, [rel udp_ingress_handle]
     test rax, rax
     jz   .select_primary
+    cmp  rax, [rel udp_usb_member]
+    jne  .select_oob
+    lea  rsi, [rel udp_usb_member + 48]
+    jmp  .select_copy
+.select_oob:
     cmp  rax, [rel udp_oob_nic_handle]
     jne  .select_primary
     lea  rsi, [rel udp_oob_mac]
@@ -1619,6 +1624,19 @@ command_udp_route_tx:
 %endif
     test rdi, rdi
     jz   netdev_tx
+    cmp  byte [rel udp_usb_receiving], 0
+    je   .plain_current
+    push rsi
+    push rdx
+    sub  rsp, 8
+    call command_usb_current
+    add  rsp, 8
+    pop  rdx
+    pop  rsi
+    test rax, rax
+    jz   .route_drop
+    mov  rdi, rax
+.plain_current:
     mov  r10, [rdi + dev.ops]
     test r10, r10
 %ifidn RCQ_SERVICE_PROGRESS_PLAIN_AUTHSTAT,1
@@ -2257,9 +2275,9 @@ udp_arp_wire_exercise:
     mov  byte [rel arp_m_cache_table], 1
     lea  rdi, [rel str_arp_wire_table]
     call serial_string
-    ; RCQ-10 R1 (root 06:42): (2)-(4) probe the LAB gateway (lab gateway address) and answer
+    ; RCQ-10 R1 (root 06:42): (2)-(4) probe the LAB gateway and answer
     ; for our lab .50: lab-only. A public install keeps the live cache from (1) and
-    ; never asks the LAN about (the lab subnet) (nor marks it solicited).
+    ; never asks the LAN about the lab subnet (nor marks it solicited).
     call lab_fleet_identity
     test eax, eax
     jz   .degrade
@@ -2291,7 +2309,7 @@ udp_arp_wire_exercise:
     mov  [rcx + 14], eax
     mov  dword [rcx + 18], 0                    ; tha = 0 (unknown — what we resolve)
     mov  word  [rcx + 22], 0
-    mov  byte [rcx + 24], 192                   ; tpa = gateway (lab gateway address)
+    mov  byte [rcx + 24], 192                   ; tpa = lab gateway
     mov  byte [rcx + 25], 168
     mov  byte [rcx + 26], 87
     mov  byte [rcx + 27], 1
@@ -2523,6 +2541,7 @@ command_udp_poll:
     pop  rax
     popfq
     call command_udp_linktest_tick             ; restore runs even while RX is silent
+    call tcpprobe_link_tick                     ; finite TCP-owned PHY restoration
     call command_udp_public_tick
     pushfq
     push rax
@@ -2550,6 +2569,11 @@ command_udp_poll:
     pop  rax
     popfq
     call dhcp_wire_tick
+    pushfq
+    push rax
+    call command_udp_dhcp_probe_sample   ; capture native transition before normal policy release
+    pop  rax
+    popfq
     call boot_gates_mark_dhcp_wire             ; measurement only: first DISCOVER/OFFER (BOOTLOG timeline)
     pushfq
     push rax
@@ -2687,6 +2711,7 @@ command_udp_poll:
     popfq
 .dns_live:
     call command_udp_linktest_sample           ; native policy after real lease/DNS release
+    call command_udp_dhcp_probe_tick           ; autonomous recovery after ordinary policy release
     pushfq
     push rax
     mov  eax, 14
@@ -2700,6 +2725,8 @@ command_udp_poll:
     call command_udp_progress_complete
     pop  rax
     popfq
+    call usb_nic_link_repoll                 ; INPUT: cached due check, bounded parked-member activation
+    call command_usb_poll
     mov  rdi, [rel udp_nic_handle]
     mov  rsi, [rel udp_rx_poll_fn]
     lea  rdx, [rel udp_primary_mac]
@@ -3271,7 +3298,16 @@ command_udp_poll_one:
     call command_udp_copy6
     mov  [rel udp_ingress_handle], rbx
     mov  r12, CMD_UDP_RXBUDGET
+    cmp  byte [rel udp_usb_receiving], 0
+    je   .one_drain
+    mov  r12d, 1                              ; bounded USB work does not steal the primary drain
 .one_drain:
+    cmp  byte [rel udp_usb_receiving], 0
+    je   .one_live
+    call command_usb_current
+    cmp  rax, rbx
+    jne  .one_out
+.one_live:
     sub  rsp, 8
     call command_udp_arp_prepare
     add  rsp, 8
@@ -3296,6 +3332,13 @@ command_udp_poll_one:
     test rax, rax
     jle  .one_out
     mov  r14, rax                             ; frame length (the MAC ptr is dead after copy6)
+    cmp  byte [rel udp_usb_receiving], 0
+    je   .one_current
+    call command_usb_current
+    cmp  rax, rbx
+    jne  .one_stale
+.one_current:
+    mov  rax, r14
     push rax
     call command_udp_arp_begin
     pop  rax
@@ -3315,6 +3358,7 @@ command_udp_poll_one:
     pop  rax
     popfq
     mov  qword [rel arp_obs_context], 0
+.one_stale:
     ; Secret hygiene (w045): an AUTH1/unsigned datagram is plaintext on the wire,
     ; so this frame copy may carry a credential (AUTHLOGIN/AUTHENROLL/PUSHAUTH).
     ; Every consumer ran synchronously above (TCP copies into its TCB), so wipe
@@ -3463,6 +3507,8 @@ udp_process_frame:
 ; Header shape and complete fixed-width body are validated before a caller can
 ; learn sender state or inspect an opcode/address.
 arp_frame_view:
+    cmp  rsi, CMD_UDP_FRAMEMAX              ; original RX/TX scratch is the outer span cap
+    ja   .bad                              ; reject a bad driver length before any load
     mov  edx, ETH_HLEN
     mov  ecx, 28
     call safe_span_validate
@@ -3509,6 +3555,9 @@ udp_handle_arp:
     mov  ax, [r12 + 12]
     cmp  ax, [rbx + 10]
     jne  .obs_sha
+    ; Secondary USB has no ARP learning or guest/domain publication (SEC R-U1/R-U2).
+    cmp  byte [rel udp_usb_receiving], 0
+    jne  .usb_arp
     mov  eax, [r12 + 14]                       ; spa: never ours (conflict/spoof)
     test eax, eax
     jz   .arp_learned                          ; RFC 5227 probe: may be answered, never learned
@@ -3587,6 +3636,25 @@ udp_handle_arp:
     jz   .out
     cmp  rdx, [rel udp_ingress_handle]
     jne  .out
+    jmp  .arp_mine
+.usb_arp:
+    cmp  word [r12 + 6], 0x0100                 ; requests only; never consume a pending note
+    jne  .out
+    mov  eax, [r12 + 14]
+    cmp  eax, [rel udp_usb_address]
+    je   .out
+    cmp  eax, [rel udp_our_ip]
+    je   .out
+    cmp  eax, [rel udp_our_ip2]
+    je   .out
+    cmp  eax, [rel udp_our_ip3]
+    je   .out
+    mov  eax, [r12 + 24]
+    test eax, eax
+    jz   .out
+    cmp  eax, [rel udp_usb_address]
+    jne  .out
+    jmp  .arp_mine
 .arp_mine:
     mov  [rel udp_arp_spa], eax                ; reply AS the exact IP that was queried
     ; --- build ARP reply in udp_tx_frame ---
@@ -3702,6 +3770,8 @@ udp_handle_ipv4:
     call net_cksum16                           ; a valid header re-sums to 0
     test eax, eax
     jnz  .out                                  ; bad IPv4 header checksum
+    cmp  byte [rel udp_usb_receiving], 0
+    jne  .usb_ipv4
     ; Protocol demux: TCP shares this one RX owner; it never installs a competing
     ; NIC poller. Every other protocol is ignored without side effects.
     cmp  byte [r12 + 9], IP_PROTO_TCP
@@ -3711,6 +3781,28 @@ udp_handle_ipv4:
     cmp  byte [r12 + 9], IP_PROTO_UDP
     jne  .out
     jmp  .udp
+.usb_ipv4:
+    ; USB frames are local command/echo traffic only. They never reach NAT,
+    ; TCP, DHCP, DNS, NTP, virtio_domain or guest/share-back consumers (R-U2).
+    mov  eax, [r12 + 16]
+    test eax, eax
+    jz   .out
+    cmp  eax, [rel udp_usb_address]
+    jne  .out
+    cmp  byte [r12 + 9], IP_PROTO_ICMP
+    je   .icmp_reply
+    cmp  byte [r12 + 9], IP_PROTO_UDP
+    jne  .out
+    call command_udp_udp_cksum_ok
+    test eax, eax
+    jnz  .out
+    lea  rdx, [r12 + r13]                       ; validated UDP span; command port only
+    movzx eax, word [rdx + 2]
+    xchg al, ah
+    cmp  eax, CMD_UDP_PORT
+    jne  .out                                  ; no screenshot/PMOD or auxiliary USB service
+    mov  eax, [r12 + 16]
+    jmp  .ip_mine
 .tcp:
     ; bee023 metal-proven guest TCP NAT: a live, exact tuple owns only its
     ; translated port. Foreign/host TCP still falls through to PaOS TCP.
@@ -3758,6 +3850,7 @@ udp_handle_ipv4:
     call guestnet_nat_rx_frame
     test eax, eax
     jnz  .out
+.icmp_reply:
     ; SEC-S7a: an echo reply goes back to the frame's own source MAC; IP-layer
     ; traffic never teaches the ARP cache (a spoofed source would rebind it).
     mov  edi, [r12 + 12]
@@ -4112,10 +4205,18 @@ udp_handle_ipv4:
     cmp  byte [r14 + 15], ' '
     jne  .out
     cmp  dword [r14 + 16], 'RECT'
-    jne  .out
+    jne  .scap_v2_nonce
     cmp  byte [r14 + 20], ' '
     jne  .out
     jmp  .scap_v2_route
+.scap_v2_nonce:
+    cmp  esi, 47
+    jne  .out
+    cmp  dword [r14 + 16], 'NONC'
+    jne  .out
+    cmp  word [r14 + 20], 'E '
+    jne  .out
+    jmp  .scap_v2_route                    ; handler validates every nonce byte
 .scap_v2_full:
     cmp  byte [r14 + 15], 10
     jne  .out
@@ -4457,6 +4558,156 @@ command_udp_request_boundary:
 ;   refusal, so a credential verb leaves no plaintext whichever path it took.
 ;   The wipe is the canonical core/lib memset (hand-written rep stosb: nothing
 ;   can elide it). clobbers: RAX,RCX,RDX,RSI,RDI.
+; ---------------------------------------------------------------------------
+; ROOT108715 (3): a refused post-ACK reset leaves one serial record.
+; udp_reset_arg_capture(RDI BOOT argument) runs before the scrub and keeps
+; only a fixed code (1 WIN, 2 WINDOWS, 3 LINUX, 4 DIAG, 5 OTHER), never text.
+udp_reset_arg_capture:
+    push rbx
+    push r12
+    mov  rbx, rdi
+    mov  byte [rel udp_reset_arg], 5
+    test rbx, rbx
+    jz   .out
+    mov  r12d, 1
+.next:
+    mov  eax, r12d
+    shl  eax, 3
+    lea  rdi, [rel udp_reset_args]
+    add  rdi, rax
+    mov  rsi, rbx
+    call strcmp
+    test rax, rax
+    jz   .hit
+    inc  r12d
+    cmp  r12d, 4
+    jbe  .next
+    jmp  .out
+.hit:
+    mov  [rel udp_reset_arg], r12b
+.out:
+    pop  r12
+    pop  rbx
+    ret
+
+; udp_reset_refused_record(EDI route 1 REBOOT/2 DBPUTKILL/3 BOOT, ESI prepare
+; result). Formats into a private stack buffer and issues ONE serial_string, so
+; other CPUs' output cannot split the line. Passive: no state is changed.
+udp_reset_refused_record:
+    push rbx
+    push r12
+    push r13
+    push rbp
+    mov  rbp, rsp
+    mov  r12d, edi
+    mov  r13d, esi
+    sub  rsp, 256
+    and  rsp, -16
+    lea  rdi, [rel str_udp_rr_head]
+    mov  rsi, rsp
+    call udp_rr_put
+    cmp  r12d, 3
+    jbe  .route_ok
+    xor  r12d, r12d
+.route_ok:
+    mov  ebx, r12d
+    shl  ebx, 4
+    lea  rdi, [rel udp_reset_verbs]
+    add  rdi, rbx
+    mov  rsi, rax
+    call udp_rr_put
+    lea  rdi, [rel str_udp_rr_arg]
+    mov  rsi, rax
+    call udp_rr_put
+    xor  ebx, ebx                      ; '-' unless this was a BOOT reset
+    cmp  r12d, 3
+    jne  .arg
+    movzx ebx, byte [rel udp_reset_arg]
+    cmp  ebx, 5
+    jbe  .arg
+    mov  ebx, 5
+.arg:
+    shl  ebx, 3
+    lea  rdi, [rel udp_reset_args]
+    add  rdi, rbx
+    mov  rsi, rax
+    call udp_rr_put
+    lea  rdi, [rel str_udp_rr_prepare]
+    mov  rsi, rax
+    mov  edx, r13d
+    call udp_rr_hex
+    lea  rdi, [rel str_udp_rr_branch]
+    mov  rsi, rax
+    movzx edx, byte [rel driver_return_branch]
+    call udp_rr_hex
+    lea  rdi, [rel str_udp_rr_state]
+    mov  rsi, rax
+    mov  edx, [rel nd_state]
+    call udp_rr_hex
+    lea  rdi, [rel str_udp_rr_terminal]
+    mov  rsi, rax
+    mov  edx, [rel nd_terminal]
+    call udp_rr_hex
+    lea  rdi, [rel str_udp_rr_released]
+    mov  rsi, rax
+    mov  edx, [rel nd_released]
+    call udp_rr_hex
+    lea  rdi, [rel str_udp_rr_fault]
+    mov  rsi, rax
+    mov  edx, [rel nd_fault]
+    call udp_rr_hex
+    lea  rdi, [rel str_udp_rr_crlf]
+    mov  rsi, rax
+    call udp_rr_put
+    mov  rdi, rsp
+    call serial_string
+    mov  rsp, rbp
+    pop  rbp
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+
+; udp_rr_put(RDI text, RSI cursor) -> RAX cursor past the copied text (NUL kept).
+udp_rr_put:
+    push rbx
+    mov  rbx, rsi
+    call fmt_str
+    add  rax, rbx
+    pop  rbx
+    ret
+
+; udp_rr_hex(RDI label, RSI cursor, EDX value) -> RAX cursor; label then 16 hex digits.
+udp_rr_hex:
+    push rbx
+    push r12
+    sub  rsp, 8
+    mov  r12d, edx
+    call udp_rr_put
+    mov  rbx, rax
+    mov  edi, r12d
+    mov  rsi, rbx
+    mov  edx, 16
+    call fmt_hex
+    add  rax, rbx
+    add  rsp, 8
+    pop  r12
+    pop  rbx
+    ret
+
+str_udp_rr_head:     db "[PAOS64] reset.refused verb=", 0
+str_udp_rr_arg:      db " arg=", 0
+str_udp_rr_prepare:  db " prepare=0x", 0
+str_udp_rr_branch:   db " branch=0x", 0
+str_udp_rr_state:    db " nd_state=0x", 0
+str_udp_rr_terminal: db " terminal=0x", 0
+str_udp_rr_released: db " released=0x", 0
+str_udp_rr_fault:    db " fault=0x", 0
+str_udp_rr_crlf:     db 13, 10, 0
+; Fixed-width name slots, no pointer tables: routes 16 bytes, BOOT arguments 8.
+udp_reset_verbs: db "-",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, "REBOOT",0,0,0,0,0,0,0,0,0,0, "DBPUTKILL",0,0,0,0,0,0,0, "BOOT",0,0,0,0,0,0,0,0,0,0,0,0
+udp_reset_args: db "-",0,0,0,0,0,0,0, "WIN",0,0,0,0,0, "WINDOWS",0, "LINUX",0,0,0, "DIAG",0,0,0,0, "OTHER",0,0,0
+
 command_udp_scrub_request:
     lea  rdi, [rel udp_line]
     xor  esi, esi
@@ -5217,7 +5468,43 @@ udp_dispatch_line:
     call hp_streq
     test rax, rax
     jnz  .not_reboot
+    ; ROOT109558 (1), SEC109572 S1: after auth and the route gate, before the
+    ; pending bit: a live guest that cannot be retired refuses here, never
+    ; 'queued' and then no reset.
+    call driver_return_verb_admit      ; verified cleanup retry (SEC109734), then the admit
+    test eax, eax
+    jnz  .reboot_guest_live
     mov  byte [rel udp_reboot_pending], 1
+    cmp  byte [rel driver_return_uncertain], 0
+    je   .reply
+    lea  rdx, [rel hp_out_buf]          ; admitted: the reply names the possible stale target
+    mov  [rel hp_out_cur], rdx
+    lea  rdi, [rel str_udp_reboot_queued_target]
+    call hp_out_str
+    mov  byte [rel hp_out_ready], 1
+    jmp  .reply
+.reboot_guest_live:
+    lea  rdx, [rel hp_out_buf]
+    mov  [rel hp_out_cur], rdx
+    lea  rdi, [rel str_udp_reboot_guest_live]
+    call hp_out_str
+    cmp  byte [rel driver_return_admit_reason], 4
+    je   .reboot_unverified
+    lea  rdi, [rel str_udp_reset_stop_refused]
+    call hp_out_str
+    movzx edi, byte [rel driver_return_admit_blocker]
+    call hp_out_dec
+    jmp  .reboot_refused_staged
+.reboot_unverified:
+    lea  rdi, [rel str_udp_reset_stop_unverified]
+    call hp_out_str
+.reboot_refused_staged:
+    cmp  byte [rel driver_return_uncertain], 0
+    je   .reboot_refused_ready
+    lea  rdi, [rel str_udp_reboot_target]
+    call hp_out_str
+.reboot_refused_ready:
+    mov  byte [rel hp_out_ready], 1
     jmp  .reply
 .not_reboot:
     ; --- RCQ-27 SHUTDOWN intercept: owner-signed remote power-off. The route gate
@@ -5409,6 +5696,28 @@ udp_dispatch_line:
     pop  rax
     popfq
     mov  byte [rel command_auth_refusal_ready], 0
+    ; Optional owner return plan: the actual BOOT WIN reply is already sent.
+    ; Commit before remote_end/scrub destroys its verified request context.
+    cmp byte [rel bm_reboot_pending],1
+    jne .power_return_done
+    cmp byte [rel udp_reboot_pending],0
+    jne .power_return_done
+    cmp byte [rel kv_reboot_pending],0
+    jne .power_return_done
+    mov rdi,r13
+    call udp_reset_arg_capture                ; ROOT108715 (3): BOOT target code, before the scrub
+    mov rdi,r12
+    mov rsi,r13
+    call command_power_return_bootwin         ; ROOT108445: BOOT WIN keeps its reset
+    test eax,eax
+    jnz .power_return_done                    ; plan disarmed and recorded; .reboot_fire below
+    mov rdi,r12
+    mov rsi,r13
+    call command_power_return_commit
+    test eax,eax
+    jz .power_return_done
+    mov byte [rel bm_reboot_pending],0        ; sole idle tick owns this action
+.power_return_done:
     call command_auth_remote_end
 %if !PAOS_PUBLIC_BUILD
     mov  byte [rel udp_pmod_ingress], 0
@@ -5416,25 +5725,35 @@ udp_dispatch_line:
     call command_udp_scrub_request            ; w045: reply is on the wire; drop every line copy
     ; --- 1107: if REBOOT was requested, the ack is now on the wire — fire the warm
     ;     CF9 reset (RST_CPU bit2 + SYS_RST bit1 = 0x06). Does not return. ---
+    ; ROOT108715 (3): EBX carries the route (1 REBOOT, 2 DBPUTKILL, 3 BOOT, 0 none)
+    ; to .no_reboot_fire, which records a refused reset.
+    mov  ebx, 1
     cmp  byte [rel udp_reboot_pending], 1
     je   .reboot_fire
     ; 1057 DBPUTKILL stopped after the verified TMP write. Its staged ACK is on
     ; the wire; take the same canonical warm-CF9 path to exercise recovery.
+    mov  ebx, 2
     cmp  byte [rel kv_reboot_pending], 1
     je   .reboot_fire
     ; 1015: BOOT WIN/LINUX/DIAG staged its one-shot CMOS override — same
     ; ack-first-then-warm-CF9 contract as REBOOT (next boot's menu honors it).
+    xor  ebx, ebx
     cmp  byte [rel bm_reboot_pending], 1
     jne  .no_reboot_fire
+    mov  ebx, 3
 .reboot_fire:
     ; One acknowledged return; stopping the guest can retire our sole endpoint.
     ; Refuse unsafe retirement before key wipe, DMA teardown or reset.
     mov  byte [rel udp_reboot_pending], 0
     mov  byte [rel kv_reboot_pending], 0
     mov  byte [rel bm_reboot_pending], 0
-    call driver_domain_return_prepare
+    call driver_domain_return_prepare_contained
+    cmp  eax, 5
+    je   .reboot_admitted
     cmp  eax, 3
     jae  .no_reboot_fire
+.reboot_admitted:
+    mov  r12d, eax                     ; preserved across flush, NVMe quiesce and wipe
     ; G9: a clean reset inside the post-readiness stability window settles the
     ; strong health ack first (same checks; publish only after the minimum).
     call software_stop_stability_exit_hook
@@ -5450,6 +5769,8 @@ udp_dispatch_line:
     ; this DRAM to another OS next). The one pre-reset hook wipes it; from here
     ; PaOS never resumes (a reset that returns halts below).
     call reset_wipe_all
+    cmp  r12d, 5
+    je   .reboot_contained
     ; Use firmware reset only when its exact target lies in covered executable
     ; runtime code. Other runtime functions being callable does not prove this
     ; pointer is executable. CF9 remains the bounded fallback.
@@ -5476,7 +5797,36 @@ udp_dispatch_line:
     mov  dx, 0x0cf9
     out  dx, al
     jmp  reset_wipe_halt               ; the keys are gone: never resume
+.reboot_contained:
+    ; SEC110010/110015: the poisoned DID 17 stays installed until PLTRST#.
+    ; State 6 blocks nd_begin/profile/reuse; there is no yield or restart here.
+    ; RST_CPU must rise: firmware can have left it high. Clear it first only
+    ; then, and always assert SYS_RST|RST_CPU. Never CPU-only reset (0x04).
+    mov  dx, 0x0cf9
+    in   al, dx
+    test al, 4
+    jz   .contained_fire
+    mov  al, 0x02
+    out  dx, al
+.contained_fire:
+    mov  al, 0x06
+    out  dx, al
+    mov  ecx, 65536
+.contained_wait:
+    pause
+    dec  ecx
+    jnz  .contained_wait
+    jmp  reset_wipe_halt               ; bounded no-return edge, no firmware fallback
 .no_reboot_fire:
+    ; ROOT108715 (3): a route here means prepare refused (EAX >= 3) after the
+    ; ACK said the reset was queued. Record it (passive, one intact line); the
+    ; refusal itself is unchanged. Route 0: nothing was pending, no record.
+    test ebx, ebx
+    jz   .reboot_none
+    mov  edi, ebx
+    mov  esi, eax
+    call udp_reset_refused_record
+.reboot_none:
     pop  r13
     pop  r12
     pop  rbx
@@ -6104,6 +6454,13 @@ str_acpiinfo_refused: db "ACPIINFO REFUSED reason=BAD_NONCE expected=1..64-alnum
 ; Task2300: BOOTLOG is a canonical public, non-destructive registry read. The
 ; handler is effect-free; UDP projects its frozen lean or validated FULL body.
 bootlog_verb_declare:
+    ; The early CSPRNG declaration already installs the admitted BOOTLOG
+    ; delegate. Keep its stable slot instead of publishing a duplicate name.
+    ; Standalone UDP initialization still registers the canonical handler.
+    lea  rdi, [rel str_verb_bootlog]
+    call command_lookup
+    cmp  rax, -1
+    jne  .done
     lea  rdi, [rel str_verb_bootlog]
     lea  rsi, [rel cmd_verb_bootlog]
     xor  edx, edx
@@ -6111,6 +6468,7 @@ bootlog_verb_declare:
     xor  r8, r8
     xor  r9, r9                           ; destructiveness=0 (read-only)
     call command_register_verb
+.done:
     ret
 
 cmd_verb_bootlog:
@@ -7934,6 +8292,44 @@ udp_send_reply:
 .check_form_reply:
     cmp  byte [rel form_out_ready], 1
     jne  .check_f1_reply
+    ; Guest policy, sysprops and netmon's original collectors/readers require
+    ; VERSION/verb/ARG envelopes. Only their exact admitted opens use them:
+    ; other form_out writers (LOCKSTATE, SESSIONINFO, Console) keep their wire.
+    cmp  dword [rel udp_line], 'FORM'
+    jne  .form_body
+    cmp  dword [rel udp_line + 4], 'LOAD'
+    jne  .form_body
+    cmp  byte [rel udp_line + 8], 0
+    jne  .form_body
+    mov  rdi, [rel udp_arg_ptr]
+    lea  rsi, [rel str_udp_guest_policy_form_arg]
+    call strcmp
+    test rax, rax
+    jz   .form_envelope
+    mov  rdi, [rel udp_arg_ptr]
+    lea  rsi, [rel str_udp_sysprops_form_arg]
+    call strcmp
+    test rax, rax
+    jz   .form_envelope
+    mov  rdi, [rel udp_arg_ptr]
+    lea  rsi, [rel str_udp_netmon_form_arg]
+    call strcmp
+    test rax, rax
+    jnz  .form_body
+.form_envelope:
+    lea  rdi, [rel str_udp_r_pre]
+    call udp_put_str
+    lea  rdi, [rel udp_line]
+    call udp_put_str
+    lea  rdi, [rel str_udp_r_refused]
+    cmp  qword [rel udp_rsp + RSP_CODE], CMDE_OK
+    jne  .form_status
+    lea  rdi, [rel str_udp_r_ok]
+.form_status:
+    call udp_put_str
+    mov  rdi, [rel udp_arg_ptr]
+    call udp_put_arg_echo
+.form_body:
     lea  rdi, [rel form_out_buf]
     call udp_put_str
     mov  byte [rel form_out_ready], 0
@@ -8138,6 +8534,12 @@ udp_send_reply:
     call strcmp
     test rax, rax
     je   .base_typed_status
+    ; FSOWN must carry the native adoption/provisioning refusal on the wire.
+    lea rdi,[rel udp_line]
+    lea rsi,[rel str_udp_fsown_result_verb]
+    call strcmp
+    test eax,eax
+    jz .base_typed_status
     ; NETCFG can refuse malformed policy or a missing/unready NIC. Report the
     ; native result rather than claiming an unexecuted transition succeeded.
     cmp  dword [rel udp_line], 'NETC'
@@ -8172,6 +8574,16 @@ udp_send_reply:
     cmp  byte [rel udp_line + 7], 0
     je   .base_typed_status
 .base_check_modelrun:
+    ; Existing owner BACKLIGHT must expose backend/readback refusal on wire.
+    ; Exact verb only; no argument, authentication or STATUS projection change.
+    mov  rax, 0x4847494c4b434142             ; BACKLIGH
+    cmp  [rel udp_line], rax
+    jne  .base_check_modelrun_brightness_done
+    cmp  byte [rel udp_line+8], 'T'
+    jne  .base_check_modelrun_brightness_done
+    cmp  byte [rel udp_line+9], 0
+    je   .base_typed_status
+.base_check_modelrun_brightness_done:
     ; MODELRUN file advice returns native AUTHDENY. The generic OK envelope
     ; must not contradict that deterministic result (including read errors).
     lea  rdi, [rel udp_line]
@@ -8209,6 +8621,15 @@ udp_send_reply:
     call udp_put_arg_echo
     ; Complete typed replies fit the wire before unrelated boot diagnostics.
     ; Preserve VERSION/native status/bounded ARG and same-boot uptime.
+    call udp_fsown_take
+    test eax,eax
+    jnz .reply_finish
+    call udp_app_isolation_take
+    test eax,eax
+    jnz .reply_finish
+    call udp_app_store_observe_take
+    test eax,eax
+    jnz .reply_finish
     call udp_parser_census_take
     test eax, eax
     jnz .reply_finish
@@ -8345,6 +8766,27 @@ udp_send_reply:
     mov  r15d, eax
     jmp  .reply_no_hooks
 .not_scoped_audit:
+    ; Exact admitted principal resource records precede optional counters. The
+    ; shared lean capture is also the SSH exec producer (1472-byte bound).
+    ; A refused handler cannot own a staged record; consume it without emission.
+    lea  rdi, [rel udp_principal_line_verbs]
+    call udp_line_in_list
+    test eax, eax
+    jz   .no_principal_envelope
+    cmp  byte [rel prin_out_ready], 1
+    jne  .no_principal_envelope
+    mov  byte [rel prin_out_ready], 0
+    cmp  byte [rel bootlog_full_mode], 1
+    je   .no_principal_envelope
+    cmp  qword [rel udp_rsp + RSP_CODE], CMDE_OK
+    jne  .no_principal_envelope
+    call udp_put_uptime
+    lea  rdi, [rel str_udp_sp]
+    call udp_put_str
+    lea  rdi, [rel prin_out_buf]
+    call udp_put_str
+    jmp  .reply_finish
+.no_principal_envelope:
     ; RCQ-32: identity/readiness precedes optional diagnostics, independently
     ; of whether STATUS's numeric argument selected the legacy job lookup.
     call udp_put_status_core
@@ -11816,9 +12258,91 @@ command_udp_power_button_observation:
     call udp_put_str
     movzx edi, byte [rel power_button_ownership_live]
     call udp_put_dec
+    call command_udp_lid_button_observation
 .done:
     ret
 
+; Passive owner-STATUS publication, BSP serialized with the existing idle policy.
+; RDI=caller RAM, RSI=capacity -> RAX=128, or zero with NO writes when short.
+; Sixteen u64s, LIDBTN1 order: ms,lid,EC events,GUI changes,policy,armed,
+; deferred,closed_ms,since_ms,button_armed,button_ms,locked,desktop,dark,
+; logged,routed. Counters are latched software observations, NOT physical proof.
+; Only the existing clock is read: no EC/PM1 I/O, grace advance or result consume.
+command_udp_lid_button_snapshot:
+    cmp  rsi, 128
+    jb   .short
+    push rdi
+    call boot_ms_now
+    pop  rdi
+    mov  [rdi], rax
+    movzx eax, byte [rel ecp_lid]
+    mov  [rdi + 8], rax
+    mov  eax, [rel ecp_lid_events]
+    mov  [rdi + 16], rax
+    mov  eax, [rel power_lid_changes]
+    mov  [rdi + 24], rax
+    movzx eax, byte [rel pwr_lid_action]
+    mov  [rdi + 32], rax
+    movzx eax, byte [rel pwr_lid_armed]
+    mov  [rdi + 40], rax
+    movzx eax, byte [rel pwr_lid_deferred_said]
+    mov  [rdi + 48], rax
+    mov  rax, [rel pwr_lid_closed_at]
+    mov  [rdi + 56], rax
+    mov  rax, [rel pwr_lid_since]
+    mov  [rdi + 64], rax
+    movzx eax, byte [rel pwr_btn_grace_armed]
+    mov  [rdi + 72], rax
+    mov  rax, [rel pwr_btn_grace_at]
+    mov  [rdi + 80], rax
+    movzx eax, byte [rel session_locked]
+    mov  [rdi + 88], rax
+    movzx eax, byte [rel lock_desktop_created]
+    mov  [rdi + 96], rax
+    movzx eax, byte [rel ecp_bl_lid_dark]
+    mov  [rdi + 104], rax
+    mov  eax, [rel power_button_presses_logged]
+    mov  [rdi + 112], rax
+    mov  eax, [rel power_button_presses_routed]
+    mov  [rdi + 120], rax
+    mov  eax, 128
+    ret
+.short:
+    xor  eax, eax
+    ret
+
+; Reached only through the exact owner-STATUS gate above. Never reads hardware
+; or advances policy. A bounded reply retains the existing TRUNCATED disclosure.
+command_udp_lid_button_observation:
+    push rbx
+    push r12
+    sub  rsp, 128
+    mov  rdi, rsp
+    mov  esi, 128
+    call command_udp_lid_button_snapshot
+    cmp  eax, 128
+    jne  .done
+    lea  rdi, [rel str_udp_lidbtn1]
+    call udp_put_str
+    mov  r12, rsp
+    xor  ebx, ebx
+.next:
+    mov  rdi, [r12 + rbx*8]
+    call udp_put_dec
+    inc  ebx
+    cmp  ebx, 16
+    je   .done
+    lea  rdi, [rel str_udp_lidbtn_sep]
+    call udp_put_str
+    jmp  .next
+.done:
+    add  rsp, 128
+    pop  r12
+    pop  rbx
+    ret
+
+str_udp_lidbtn1: db " LIDBTN1=", 0
+str_udp_lidbtn_sep: db ":", 0
 str_udp_pwrb_logged: db " PWRB_LOGGED=", 0
 str_udp_pwrb_routed: db " PWRB_ROUTED=", 0
 str_udp_pwrb_fixed: db " PWRB_FIXED=", 0
@@ -11903,6 +12427,38 @@ udp_put_dec:
 .truncated:
     mov  byte [rel udp_truncated], 1
     ret
+
+; Actual native FSOWN response, including grammar/auth/storage refusals. Pure
+; bounded wire projection after normal dispatch; never executes or grants IO.
+; No hint pointer, volume identity, sealed bytes or credentials are exposed.
+udp_fsown_take:
+    lea rdi,[rel udp_line]
+    lea rsi,[rel str_udp_fsown_result_verb]
+    call strcmp
+    test eax,eax
+    jnz .no
+    lea rdi,[rel str_udp_fsown_result_code]
+    call udp_put_str
+    mov rdi,[rel udp_rsp+RSP_CODE]
+    call udp_put_dec
+    lea rdi,[rel str_udp_fsown_result_state]
+    call udp_put_str
+    mov rdi,[rel udp_rsp+RSP_VAL]
+    call udp_put_dec
+    lea rdi,[rel str_udp_fsown_result_error]
+    call udp_put_str
+    mov rdi,[rel udp_rsp+RSP_EXPECTED]
+    call udp_put_dec
+    call udp_put_uptime
+    mov eax,1
+    ret
+.no:
+    xor eax,eax
+    ret
+str_udp_fsown_result_verb: db 'FSOWN',0
+str_udp_fsown_result_code: db ' FSOWN CODE=',0
+str_udp_fsown_result_state: db ' STATE=',0
+str_udp_fsown_result_error: db ' ERROR=',0
 
 ; udp_line_in_list(RDI = NUL-separated verb names, an empty name ends the list) -> EAX=1
 ;   iff udp_line equals one of them exactly (command_lookup's own strcmp match). RCQ-19:
@@ -15200,6 +15756,14 @@ cmd_verb_hpperf:
     test eax, eax
     jz   .wallpaper
     mov  rsi, [r12 + REQ_ARG]
+    lea  rdi, [rel str_blitperf_over_fn_ref] ; A5: before fb_blit_rgba*, which prefix it
+    call hp_pfx
+    je   .blit_over_ref
+    mov  rsi, [r12 + REQ_ARG]
+    lea  rdi, [rel str_blitperf_over_fn]
+    call hp_pfx
+    je   .blit_over
+    mov  rsi, [r12 + REQ_ARG]
     lea  rdi, [rel str_blitperf_fn_ref]
     call hp_pfx
     je   .blit_ref
@@ -15274,6 +15838,16 @@ cmd_verb_hpperf:
     call fb_blit_perf_med
     lea  rsi, [rel str_blitperf_pre_ref]
     jmp  .emit
+.blit_over:
+    lea  rdi, [rel fb_blit_rgba_over]
+    call fb_blit_over_perf_med
+    lea  rsi, [rel str_blitperf_over_pre]
+    jmp  .emit
+.blit_over_ref:
+    lea  rdi, [rel fb_blit_rgba_over_ref]
+    call fb_blit_over_perf_med
+    lea  rsi, [rel str_blitperf_over_pre_ref]
+    jmp  .emit
 .fb_fast:
     lea  rdi, [rel fb_fill_rect]        ; elected chunked fill
     call fb_perf_med
@@ -15313,6 +15887,11 @@ cmd_verb_hpperf:
 ; NETCFG LEASE <16hex>: owner AUTH1 UDP observation, no network/timer writes.
 ; DHCP fields are one lock-coherent snapshot. Current IP/DNS/TCP projection
 ; follows on the serialized command poll. This does not advance a due deadline.
+%include "svc/command_dhcp_probe.inc"
+%include "svc/command_usb_endpoint.inc"
+
+str_dhcp_probe_prefix: db "DHCPTEST ",0
+
 command_udp_lease_command:
     push rbx
     push r12
@@ -15353,6 +15932,22 @@ command_udp_lease_command:
     cmp  byte [r13 + 16], 0
     jne  .out
     mov  [rel udp_lease_nonce], rax
+    call command_udp_lease_capture
+    call command_udp_lease_format
+    mov  byte [rel netlist_ready], 1
+    mov  byte [rel udp_lt_ready], 1           ; existing bounded lean reply rail
+    mov  qword [rbx + RSP_ACCEPTED], 1
+    mov  rax, [rel udp_lease_words + 8]
+    mov  [rbx + RSP_VAL], rax
+    mov  qword [rbx + RSP_CODE], CMDE_OK
+.out:
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+
+; Shared serialized projection for passive LEASE and bounded DHCP probe.
+command_udp_lease_capture:
     lea  rdi, [rel udp_lease_words]
     call dhcp_wire_lease_snapshot
     mov  eax, [rel udp_our_ip3]
@@ -15371,17 +15966,6 @@ command_udp_lease_command:
     mov  [rel udp_lease_words + 160], rax
     movzx eax, byte [rel udp_public_dhcp]
     mov  [rel udp_lease_words + 168], rax
-    call command_udp_lease_format
-    mov  byte [rel netlist_ready], 1
-    mov  byte [rel udp_lt_ready], 1           ; existing bounded lean reply rail
-    mov  qword [rbx + RSP_ACCEPTED], 1
-    mov  rax, [rel udp_lease_words + 8]
-    mov  [rbx + RSP_VAL], rax
-    mov  qword [rbx + RSP_CODE], CMDE_OK
-.out:
-    pop  r13
-    pop  r12
-    pop  rbx
     ret
 
 ; 22 fixed-width unsigned words + boot/nonce fit in NETLIST_CAP (832).
@@ -16101,6 +16685,22 @@ command_udp_dhcp_server_parse:
     test r12, r12
     jz   .bad
     add  r12, 12                         ; DHCP SERVER + space
+    mov  rdi, r12
+    call command_udp_dhcp_ipv4_parse
+    jmp  .out
+.bad:
+    xor  eax, eax
+    xor  edx, edx
+.out:
+    pop  r12
+    pop  rbx
+    ret
+
+; Address-only parser; callers retain their own consumed-owner check.
+command_udp_dhcp_ipv4_parse:
+    push rbx
+    push r12
+    mov  r12, rdi
     xor  ebx, ebx                        ; packed wire-order bytes
     xor  r8d, r8d
 .component:
@@ -16502,6 +17102,17 @@ cmd_verb_netcfg:
     mov  r12, rdi
     mov  rbx, rsi
     mov  rsi, [r12 + REQ_ARG]
+    test rsi, rsi
+    jz   .badarg
+    lea  rdi, [rel str_usb_prefix]
+    call hp_pfx
+    jne  .ordinary
+    mov  rdi, r12
+    mov  rsi, rbx
+    call command_usb_command
+    jmp  .out
+.ordinary:
+    mov  rsi, [r12 + REQ_ARG]
     lea  rdi, [rel str_netcfg_dhcp_once]
     call hp_pfx
     jne  .try_static
@@ -16627,10 +17238,19 @@ cmd_verb_netcfg:
     mov  rsi, [r12 + REQ_ARG]
     lea  rdi, [rel str_netcfg_linktest]
     call hp_pfx
-    jne  .try_lease
+    jne  .try_dhcp_probe
     mov  rdi, r12
     mov  rsi, rbx
     call command_udp_linktest_command
+    jmp  .out
+.try_dhcp_probe:
+    mov  rsi, [r12 + REQ_ARG]
+    lea  rdi, [rel str_dhcp_probe_prefix]
+    call hp_pfx
+    jne  .try_lease
+    mov  rdi, r12
+    mov  rsi, rbx
+    call command_udp_dhcp_probe_command
     jmp  .out
 .try_lease:
     mov  rsi, [r12 + REQ_ARG]
@@ -17947,6 +18567,10 @@ str_blitperf_fn_ref: db "fb_blit_rgba_ref", 0
 str_blitperf_pre:    db "PERF fn=fb_blit_rgba impl=unrolled4 cycles=", 0
 str_hpperf_wallpaper: db "wallpaper",0
 str_blitperf_pre_ref:db "PERF fn=fb_blit_rgba_ref impl=naive cycles=", 0
+str_blitperf_over_fn:      db "fb_blit_rgba_over", 0
+str_blitperf_over_fn_ref:  db "fb_blit_rgba_over_ref", 0
+str_blitperf_over_pre:     db "PERF fn=fb_blit_rgba_over impl=blend_a128 cycles=", 0
+str_blitperf_over_pre_ref: db "PERF fn=fb_blit_rgba_over_ref impl=div_a128 cycles=", 0
 str_scperf_fn:     db "strcmp", 0
 str_scperf_pre:    db "PERF fn=strcmp impl=lean cycles=", 0
 str_ncperf_fn:     db "net_cksum16", 0
@@ -18042,9 +18666,14 @@ str_hpl_revert_clear_nodev: db "[PAOS64] hotpatch REVERT refused: persistent dev
 str_hpl_revert_clear_werr:  db "[PAOS64] hotpatch REVERT refused: durable clear failed; live patch retained [hotpatch.persist.revert.fail]", 13, 10, 0
 str_hpr_err_norec:  db " err norec", 0
 str_verb_hdaloop_reply: db "HDALOOP",0
-str_udp_driver_domain_verbs: db "NDINFO",0,"NDSTAT",0,"NDSTART",0,"NDSTOP",0,"NICS",0,0
+str_udp_driver_domain_verbs: db "NDINFO",0,"NDSTAT",0,"NDSTART",0,"NDSTOP",0,"NICS",0,"PCICENS",0,"PCIHPT",0,"NDSHUTDOWN",0,"NDPWRSTAT",0,0
 str_verb_shutdown:      db "SHUTDOWN", 0               ; RCQ-27: owner-signed remote ACPI S5 (svc/command_shutdown)
 str_verb_reboot:        db "REBOOT", 0                 ; 1107: warm CF9 reset (remote reboot for the persist grade)
+str_udp_reboot_guest_live: db "REBOOT reset=refused guest=live reason=", 0
+str_udp_reset_stop_refused: db "stop_refused blocker=", 0
+str_udp_reset_stop_unverified: db "stop_unverified", 0
+str_udp_reboot_target: db " one_shot_target=may-be-set cleanup=uncertain", 0
+str_udp_reboot_queued_target: db "REBOOT reset=queued one_shot_target=may-be-set cleanup=uncertain", 0
 ; --- 1107 hotpatch ESP persistence: verb tokens + actionable replies ---
 str_hpv_persist:        db "HOTPATCH_PERSIST", 0
 str_hpv_persist_clear:  db "HOTPATCH_PERSIST_CLEAR", 0
@@ -18088,6 +18717,9 @@ str_udp_surface_up: db "[PAOS64] L5 svc: UDP :9997 command server bound (registr
 str_udp_rx_loop:    db "[PAOS64] L4 net: eth RX poll pumped in idle loop beside serial [net.eth.rx.loop]", 13, 10, 0
 str_udp_ip_cfg:     db "[PAOS64] L4 net: IP configured 10.0.2.15 (static SLIRP guest addr) [net.ip.configured]", 13, 10, 0
 
+str_udp_guest_policy_form_arg: db "guest_policy focus=1",0
+str_udp_sysprops_form_arg: db "sysprops",0
+str_udp_netmon_form_arg: db "netmon focus=1",0
 str_udp_r_pre:      db "PAOS VERSION=", PAOS_VERSION_TEXT, " ", 0
 str_udp_version_live: db "[PAOS64] P7 svc: VERSION injected from build (matches VERSION file) [boot.version.live]", 13, 10, 0
 str_udp_web_version: db " VERSION=", PAOS_VERSION_TEXT, 0
@@ -18136,6 +18768,7 @@ str_udp_r_build_id: db " build_id=", 0            ; SEC-pbh1: measured, never th
 str_udp_r_bid:      db " bid=", 0
 str_udp_r_uptime:   db " UPTIME_S=", 0               ; 1018 live uptime (patch-continuity grade)
 ; RCQ-19: the verbs whose handlers stage blk_out_buf / vtd_out_buf (udp_line_in_list)
+udp_principal_line_verbs: db "PRINREAD", 0, "PRINWRITE", 0, 0
 udp_blk_line_verbs: db "BLKGEOMFILE", 0, "BLKGEOM", 0, "BLKPOLICY", 0, "BLKINFO", 0, "BLKREAD", 0, "BLKWRITE", 0, "BLKFLUSH", 0, "BLK_RW", 0, 0
 udp_vtd_line_verbs: db "VTD", 0, "DDOM", 0, "DMAVIOL", 0, "DMAVIOL_CHECK", 0, "DMAVIOL4", 0, "DMAVIOL4_CHECK", 0, "DMAVIOLA", 0, "DMAVIOLA_CHECK", 0, "STALEOWNER", 0, 0
 str_udp_r_bootsession: db " BOOT_SESSION=", 0          ; 1316 same-session continuity proof
@@ -18615,6 +19248,12 @@ udp_progress_record: resq CSP_WORDS
 udp_progress_revision: resq 1
 %endmacro
 WDATA_BSS_DEFER WDATA_svc_command_udp_progress
+
+; ROOT108715 (3): the current BOOT reset's argument code (see udp_reset_arg_capture).
+%macro WDATA_svc_command_udp_reset_refused 0
+udp_reset_arg: resb 1
+%endmacro
+WDATA_BSS_DEFER WDATA_svc_command_udp_reset_refused
 
 str_udp_pciscan_refused: db " PCISCAN error=page_unavailable_or_bad_argument complete=0", 0
 str_udp_pciscan_node: db " node_id=", 0

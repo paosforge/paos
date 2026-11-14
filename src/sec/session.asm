@@ -1,8 +1,8 @@
 ;; MODULE sec/session
 ;; LAYER 5
 ;; PURPOSE Sole owner of the login-bound session gate and workspace policy.
-;; EXPORTS session_shell_prepare_local_request, session_shell_try_request_admit, session_shell_try_launch_arm, session_shell_try_launch_disarm, session_shell_init, session_shell_register_workspace_ops, session_shell_register_local_wipe, session_shell_local_wipe, session_shell_offer_bind, session_shell_unlock, session_shell_lock, session_shell_require_unlocked, session_shell_request_principal, session_shell_local_authority, session_shell_arm_explicit_unlock, session_shell_audit_unlock, session_idle_tick, session_injected_input, session_out_buf, session_out_ready
-;; IMPORTS boot/boot_v2_handoff, core/time, core/lib/fmt, core/lib/str, sec/principal, sec/idle_prefs, svc/command, svc/command_auth, svc/command_audit, boot/serial, dev/input/ps2, svc/history, sec/wifi_profile, sec/wifi_store
+;; EXPORTS session_shell_prepare_local_request, session_shell_try_request_admit, session_shell_try_launch_arm, session_shell_try_launch_disarm, session_shell_init, session_shell_register_workspace_ops, session_shell_register_local_wipe, session_shell_register_account_wipe, session_shell_register_adopt_wipe, session_shell_register_format_wipe, session_shell_local_wipe, session_shell_register_terminal_retire, session_shell_terminal_retire, session_shell_offer_bind, session_shell_unlock, session_shell_lock, session_shell_require_unlocked, session_shell_request_principal, session_shell_local_authority, session_shell_authority_validate, session_shell_arm_explicit_unlock, session_shell_audit_unlock, session_idle_tick, session_injected_input, session_out_buf, session_out_ready
+;; IMPORTS boot/boot_v2_handoff, core/time, core/lib/fmt, core/lib/str, sec/principal, sec/idle_prefs, svc/command, svc/command_auth, svc/command_audit, boot/serial, dev/input/ps2, svc/history, sec/wifi_profile, sec/wifi_store, core/smp, fs/fs_format
 ;; OWNER saga:session_shell
 ; ============================================================================
 ; OWNER/SYSTEM sessions consume the output-only {principal, key-handle} from
@@ -58,12 +58,16 @@ session_shell_init:
     mov  byte [rel session_boot_policy], 0
 %endif
     call session_shell_selftest
+    call session_shell_observer_reset ; KAT transitions are not events in this boot
     test eax, eax
     jnz  .locked
     cmp  byte [rel pbm_try_media], 0
     je   .installed
     ; Try takes precedence over the lab fixture, including malformed flags.
     mov  byte [rel session_boot_policy], 0
+    call secureboot_try_current_admit
+    test eax,eax
+    jz .locked
     call session_shell_bind_try_local
     test eax, eax
     jnz  .locked
@@ -247,6 +251,7 @@ session_shell_arm_explicit_unlock:
 ; consume the grant and the injected-input taint. A local human unlock writes
 ; no record; a remote explicit unlock and every test-only unlock do.
 session_shell_classify_unlock:
+    inc  qword [rel session_observed_unlocks]
     movzx edx, byte [rel session_unlock_local_proof]
     mov  byte [rel session_unlock_local_proof], 0
     movzx eax, byte [rel session_unlock_grant]
@@ -281,7 +286,20 @@ session_shell_classify_unlock:
     cmp  edx, 1
     jne  .done
     mov  byte [rel session_local_unlock_seen], 1
+    inc  qword [rel session_genuine_local_unlocks]
+    mov  rax, [rel session_authority_epoch]
+    mov  [rel session_genuine_local_epoch], rax
+    call time_monotonic_now_us
+    mov  [rel session_genuine_local_us], rax
 .done:
+    ret
+
+; Read-only observer bookkeeping. Preserve EAX: boot KAT's result owns admission.
+session_shell_observer_reset:
+    mov  qword [rel session_observed_unlocks], 0
+    mov  qword [rel session_genuine_local_unlocks], 0
+    mov  qword [rel session_genuine_local_epoch], 0
+    mov  qword [rel session_genuine_local_us], 0
     ret
 
 ; session_shell_audit_unlock(EDI=SESSION_UNLOCK_*, ESI=SESSION_METHOD_*) —
@@ -445,6 +463,7 @@ session_shell_lock:
 
 ; Authority is cleared before this rung ever renders another surface.
 session_shell_lock_core:
+    call session_shell_terminal_retire ; synchronous Terminal grants/actions/private bytes
     ; Direct core callers must revoke too; repeated cancellation is harmless.
     call session_shell_local_wipe ; synchronous before authority/store/workspace callbacks
     call wifi_profile_cancel
@@ -735,7 +754,133 @@ session_shell_register_local_wipe:
     mov [rel session_local_wipe_op], rdi
     ret
 
+; Native composition only. Separate from the existing Wi-Fi private eraser.
+session_shell_register_terminal_retire:
+    cmp byte [rel cmd_in_dispatch],0
+    jne .bad
+    cmp byte [rel command_auth_remote_active],0
+    jne .bad
+    mov [rel session_terminal_retire_op],rdi
+    mov eax,1
+    ret
+.bad:
+    xor eax,eax
+    ret
+session_shell_terminal_retire:
+    cmp qword [rel session_terminal_retire_op],0
+    je .done
+    jmp [rel session_terminal_retire_op]
+.done:
+    ret
+
+; Native BSP composition only; the account eraser has its own immutable slot.
+session_shell_register_account_wipe:
+    push rbx
+    mov rbx,rdi
+    call smp_current_logical
+    test eax,eax
+    jnz .bad
+    cmp byte [rel cmd_in_dispatch],0
+    jne .bad
+    cmp dword [rel cmd_dispatch_depth],0
+    jne .bad
+    cmp byte [rel command_auth_remote_active],0
+    jne .bad
+    test rbx,rbx
+    jz .bad
+    mov rax,[rel session_account_wipe_op]
+    test rax,rax
+    jz .store
+    cmp rax,rbx
+    jne .bad
+.store:
+    mov [rel session_account_wipe_op],rbx
+    mov eax,1
+    pop rbx
+    ret
+.bad:
+    xor eax,eax
+    pop rbx
+    ret
+
+session_shell_register_adopt_wipe:
+    push rbx
+    mov rbx,rdi
+    call smp_current_logical
+    test eax,eax
+    jnz .bad
+    cmp byte [rel cmd_in_dispatch],0
+    jne .bad
+    cmp dword [rel cmd_dispatch_depth],0
+    jne .bad
+    cmp byte [rel command_auth_remote_active],0
+    jne .bad
+    test rbx,rbx
+    jz .bad
+    mov rax,[rel session_adopt_wipe_op]
+    test rax,rax
+    jz .store
+    cmp rax,rbx
+    jne .bad
+.store:
+    mov [rel session_adopt_wipe_op],rbx
+    mov eax,1
+    pop rbx
+    ret
+.bad:
+    xor eax,eax
+    pop rbx
+    ret
+
+session_shell_register_format_wipe:
+    push rbx
+    mov rbx,rdi
+    call smp_current_logical
+    test eax,eax
+    jnz .bad
+    cmp byte [rel cmd_in_dispatch],0
+    jne .bad
+    cmp dword [rel cmd_dispatch_depth],0
+    jne .bad
+    cmp byte [rel command_auth_remote_active],0
+    jne .bad
+    test rbx,rbx
+    jz .bad
+    mov rax,[rel session_format_wipe_op]
+    test rax,rax
+    jz .store
+    cmp rax,rbx
+    jne .bad
+.store:
+    mov [rel session_format_wipe_op],rbx
+    mov eax,1
+    pop rbx
+    ret
+.bad:
+    xor eax,eax
+    pop rbx
+    ret
+
 session_shell_local_wipe:
+    push rbx                           ; align the synchronous account call
+    mov rax,[rel session_account_wipe_op]
+    test rax,rax
+    jz .adopt
+    call rax
+.adopt:
+    mov rax,[rel session_adopt_wipe_op]
+    test rax,rax
+    jz .format
+    call rax
+.format:
+    mov rax,[rel session_format_wipe_op]
+    test rax,rax
+    jz .format_slot
+    call rax
+.format_slot:
+    call fs_format_cancel              ; Format F1 (SEC 108221 C6): the slot ends on lock/session change
+.wifi:
+    pop rbx
     mov rax, [rel session_local_wipe_op]
     test rax, rax
     jz .done
@@ -1643,10 +1788,19 @@ session_pending_pid:           dq 0
 session_pending_handle:        dq 0
 session_authority:             dq 0
 session_authority_epoch:       dq 1
+; Observations only. LABARM deliberately does not touch these counters.
+session_observed_unlocks:      dq 0
+session_genuine_local_unlocks: dq 0
+session_genuine_local_epoch:   dq 0
+session_genuine_local_us:      dq 0
 session_workspace_pid:         dq 0
 session_reply_nonce:           dq 0
 session_out_cur:               dq 0
+session_account_wipe_op:       dq 0
+session_adopt_wipe_op: dq 0
+session_format_wipe_op: dq 0
 session_local_wipe_op:         dq 0
+session_terminal_retire_op:    dq 0
 session_workspace_commit_op:   dq 0
 session_workspace_restore_op:  dq 0
 session_workspace_discard_op:  dq 0

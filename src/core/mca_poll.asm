@@ -1,6 +1,6 @@
 ;; MODULE core/mca_poll
 ;; LAYER 1
-;; EXPORTS mca_corrected_tick, mca_poll_rows, mca_poll_coverage_copy, mca_poll_coverage_rows
+;; EXPORTS mca_corrected_tick, mca_poll_rows, mca_poll_coverage_copy, mca_poll_coverage_rows, mca_poll_observed_copy
 ;; IMPORTS core/mca_cmci, core/time, core/diag, core/mca_control
 ;; CAPS
 ;; OWNER saga:core
@@ -15,6 +15,8 @@
 ; CPUID.80000007:EBX.ScalableMca. Only its C0002001h+bank*10h STATUS is read.
 ; Legacy AMD and unknown vendors remain unqualified. No CTL/CONFIG writes.
 ; AMD deferred, poison and corrupt/nonrestartable context are not corrected.
+; Changed non-corrected VAL=1 samples receive a separate raw observation log;
+; this passive poll neither clears them nor claims handling/containment.
 ;
 ; Counters describe changed sampled status, NOT hardware error totals: a bank
 ; can change between polls, shared banks can be observed by multiple CPUs, and
@@ -161,17 +163,17 @@ mca_corrected_tick:
     bt rax, 63                          ; VAL must be set
     jnc .next
     bt rax, 61                          ; UC must be clear
-    jc .next
+    jc .observed
     bt rax, 57                          ; PCC: never a corrected observation
-    jc .next
+    jc .observed
     cmp byte [r13 + MCA_POLL_QUAL], 4
     jne .corrected
     bt rax, 44                          ; Deferred is uncorrectable, even if UC=0
-    jc .next
+    jc .observed
     bt rax, 55                          ; TCC: thread cannot restart
-    jc .next
+    jc .observed
     bt rax, 43                          ; consumed poisoned data: no corrected claim
-    jc .next
+    jc .observed
 .corrected:
     mov [rsp],rax                         ; status survives the ring writer
     mov r8, [r13 + MCA_POLL_COUNT]
@@ -219,6 +221,34 @@ mca_corrected_tick:
     jne .next
     mov rax,[rsp+8]                        ; busy ring: no clear and no count advance
     mov [r13+MCA_POLL_COUNT],rax
+    jmp .next
+.observed:
+    ; The original STATUS and CPU/bank identity reach the existing ring. No
+    ; CMCI acknowledgement or STATUS clear is offered for these observations.
+    mov r8,[r13+MCA_POLL_OTHER_SEEN]
+    cmp r8,-1
+    je .observed_count
+    inc r8
+.observed_count:
+    mov [r13+MCA_POLL_OTHER_SEEN],r8
+    mov rdx,rax
+    mov edi,DIAG_K_MCA
+    mov esi,r15d
+    mov rcx,r12
+    lea r9,[rel mca_observed_tag]
+    cmp byte [r13+MCA_POLL_QUAL],4
+    jne .observed_log
+    lea r9,[rel smca_observed_tag]
+.observed_log:
+    call diag_ring_append
+    lea rdx,[r13+MCA_POLL_OTHER_DROP]
+    cmp eax,1                           ; only the actual commit is logged
+    jne .observed_result
+    lea rdx,[r13+MCA_POLL_OTHER_LOG]
+.observed_result:
+    cmp qword [rdx],-1
+    je .next
+    inc qword [rdx]
 .next:
     inc r15d
     jmp .bank
@@ -286,6 +316,47 @@ mca_poll_coverage_copy:
     mov eax,1
     ret
 
+; EDI dense CPU, RSI private32B -> EAX0 stable /1 unavailable.
+; Existing CPU-private scan sequence covers all three counters. One bounded
+; attempt; qualification/initialization/busy never manufactures an empty sample.
+mca_poll_observed_copy:
+    cmp edi,MCA_POLL_CPUS
+    jae .busy
+    mov eax,edi
+    shl eax,6
+    lea rdx,[rel mca_poll_coverage_rows]
+    add rdx,rax
+    mov r8,[rdx+MCA_Q_SEQ]
+    test r8,r8
+    jz .busy
+    test r8b,1
+    jnz .busy
+    imul eax,edi,MCA_POLL_STRIDE
+    lea r9,[rel mca_poll_rows]
+    add r9,rax
+    movzx eax,byte [r9+MCA_POLL_QUAL]
+    cmp eax,1
+    je .copy
+    cmp eax,4
+    jne .busy
+.copy:
+    mov rax,[r9+MCA_POLL_OTHER_SEEN]
+    mov [rsi],rax
+    mov rax,[r9+MCA_POLL_OTHER_LOG]
+    mov [rsi+8],rax
+    mov rax,[r9+MCA_POLL_OTHER_DROP]
+    mov [rsi+16],rax
+    mov qword [rsi+24],0
+    cmp r8,[rdx+MCA_Q_SEQ]
+    jne .busy
+    xor eax,eax
+    ret
+.busy:
+    mov eax,1
+    ret
+
+mca_observed_tag: db 'mca-observed',0
+smca_observed_tag: db 'smca-observed',0
 mca_poll_tag: db 'mca-corrected', 0
 smca_poll_tag: db 'smca-corrected', 0
 ; CPU state belongs in the page-isolated zero-fill tail, away from code.

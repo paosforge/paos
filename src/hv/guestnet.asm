@@ -479,8 +479,8 @@ guestnet_pump:
     call virtio_domain_guest_rx_can_accept
     test eax, eax
     jz   .console
-    ; One drain call can accept at most one frame before the depth-1 ring is
-    ; full again. A later clean exit retries only after another host consume.
+    ; Drain until the private domain ring fills or this bounded guest-ring
+    ; batch ends. A later clean exit retries only after host consumption.
     mov  byte [rel guestnet_tx_retry_pending], 0
     call guestnet_serve_tx
 .console:

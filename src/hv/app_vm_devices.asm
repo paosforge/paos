@@ -1,7 +1,7 @@
 ;; MODULE hv/app_vm_devices
 ;; LAYER 5
 ;; EXPORTS app_vm_ingress_observe, avm_halted, app_vm_devices_init, app_vm_devices_pio, app_vm_devices_poll, avm_console, avm_console_bytes, avm_console_overflow
-;; IMPORTS hv/app_widget_transport, hv/app_vm_cpu, hv/app_vm_payload, hv/app_vm, hv/guest_transport, hv/chat_transport, core/time
+;; IMPORTS hv/app_runtime_observer, hv/app_account_transport, hv/app_widget_transport, hv/app_vm_cpu, hv/app_vm_payload, hv/app_vm, hv/guest_transport, hv/chat_transport, hv/app_network, hv/app_clock, hv/updater_io_transport, hv/settings_update_service, core/time
 ;; CAPS
 ;; OWNER saga:hv
 ;; CONTEXT: bsp_only
@@ -31,6 +31,13 @@ app_vm_ingress_observe:
     ret
 
 app_vm_devices_init:
+    sub rsp,8
+    call updater_io_transport_retire
+%ifdef APP_RUNTIME_OBSERVER_ABI_V1
+    call app_runtime_observer_reset
+%endif
+    call app_network_retire
+    add rsp,8
     lea rdi,[rel avmd_state_begin]
     xor eax,eax
     mov ecx,(avmd_state_end-avmd_state_begin)/8
@@ -120,7 +127,7 @@ app_vm_devices_pio:
     mov r12d,esi
     call app_vm_exit_endpoint
     test rax,rax
-    jz .bad
+    jz .exit_refused
     mov eax,ebx
     and eax,0xffff
     and eax,~0x4f                  ; size+IN+immediate only
@@ -137,6 +144,36 @@ app_vm_devices_pio:
 .size_ok:
     mov r13d,ebx
     shr r13d,16
+    cmp r13d,0x50e0
+    je .updater_service
+    cmp r13d,0x50e4
+    je .updater_service
+    cmp r13d,0x50e8
+    je .updater_io
+    cmp r13d,0x50ec
+    je .updater_io
+%ifdef APP_RUNTIME_OBSERVER_ABI_V1
+    cmp r13d,0x50d0
+    je .runtime_observer
+    cmp r13d,0x50d4
+    je .runtime_observer
+%endif
+%ifdef APP_ACCOUNT_PRIVATE_ABI_V1
+    cmp r13d,0x50c0
+    je .account_private
+    cmp r13d,0x50c4
+    je .account_private
+%endif
+    cmp r13d,0x50b0
+    je .clock
+    cmp r13d,0x50b4
+    je .clock
+    cmp r13d,0x50b8
+    je .clock
+    cmp r13d,0x5090
+    je .network
+    cmp r13d,0x5094
+    je .network
     cmp r13d,0x5070
     je .chat
     cmp r13d,0x5074
@@ -203,6 +240,62 @@ app_vm_devices_pio:
 .unknown:
     ; Firmware legacy probes see absent bytes; writes cannot escape to host.
     mov edx,0xff
+    jmp .ok
+.exit_refused:
+    mov eax,ebx
+    shr eax,16
+    cmp eax,0x50e8
+    je .retire_io
+    cmp eax,0x50ec
+    jne .bad
+.retire_io:
+    call updater_io_transport_retire
+    jmp .bad
+.updater_service:
+    mov edi,ebx
+    mov esi,r12d
+    call settings_update_service_pio
+    cmp eax,1
+    jne .bad
+    jmp .ok
+.updater_io:
+    mov edi,ebx
+    mov esi,r12d
+    call updater_io_transport_pio
+    cmp eax,1
+    jne .bad
+    jmp .ok
+%ifdef APP_RUNTIME_OBSERVER_ABI_V1
+.runtime_observer:
+    mov edi,ebx
+    mov esi,r12d
+    call app_runtime_observer_pio
+    cmp eax,1
+    jne .bad
+    jmp .ok
+%endif
+%ifdef APP_ACCOUNT_PRIVATE_ABI_V1
+.account_private:
+    mov edi,ebx
+    mov esi,r12d
+    call app_account_private_pio
+    cmp eax,1
+    jne .bad
+    jmp .ok
+%endif
+.clock:
+    mov edi,ebx
+    mov esi,r12d
+    call app_clock_pio
+    cmp eax,1
+    jne .bad
+    jmp .ok
+.network:
+    mov edi,ebx
+    mov esi,r12d
+    call app_network_pio
+    cmp eax,1
+    jne .bad
     jmp .ok
 .chat:
     mov edi,ebx
@@ -642,3 +735,6 @@ align 8
 avmd_state_end:
 %endmacro
 WDATA_DEFER WDATA_hv_app_vm_devices
+
+; Device reset cannot clear a retained updater IO lifetime or uncertainty.
+%include "hv/updater_io_transport.asm"

@@ -393,6 +393,46 @@
       "params": {},
       "critical": true,
       "notes": "RCQ-41 failure-record guidance. New English fallback; existing five-locale translations remain unchanged and new translations are pending. Real Rescue readout only; no new shell, recovery authority or data-restoration promise."
+    },
+    {
+      "id": 6045,
+      "key": "help.offline.try.title",
+      "english": "Try PaOS offline",
+      "params": {},
+      "critical": false,
+      "notes": "T5-35 offline Try guide; English fallback in other locales. Original current source; no native-language evaluation or completed installation claim."
+    },
+    {
+      "id": 6046,
+      "key": "help.offline.try.session",
+      "english": "Try runs a temporary local session from the prepared USB. No online account is needed. Restarting ends the session and does not restore its work.",
+      "params": {},
+      "critical": true,
+      "notes": "T5-35 offline Try guide; English fallback in other locales. Original current source; no native-language evaluation or completed installation claim."
+    },
+    {
+      "id": 6047,
+      "key": "help.offline.try.offline",
+      "english": "Open Help from Start > Programs. These pages are stored in the signed PaOS image and work without a network connection. The Console hardware snapshot lists detected devices; it is not a live driver test.",
+      "params": {},
+      "critical": true,
+      "notes": "T5-35 offline Try guide; English fallback in other locales. Original current source; no native-language evaluation or completed installation claim."
+    },
+    {
+      "id": 6048,
+      "key": "help.offline.try.prepare",
+      "english": "Use a standard raw/dd image writer on Windows or Linux. Writing erases the selected USB. Check its model, serial number and capacity before confirming. Write the whole image; do not extract its files.",
+      "params": {},
+      "critical": true,
+      "notes": "T5-35 offline Try guide; English fallback in other locales. Original current source; no native-language evaluation or completed installation claim."
+    },
+    {
+      "id": 6049,
+      "key": "help.offline.try.install",
+      "english": "This Try desktop does not provide an OS-install action. Do not substitute Format or partition commands for Install. Keep your existing OS bootable. A complete offline install bundle is still required for installation.",
+      "params": {},
+      "critical": true,
+      "notes": "T5-35 offline Try guide; English fallback in other locales. Original current source; no native-language evaluation or completed installation claim."
     }
   ],
   "locales": {
@@ -441,7 +481,12 @@
       "help.offline.recovery.failure_readout": "In Rescue, copy the PAOS_FAILURE_V1 lines from the console or diagnostic beacon. They identify the archive or current checkpoint, phase, subsystem and payload hash. Keep these with the exact boot-screen message.",
       "help.offline.recovery.failure_support_read": "For support tooling, the read-only command is {tool} {flag} {root}. Rescue has no public shell; the signed recovery service remains required for repair.",
       "help.offline.recovery.failure_meaning": "error=interrupted means a prior phase began without a completion record; error=failed means failure was recorded. Neither identifies the root cause. gate=unknown means no external boot gate was saved.",
-      "help.offline.recovery.failure_limits": "A missing or invalid record is not proof of success. Firmware may refuse a save. This record does not cover every crash, pre-checkpoint failure or rollback, and cannot restore files."
+      "help.offline.recovery.failure_limits": "A missing or invalid record is not proof of success. Firmware may refuse a save. This record does not cover every crash, pre-checkpoint failure or rollback, and cannot restore files.",
+      "help.offline.try.title": "Try PaOS offline",
+      "help.offline.try.session": "Try runs a temporary local session from the prepared USB. No online account is needed. Restarting ends the session and does not restore its work.",
+      "help.offline.try.offline": "Open Help from Start > Programs. These pages are stored in the signed PaOS image and work without a network connection. The Console hardware snapshot lists detected devices; it is not a live driver test.",
+      "help.offline.try.prepare": "Use a standard raw/dd image writer on Windows or Linux. Writing erases the selected USB. Check its model, serial number and capacity before confirming. Write the whole image; do not extract its files.",
+      "help.offline.try.install": "This Try desktop does not provide an OS-install action. Do not substitute Format or partition commands for Install. Keep your existing OS bootable. A complete offline install bundle is still required for installation."
     },
     "es": {
       "help.offline.first_boot.title": "Primer arranque",

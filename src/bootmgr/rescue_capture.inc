@@ -123,7 +123,7 @@ capture_begin:                          ; EAX=0 armed, nonzero refuse Rescue
     mov edx,CAPTURE_BASE
     mov rax,[rel boot_services]
     PBM_FW_ENTER 32
-    call [rax+0x80]                     ; InstallConfigurationTable
+    call [rax+0xC0]                     ; InstallConfigurationTable (0x80 is InstallProtocolInterface)
     PBM_FW_LEAVE 32
     test rax,rax
     jnz .fail

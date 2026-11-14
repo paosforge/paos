@@ -1,7 +1,7 @@
 ;; MODULE dev/blk/ahci
 ;; LAYER 3
-;; EXPORTS ahci_blk_create, ahci_flush_for_reset, ahci_self_exercise, ahci_find_identity, ahci_bind_name_identity, ahci_dev_identity_matches, ahci_identity_absent, ahci_scan_summary, ahci_power_gate, ahci_power_command_gate, ahci_issue_cooperative, ahci_identify_dma_to
-;; IMPORTS boot/native_driver_gate, fs/blockdev, fs/storage_access, bus/pci, core/dma, boot/serial, dev/blk/vmd, bus/pci_claim, boot/boot_v2_handoff
+;; EXPORTS ahci_blk_create, ahci_terminal_quiesce, ahci_terminal_observations, ahci_vmd_terminal_observations, ahci_flush_for_reset, ahci_flush_observations, ahci_inactive_observations, ahci_table_observations, ahci_self_exercise, ahci_find_identity, ahci_bind_name_identity, ahci_dev_identity_matches, ahci_identity_absent, ahci_scan_summary, ahci_power_gate, ahci_power_command_gate, ahci_issue_cooperative, ahci_identify_dma_to, ahci_vmd_owner_snapshot, ahci_empty_owner_get, ahci_empty_owner_table, ahci_empty_owner_generation, ahci_boh_owner_acquire, ahci_boh_observations, ahci_boh_terminal_observations, ahci_vmd_boh_initial_root, ahci_vmd_boh_initial_child
+;; IMPORTS bus/hal, core/time, boot/native_driver_gate, fs/blockdev, fs/storage_access, bus/pci, core/dma, boot/serial, dev/blk/vmd, bus/pci_claim, boot/boot_v2_handoff
 ;; CAPS mmio dma
 ;; OWNER saga:storage
 ;; CONTEXT: bsp_only  (SEC-S6: the one-shot ahci_write_token is a global byte, sound only while one CPU drives the HBA)
@@ -190,6 +190,8 @@ ahci_blk_create:
     mov  [rbx + blk_ops.flush], rax
 
     ; --- detect an AHCI HBA on the PCI bus (class 0x01/0x06 progIF 0x01) ---
+    call ahci_vmd_owner_reset              ; original admitted selection lifetime
+    mov dword [rel ahci_terminal_selected_id],0 ; passive original selected identity
     mov  byte  [rel ahci_vmd_child], 0
     mov  byte  [rel ahci_claim_legacy], 0
     mov  qword [rel ahci_bar5], 0
@@ -219,6 +221,7 @@ ahci_blk_create:
     jz   .no_hba
     mov  [rel ahci_bar5], rax
     mov  byte [rel ahci_vmd_child], 1
+    call ahci_vmd_owner_capture            ; retain original RAX BAR/RDX child cfg
     or   byte [rel ahci_enum_uncertain], AHCI_UNC_VMD
     jmp  .hba_ready
 .enable_cmd:
@@ -238,6 +241,15 @@ ahci_blk_create:
     mov  ecx, 0x04
     call pci_cfg_write32
 .hba_ready:
+
+    call ahci_boh_owner_acquire             ; original selected HBA, before GHC/port effects
+    test eax,eax
+    jns .firmware_owned
+    or byte [rel ahci_enum_uncertain],AHCI_UNC_INIT
+    mov byte [rel ahci_enum_done],1
+    call ahci_scan_summarize
+    jmp .degraded                          ; retain original degraded registry behavior
+.firmware_owned:
 
     mov  rbx, [rel ahci_bar5]               ; rbx = ABAR (identity-mapped MMIO)
 
@@ -313,6 +325,14 @@ ahci_blk_create:
 .not_up:
     test esi, esi
     jnz  .link_uncertain                    ; PHY detected but not up, offline or unknown
+    push rdi                              ; original physical CMD operand for SSS/SUD scan
+    mov  edi, r13d
+    call ahci_empty_owner_acquire          ; original initial post-EBS empty-port takeover
+    pop  rdi
+    test eax, eax
+    jns  .empty_acquired
+    or   byte [rel ahci_enum_uncertain], AHCI_UNC_PORT
+.empty_acquired:
     test dword [rel ahci_cap], AHCI_CAP_SSS
     jz   .pnext                             ; DET=0: no device
     test dword [rbx + rdi + AHCI_PORT_CMD], AHCI_PXCMD_SUD
@@ -612,6 +632,8 @@ ahci_pci_claim:
 ;   Must preserve RBX,RBP,R12-R15 (the scan keeps loop state there).
 ; ---------------------------------------------------------------------------
 ahci_detect_cb:
+    sub rsp,16                         ; preserve callback identity without another PCI read
+    mov [rsp],ecx
     push rdi
     push rsi
     push rdx
@@ -665,10 +687,13 @@ ahci_detect_cb:
     jnz  .pop
     and  eax, 0xFFFFFFF0
     mov  [rel ahci_bar5], rax               ; 32-bit BAR — high dword stays 0
+    mov ecx,[rsp+24]                    ; actual original scan callback vendor/device
+    mov [rel ahci_terminal_selected_id],ecx
 .pop:
     pop  rdx
     pop  rsi
     pop  rdi
+    add rsp,16
     ret
 
 ; ---------------------------------------------------------------------------
@@ -1611,16 +1636,33 @@ ahci_op_write:
     pop  r12
     ret
 
-; ahci_flush_for_reset() -> EAX ports flushed, EDX ports that failed.
+; ahci_flush_for_reset() -> EAX ports flushed, EDX ports not quiesced.
 ;   The power-off path's AHCI half (ACPI S5 / firmware shutdown): one FLUSH CACHE
 ;   EXT per live port, so no ACKed WRITE DMA EXT is left in a drive's volatile
 ;   cache when the platform removes power. Each command is ahci_issue's bounded
-;   CI spin (TFES/timeout -> port recovery). A poisoned port is skipped: its I/O
-;   is already refused and nothing can be issued to it. Clobbers caller-saved.
+;   CI spin (TFES/timeout -> port recovery). A present poisoned port cannot be
+;   flushed: count it as unquiesced without MMIO or issue. Refused ordinary I/O
+;   is not proof of completed writes/Flush. Clobbers caller-saved.
 ahci_flush_for_reset:
     push rbx
     push r12
     push r13
+    push r14
+    push r15
+    ; Passive bounded observation table, cleared on EVERY actual call. Each
+    ; logical slot owns 16 dwords; no absent/old port can borrow a result.
+    lea rdi,[rel ahci_flush_observations]
+    mov ecx,64
+    xor eax,eax
+    cld
+    rep stosq
+    ; Separate additive record: do not change a present1 port's original wire.
+    lea rdi,[rel ahci_inactive_observations]
+    mov ecx,64
+    rep stosq
+    lea rdi,[rel ahci_table_observations]
+    mov ecx,64
+    rep stosq
     xor  ebx, ebx                           ; logical slot
     xor  r12d, r12d                         ; flushed
     xor  r13d, r13d                         ; failed
@@ -1628,11 +1670,130 @@ ahci_flush_for_reset:
     cmp  ebx, AHCI_MAX_DISKS
     jae  .done
     lea  rax, [rel ahci_port_present]
-    cmp  byte [rax + rbx], 0
-    je   .next
-    lea  rax, [rel ahci_port_poisoned]
-    cmp  byte [rax + rbx], 0
-    jne  .next
+    movzx edx,byte [rax + rbx]
+    cmp edx,1
+    jne .inactive                          ; zero is not proof of no retained work
+    mov r14d,ebx
+    shl r14,6
+    lea rax,[rel ahci_flush_observations]
+    add r14,rax
+    mov dword [r14],1
+    lea rax,[rel ahci_ports]
+    mov eax,[rax+rbx*4]
+    mov [r14+4],eax                       ; actual selected physical HBA port
+    mov dword [r14+8],0xffffffff          ; VMD child BDF is NOT the legacy root
+    movzx eax,byte [rel ahci_claim_legacy]
+    movzx edx,byte [rel ahci_vmd_child]
+    shl edx,1
+    or eax,edx
+    mov [r14+12],eax                     ; provenance, not a fabricated lease
+    cmp eax,1
+    jne .identity_done
+    mov eax,[rel ahci_busno]
+    shl eax,8
+    mov edx,[rel ahci_devno]
+    shl edx,3
+    or eax,edx
+    or eax,[rel ahci_fn]
+    mov [r14+8],eax
+.identity_done:
+    lea rax,[rel ahci_port_poisoned]
+    movzx eax,byte [rax+rbx]
+    mov [r14+16],eax
+    mov [r14+60],eax
+    test eax,eax
+    jz .unpoisoned
+    inc r13d                             ; present but no completed Flush: refuse power
+    jmp .next                            ; original skip, NO MMIO or issue on poison
+.unpoisoned:
+    xor r15d,r15d
+    ; An attached class lifecycle may have fenced this controller. Preserve
+    ; ahci_issue's admission-before-MMIO rule: the observer does not call or
+    ; bypass that gate. Only its existing issue path may admit the command.
+    cmp qword [rel ahci_power_gate],0
+    jne .issue
+    lea rax,[rel ahci_pbases]
+    mov r15,[rax+rbx*8]
+    test r15,r15
+    jz .owner_refused
+    mov eax,[r15+AHCI_PORT_CI]
+    mov [r14+24],eax
+    mov eax,[r15+0x34]                    ; PxSACT: outstanding NCQ work
+    mov [r14+28],eax
+    mov eax,[r15+AHCI_PORT_TFD]
+    mov [r14+32],eax
+    mov dword [r14+20],1                 ; sampled before issue/recovery
+    ; Current command/FIS DMA ownership, independently read at the original
+    ; decision point. Bits2 sampled,3 CLB match,4 FB match. Never treat a
+    ; boot-time legacy/VMD claim alone as live queue ownership.
+    or dword [r14+12],4
+    lea rax,[rel ahci_cls]
+    mov rdx,[rax+rbx*8]
+    test rdx,rdx
+    jz .owner_refused
+    mov eax,[r15+AHCI_PORT_CLBU]
+    shl rax,32
+    mov ecx,[r15+AHCI_PORT_CLB]
+    or rax,rcx
+    cmp rax,rdx
+    jne .check_fis
+    or dword [r14+12],8
+.check_fis:
+    add rdx,0x400                        ; driver's actual RFIS allocation
+    mov eax,[r15+AHCI_PORT_FBU]
+    shl rax,32
+    mov ecx,[r15+AHCI_PORT_FB]
+    or rax,rcx
+    cmp rax,rdx
+    jne .owner_refused
+    or dword [r14+12],16
+    ; Only the already sampled live queues can justify this terminal issue.
+    ; Keep both original equality observations even if CLB was foreign.
+    test dword [r14+12],8
+    jz .owner_refused
+    ; Other slots/NCQ are active ownership, not our bounded slot0 recovery.
+    ; Reuse the actual existing before snapshot; no new port read or reset.
+    test dword [r14+24],0xfffffffe
+    jnz .owner_refused
+    cmp dword [r14+28],0
+    jne .owner_refused
+    ; CLB/FIS ownership does not bind slot0's actual command-table address.
+    ; Read only the original qualified CL allocation, never follow CTBA.
+    mov edi,ebx
+    shl rdi,6
+    lea rax,[rel ahci_table_observations]
+    add rdi,rax
+    mov dword [rdi],1
+    mov [rdi+4],ebx
+    mov dword [rdi+8],0xffffffff         ; refusal until every actual check passes
+    mov dword [rdi+12],3                ; original CL and CT RAM entries loaded
+    mov dword [rdi+16],1                ; CL already nonzero and matches live CLB
+    lea rax,[rel ahci_cls]
+    mov rcx,[rax+rbx*8]
+    lea rax,[rel ahci_cts]
+    mov rdx,[rax+rbx*8]
+    test rdx,rdx
+    jz .owner_refused
+    mov dword [rdi+20],1
+    mov rax,rcx
+    add rax,0x500                       ; original create_port allocation layout
+    jc .owner_refused
+    or dword [rdi+12],4
+    cmp rdx,rax
+    jne .owner_refused
+    mov dword [rdi+24],1
+    mov rax,[rcx+8]                     ; actual full64 CL[0].CTBA, ordinary RAM
+    or dword [rdi+12],8
+    cmp rax,rdx
+    jne .owner_refused
+    mov dword [rdi+28],1
+    mov dword [rdi+8],0                 ; exact table binding only, not Flush
+    jmp .issue
+.owner_refused:
+    inc r13d                            ; no issue: attempt/outcome remain zero
+    jmp .next                           ; no post-call snapshot or resource change
+.issue:
+    mov dword [r14+36],1                 ; actual call attempt, not completion
     mov  edi, ebx
     mov  r10b, AHCI_ATA_FLUSH
     xor  r11b, r11b
@@ -1642,21 +1803,127 @@ ahci_flush_for_reset:
     xor  ecx, ecx
     call ahci_issue
     test eax, eax
-    jnz  .failed
-    inc  r12d
-    jmp  .next
+    jnz .failed
+    inc r12d
+    mov dword [r14+40],1                 ; actual successful return
+    jmp .after
 .failed:
-    inc  r13d
+    inc r13d
+    mov dword [r14+40],2                 ; actual refused/failed return
+.after:
+    lea rax,[rel ahci_port_poisoned]
+    movzx eax,byte [rax+rbx]
+    mov [r14+60],eax
+    test eax,eax
+    jnz .next                            ; recovery may poison: do not read it
+    test r15,r15
+    jz .next
+    mov eax,[r15+AHCI_PORT_CI]
+    mov [r14+48],eax
+    mov eax,[r15+0x34]
+    mov [r14+52],eax
+    mov eax,[r15+AHCI_PORT_TFD]
+    mov [r14+56],eax
+    mov dword [r14+44],1                 ; independent post-call registers
+    ; A successful issue return is not terminal quiescence if work remains
+    ; or the original post-call ATA status reports ERR/DF.
+    ; Preserve actual flushed/attempt/outcome and every original sampled value.
+    mov eax,[r14+48]
+    or eax,[r14+52]
+    jnz .post_active
+    test dword [r14+56],AHCI_TFD_BSY_DRQ | 0x21 ; ERR(bit0), DF(bit5)
+    jz .next
+.post_active:
+    cmp dword [r14+40],1
+    jne .next                           ; an actual failed issue already counted
+    inc r13d                            ; aggregate refuses power after effect
 .next:
     inc  ebx
     jmp  .slot
 .done:
     mov  eax, r12d
     mov  edx, r13d
+    pop r15
+    pop r14
     pop  r13
     pop  r12
     pop  rbx
     ret
+
+.inactive:
+    ; Original attach failures retain their RAM handles before present1. Do
+    ; not dereference those handles or invent a new cleanup/recovery rail.
+    mov r14d,ebx
+    shl r14,6
+    lea rax,[rel ahci_inactive_observations]
+    add r14,rax
+    mov dword [r14],1                      ; additive schema, this actual call
+    mov [r14+4],ebx
+    mov [r14+20],edx                       ; original raw present byte
+    xor r15d,r15d
+    test edx,edx
+    setnz r15b                            ; noncanonical present is a refusal
+    lea rax,[rel ahci_port_poisoned]
+    movzx edx,byte [rax+rbx]
+    mov [r14+24],edx
+    test edx,edx
+    setnz dl
+    movzx edx,dl
+    shl edx,1
+    or r15d,edx
+    lea rax,[rel ahci_pbases]
+    mov rdx,[rax+rbx*8]                    ; actual original retained qword
+    test rdx,rdx
+    setnz dl
+    movzx edx,dl
+    mov [r14+28],edx                  ; presence, never an exported address
+    shl edx,2
+    or r15d,edx
+    lea rax,[rel ahci_cls]
+    mov rdx,[rax+rbx*8]                    ; actual original retained qword
+    test rdx,rdx
+    setnz dl
+    movzx edx,dl
+    mov [r14+32],edx                  ; presence, never an exported address
+    shl edx,3
+    or r15d,edx
+    lea rax,[rel ahci_cts]
+    mov rdx,[rax+rbx*8]                    ; actual original retained qword
+    test rdx,rdx
+    setnz dl
+    movzx edx,dl
+    mov [r14+36],edx                  ; presence, never an exported address
+    shl edx,4
+    or r15d,edx
+    lea rax,[rel ahci_idbufs]
+    mov rdx,[rax+rbx*8]                    ; actual original retained qword
+    test rdx,rdx
+    setnz dl
+    movzx edx,dl
+    mov [r14+40],edx                  ; presence, never an exported address
+    shl edx,5
+    or r15d,edx
+    lea rax,[rel ahci_bounces]
+    mov rdx,[rax+rbx*8]                    ; actual original retained qword
+    test rdx,rdx
+    setnz dl
+    movzx edx,dl
+    mov [r14+44],edx                  ; presence, never an exported address
+    shl edx,6
+    or r15d,edx
+    mov [r14+16],r15d
+    mov dword [r14+12],0x7f                ; all seven actual RAM operands observed
+    mov dword [r14+8],1                    ; bounded inactive predicate only
+    test r15d,r15d
+    jz .next
+    mov dword [r14+8],0xffffffff           ; retained/unknown: no Flush attempted
+    mov dword [r14+48],1
+    cmp dword [r14+20],0
+    je .inactive_failed
+    mov dword [r14+48],2                   ; noncanonical presence stays distinct
+.inactive_failed:
+    inc r13d                              ; actual original aggregate refuses power
+    jmp .next
 
 ; flush(self) -> 0/-1. Real FLUSH CACHE EXT (0xEA) — a committed write reaches
 ;   the medium. No data phase (PRDTL=0).
@@ -1992,6 +2259,11 @@ ahci_identify_dma_to:
 
 ; ---- ahci data (in-image writable; migrates to BSS under full W^X) -----------
 AHCI_SCRATCH_LBA equ PERSIST_GAP_LBA_PRIMARY ; candidate only; not an ownership reservation
+%include "dev/blk/ahci_vmd_owner.inc"
+%include "dev/blk/ahci_empty_owner.inc"
+%include "dev/blk/ahci_boh_owner.inc"
+%include "dev/blk/ahci_vmd_boh_owner.inc"
+
 %include "core/abi/wdata.inc" ; WDATA_DEFER; standalone assemblies expand blocks in place
 ; Writable state: deferred to the page-isolated WDATA region (core/abi/wdata.inc).
 %macro WDATA_dev_blk_ahci_0 0
@@ -2095,3 +2367,31 @@ ahci_scan_det:       resb 32            ; PxSSTS.DET per implemented port, as sc
 ahci_scan_summary:   resb AHCI_SCAN_SUMMARY_MAX ; ahci_scan_summarize's token (NUL-terminated)
 %endmacro
 WDATA_BSS_DEFER WDATA_BSS_dev_blk_ahci_scan_report
+
+; Per-slot flush witnesses: present,physical port,BDF,ownership flags,
+; owner bits0 legacy claim,1 VMD child,2 live queues sampled,3 CLB match,4 FB match.
+; poison-before,before-valid,CI/SACT/TFD-before,attempt,outcome,
+; after-valid,CI/SACT/TFD-after,poison-after (16 dwords, 8 bounded slots).
+; outcome0 skipped,1 successful call,2 failed call. A poisoned port remains
+; present but unattempted; unavailable MMIO is NEVER reported as idle proof.
+%macro WDATA_BSS_dev_blk_ahci_flush_observations 0
+alignb 8
+ahci_flush_observations: resb (AHCI_MAX_DISKS * 64)
+%endmacro
+WDATA_BSS_DEFER WDATA_BSS_dev_blk_ahci_flush_observations
+
+; Additive per-call inactive-slot ABI; independent block preserves all existing
+; initialized/BSS storage offsets and the original present1 64B observation.
+%macro WDATA_dev_blk_ahci_inactive_observation 0
+align 8
+ahci_inactive_observations: times (AHCI_MAX_DISKS*64) db 0
+; Additive original per-call table-binding operands, never exported addresses.
+align 8
+ahci_table_observations: times AHCI_MAX_DISKS*64 db 0
+%endmacro
+WDATA_DEFER WDATA_dev_blk_ahci_inactive_observation
+
+; Terminal-only owner containment; no ordinary I/O or Flush changes.
+%include "dev/blk/ahci_terminal.inc"
+
+%include "dev/blk/ahci_vmd_terminal.inc"

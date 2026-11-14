@@ -1,0 +1,19 @@
+{
+  "schema": "paos.local-clis.v1",
+  "programs": {
+    "claude": {
+      "version": "2.1.317",
+      "executable": "/opt/paos-cli/claude",
+      "size": 331362672,
+      "sha256": "eb224419e344575faa4a1f39b290b649425a10cd5ee2ef1d003480cd9ae57eb0",
+      "origin": "Owner-installed standalone ~/.local/share/claude/versions/2.1.317; version from installation path, not executed"
+    },
+    "codex": {
+      "version": "0.159.3",
+      "executable": "/opt/paos-cli/codex",
+      "size": 287086056,
+      "sha256": "8bf204b36a2f6dd0dab73aa2f639892e67ef9ac8befccb4a05b1496ebf25c479",
+      "origin": "Owner-installed standalone ~/.codex/packages/standalone/releases/0.159.3-x86_64-unknown-linux-musl/bin/codex; not executed"
+    }
+  }
+}

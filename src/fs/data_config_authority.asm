@@ -1,6 +1,6 @@
 ;; MODULE fs/data_config_authority
 ;; LAYER 4
-;; EXPORTS data_config_bind_provisioned, data_config_write_learned, data_config_write_local_guarded
+;; EXPORTS data_config_bind_provisioned, data_config_acquire_provisioned, data_config_write_learned, data_config_write_local_guarded, data_config_write_app_guarded, data_config_write_documents, data_config_write_updates_guarded, data_config_write_daily_guarded
 ;; IMPORTS fs/data_config_provider, fs/fat32_disk, fs/vol_owner_data, fs/storage_access, fs/blockdev, fs/vfs, core/lib/mem
 ;; CAPS
 ;; OWNER saga:fs_wave
@@ -8,6 +8,36 @@
 ; Included by the sole DATA provider. No serialized or caller request grant.
 
 ; Read binding from the current sealed role, never a compiled descriptor.
+; Reuse a live sealed binding without retiring unrelated config/app tokens.
+; Only an already unusable binding may enter the existing full sealed probe.
+data_config_acquire_provisioned:          ; RDI=out112 ->0/-1/-2
+    push r12
+    mov r12,rdi
+    test r12,r12
+    jz .no
+    lea rdi,[rel fd_data_binding]
+    call data_config_current
+    test rax,rax
+    jnz .bind
+    call fd_data_role_current
+    test rax,rax
+    jnz .no
+    mov rdi,r12
+    lea rsi,[rel fd_data_binding]
+    mov edx,FD_DATA_TOKEN
+    call memcpy
+    xor eax,eax
+    jmp .out
+.bind:
+    mov rdi,r12
+    call data_config_bind_provisioned
+    jmp .out
+.no:
+    mov rax,-1
+.out:
+    pop r12
+    ret
+
 data_config_bind_provisioned:             ; RDI=out112
     push rbx
     push r12
@@ -126,6 +156,30 @@ data_config_write_local_guarded:
     mov r10d, 2
     jmp fd_data_write_common
 
+; Only sec/data_config_local's fixed Updates checker enters mode5. Its unique
+; policy class cannot be written by request/local/app/learned/documents modes.
+data_config_write_updates_guarded:
+    mov r10d, 5
+    jmp fd_data_write_common
+
+; Sole fixed daily-consent wrapper. Mode6 is confined to UPDAILY.CFG,
+; independent of the old UPDATE.CFG writer and every public/request mode.
+data_config_write_daily_guarded:
+    mov r10d, 6
+    jmp fd_data_write_common
+
+; Only sec/app_store_authority supplies the fixed checker. R8=intent, R9=op.
+data_config_write_app_guarded:
+    mov r10d, 3
+    jmp fd_data_write_common
+
+; Fixed native creator checker, never an arbitrary supplied callback. R8/R9
+; are the creator's frozen request tuple; mode4 cannot write any other store.
+data_config_write_documents:
+    lea r11,[rel public_documents_write_check]
+    mov r10d,4
+    jmp fd_data_write_common
+
 ; R10 mode, RDI=name, R8/R9=captured local tuple, R11=live checker.
 ; Preserve the operation's arguments and mode until the common body saves them.
 fd_data_authorize_start:
@@ -147,10 +201,43 @@ fd_data_authorize_start:
     jne .no
     jmp .role
 .local:
+    cmp r10d, 6
+    je .daily
+    cmp r10d, 5
+    je .updates
+    cmp r10d, 4
+    je .docs
+    cmp r10d, 3
+    je .app
     cmp r10d, 2
     jne .no
     cmp eax, 1024
     jne .no
+    jmp .checked
+.daily:
+    cmp eax, FD_DATA_DAILY_CLASS
+    jne .no
+    jmp .checked
+.updates:
+    cmp eax, FD_DATA_UPDATES_MAX
+    jne .no
+    jmp .checked
+.app:
+    cmp eax, FD_DATA_APP_MAX
+    jne .no
+    ; Role precedes the app checker; repeat after it before admission.
+    call fd_data_role_current
+    test rax, rax
+    jnz .out
+    lea rdx, [rel fd_data_binding]
+    jmp .checked
+.docs:
+    cmp eax,FD_DATA_DOC_MAX
+    jne .no
+    call fd_data_role_current
+    test rax,rax
+    jnz .out
+.checked:
     mov r11, [rsp]
     mov r9, [rsp + 16]
     mov r8, [rsp + 24]
@@ -163,6 +250,18 @@ fd_data_authorize_start:
     call fd_data_role_current
     jmp .out
 .request:
+    ; App records require their fixed physical-intent route, even for requests.
+    test rdi, rdi
+    jz .no
+    call fd_data_policy
+    cmp eax, FD_DATA_DAILY_CLASS
+    je .no
+    cmp eax, FD_DATA_UPDATES_MAX
+    je .no
+    cmp eax, FD_DATA_DOC_MAX
+    je .no
+    cmp eax, FD_DATA_APP_MAX
+    je .no
     call fd_scratch_owner
     jmp .out
 .no:
@@ -191,12 +290,27 @@ fd_data_role_current:
     ret
 
 fd_data_authorize_effect:
+    cmp dword [rel fd_data_mode], 6
+    je .checked
+    cmp dword [rel fd_data_mode], 5
+    je .checked
     cmp dword [rel fd_data_mode], 0
     je fd_scratch_owner
     cmp dword [rel fd_data_mode], 1
     je fd_data_role_current
+    cmp dword [rel fd_data_mode], 4
+    je .checked
+    cmp dword [rel fd_data_mode], 3
+    je .app
     cmp dword [rel fd_data_mode], 2
     jne .no
+    jmp .checked
+.app:
+    call fd_data_role_current
+    test rax, rax
+    jnz .no
+    lea rdx, [rel fd_data_binding]
+.checked:
     mov r8, [rel fd_data_local_pid]
     mov r9, [rel fd_data_local_authority]
     mov rax, [rel fd_data_local_check]

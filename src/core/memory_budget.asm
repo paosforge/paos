@@ -1,6 +1,6 @@
 ;; MODULE core/memory_budget
 ;; LAYER 1
-;; EXPORTS mb_pressure_poll, mb_guest_warm_begin, mb_guest_warm_retire, mb_guest_warm_end, mb_guest_warm_zero, mb_snapshot_zero, mb_snapshot_copy, mb_guest_control_copy, mb_guest_capture_begin, mb_guest_capture_end, mb_acquire, mb_acquire_bounded, mb_release, mb_cache_report, mb_cache_invalidate, mb_snapshot
+;; EXPORTS mb_allocation_read, mb_pressure_poll, mb_guest_warm_begin, mb_guest_warm_retire, mb_guest_warm_end, mb_guest_warm_zero, mb_snapshot_zero, mb_snapshot_copy, mb_guest_control_copy, mb_guest_capture_begin, mb_guest_capture_end, mb_acquire, mb_acquire_bounded, mb_release, mb_cache_report, mb_cache_invalidate, mb_snapshot
 ;; IMPORTS boot/paging
 ;; CAPS
 ;; OWNER saga:core
@@ -479,6 +479,36 @@ mb_find:
     jnz .row
 .bad:
     mov eax, MB_E_STALE
+    ret
+
+; RDI=owner, RSI=generation, RDX=token, RCX=trusted native output,
+; R8=MB_ALLOCATION_BYTES. Copy only the allocation geometry, under its lock.
+; No map scan, lifetime operation or storage access; refusal leaves output
+; untouched. A caller must still join its own execution/START observations.
+mb_allocation_read:
+    push rbx
+    mov rbx, rcx
+    mov eax, MB_E_INPUT
+    test rbx, rbx
+    jz .out
+    cmp r8, MB_ALLOCATION_BYTES
+    jne .out
+    call mb_try_lock
+    test eax, eax
+    jnz .out
+    call mb_find
+    test eax, eax
+    jnz .unlock
+    mov rsi, r11
+    mov rdi, rbx
+    mov ecx, MB_ALLOCATION_BYTES / 8
+    cld
+    rep movsq
+    xor eax, eax
+.unlock:
+    mov dword [rel mb_lock], 0
+.out:
+    pop rbx
     ret
 
 ; Exact-key release after caller quiescence. Token counter is never reset.

@@ -422,7 +422,7 @@ gf_console_tx:
     jne .out
     lea rdi,[rel fsg_response]
     lea rsi,[rel fsg_request]
-    call fsc_wire_reply
+    call fsg_reply_validate
     test eax,eax
     jnz .fault
     mov dword [rel fsg_pending],0

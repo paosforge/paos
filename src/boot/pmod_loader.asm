@@ -1,7 +1,7 @@
 ;; MODULE boot/pmod_loader
 %include "core/abi/build_profile.inc"
 ;; LAYER 0
-;; EXPORTS pmod_sandbox_call_native, pmod_sandbox_call_native_budget, pmod_call_active, pmod_preload, pmod_init, pmod_udp_try, pmod_status_append, pmod_timer_hooks_bind, pmod_first_active, pmod_second_active, pmod_cap_blocked, pmod_hash_mismatch_blocked, pmod_bad_sig_blocked, pmod_watchdog_blocked, pmod_netmon_bind, pmod_netmon_start, pmod_netmon_query
+;; EXPORTS pmod_sandbox_call_native, pmod_sandbox_call_native_budget, pmod_sandbox_call_sensitive, pmod_sandbox_call_sensitive_until, pmod_sandbox_call_sensitive_until_fullfit, pmod_call_deadline_strict, pmod_fence_obs_timeouts, pmod_fence_obs_last_late_tsc, pmod_fence_obs_last_cleanup_tsc, pmod_fence_obs_max_late_tsc, pmod_fence_obs_max_cleanup_tsc, pmod_fence_obs_last_mode, pmod_fence_obs_last_tail_tsc, pmod_fence_obs_max_tail_tsc, pmod_call_active, pmod_preload, pmod_init, pmod_udp_try, pmod_status_append, pmod_timer_hooks_bind, pmod_first_active, pmod_second_active, pmod_cap_blocked, pmod_hash_mismatch_blocked, pmod_bad_sig_blocked, pmod_watchdog_blocked, pmod_netmon_bind, pmod_netmon_start, pmod_netmon_query
 ;; IMPORTS boot/header, boot/paging
 ;; CAPS
 ;; OWNER saga:pmod_bundle_seam
@@ -39,6 +39,8 @@ PMOD_WDOG_VECTOR       equ 0xF2
 PMOD_APIC_EOI          equ 0x0B0
 PMOD_APIC_LVT_TIMER    equ 0x320
 PMOD_TSC_DEADLINE_MSR  equ 0x6E0
+PMOD_SENSITIVE_CTX_MAX equ 16384         ; one bounded secret-bearing context per sensitive call
+PMOD_SENSITIVE_WINDOW  equ 0x200000      ; sparse module PD entry the sandbox CR3 remaps
 PMOD_TIMEOUT_MS        equ 5000          ; every live module call (nonce probe, netmon load/query)
 PMOD_DRILL_TIMEOUT_MS  equ 500           ; boot EB-FE negative only (RC-boot-audit-fixes 2(b), rc-sec 20:15)
 PMOD_WDOG_REARM_MAX    equ 4             ; early deadline-mode fires re-armed per call (ADL071)
@@ -467,6 +469,144 @@ pmod_timer_hooks_bind:
     mov  [rel pmod_timer_restore_hook], rdi
     ret
 
+; One serial line with the last watchdog exit's timing (after the boot drill;
+; metal and twin logs both carry it). Hex fields: mode, late_tsc (signed),
+; cleanup_tsc, tsc_khz, timeouts. Observability only. Lab profile only: its one
+; caller (the boot drill in pmod_init) and its strings are both lab-only.
+%if !PAOS_PUBLIC_BUILD
+pmod_fence_obs_print:
+    push rdi
+    lea  rdi, [rel str_pmod_obs_head]
+    call serial_string
+    movzx edi, byte [rel pmod_fence_obs_last_mode]
+    call serial_hex64
+    lea  rdi, [rel str_pmod_obs_late]
+    call serial_string
+    mov  rdi, [rel pmod_fence_obs_last_late_tsc]
+    call serial_hex64
+    lea  rdi, [rel str_pmod_obs_clean]
+    call serial_string
+    mov  rdi, [rel pmod_fence_obs_last_cleanup_tsc]
+    call serial_hex64
+    lea  rdi, [rel str_pmod_obs_khz]
+    call serial_string
+    mov  rdi, [rel tsc_khz]
+    call serial_hex64
+    lea  rdi, [rel str_pmod_obs_n]
+    call serial_string
+    mov  rdi, [rel pmod_fence_obs_timeouts]
+    call serial_hex64
+    lea  rdi, [rel str_pmod_obs_crlf]
+    call serial_string
+    pop  rdi
+    ret
+%endif
+
+%ifdef PAOS_FENCE_TIMING_PROBE
+; DIAGNOSTIC ONLY, never in a product or candidate build. After the boot
+; drill: PMOD_PROBE_CALLS EB-FE calls through pmod_sandbox_call_sensitive_until
+; with D = now + PMOD_PROBE_D_US (lease 100 ms, so the D cap is the deadline),
+; then one [pmod.wdog.probe] line: calls, timeouts, other results, worst
+; late/cleanup/tail (TSC ticks, worst of THESE calls), mode, tsc_khz.
+PMOD_PROBE_CALLS equ 32
+PMOD_PROBE_D_US  equ 2000
+pmod_fence_timing_probe:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    xor  r12d, r12d                      ; timeouts
+    xor  r13d, r13d                      ; other results
+    xor  r14d, r14d                      ; worst late
+    xor  r15d, r15d                      ; worst cleanup + tail
+    mov  qword [rel pmod_probe_last_rc], 0
+    mov  ebx, PMOD_PROBE_CALLS
+.next:
+    rdtsc
+    shl  rdx, 32
+    or   rax, rdx
+    sub  rax, [rel time_monotonic_tsc_origin]
+    mov  rcx, 1000
+    mul  rcx
+    div  qword [rel tsc_khz]
+    add  rax, PMOD_PROBE_D_US
+    mov  r9, rax                          ; D, monotonic us
+    mov  rdi, [rel pmod_region_base]
+    add  rdi, PMOD_PAGE_WDOG_CODE * PMOD_PAGE_SIZE
+    lea  rsi, [rel pmod_probe_ctx]
+    mov  edx, 64
+    mov  r8d, 100
+    call pmod_sandbox_call_sensitive_until
+    mov  [rel pmod_probe_last_rc], rax
+    cmp  rax, -2
+    je   .timed_out
+    inc  r13
+    jmp  .step
+.timed_out:
+    inc  r12
+    mov  rax, [rel pmod_fence_obs_last_late_tsc]
+    cmp  r12, 1
+    je   .late_set
+    cmp  rax, r14
+    jle  .late_ok
+.late_set:
+    mov  r14, rax
+.late_ok:
+    mov  rax, [rel pmod_fence_obs_last_cleanup_tsc]
+    add  rax, [rel pmod_fence_obs_last_tail_tsc]
+    cmp  rax, r15
+    jbe  .step
+    mov  r15, rax
+.step:
+    dec  ebx
+    jnz  .next
+    lea  rdi, [rel str_pmod_probe_head]
+    call serial_string
+    mov  edi, PMOD_PROBE_CALLS
+    call serial_hex64
+    lea  rdi, [rel str_pmod_probe_to]
+    call serial_string
+    mov  rdi, r12
+    call serial_hex64
+    lea  rdi, [rel str_pmod_probe_other]
+    call serial_string
+    mov  rdi, r13
+    call serial_hex64
+    lea  rdi, [rel str_pmod_probe_rc]
+    call serial_string
+    mov  rdi, [rel pmod_probe_last_rc]
+    call serial_hex64
+    lea  rdi, [rel str_pmod_obs_late]
+    call serial_string
+    mov  rdi, r14
+    call serial_hex64
+    lea  rdi, [rel str_pmod_probe_full]
+    call serial_string
+    mov  rdi, r15
+    call serial_hex64
+    lea  rdi, [rel str_pmod_probe_tail]
+    call serial_string
+    mov  rdi, [rel pmod_fence_obs_max_tail_tsc]
+    call serial_hex64
+    lea  rdi, [rel str_pmod_probe_mode]
+    call serial_string
+    movzx edi, byte [rel pmod_fence_obs_last_mode]
+    call serial_hex64
+    lea  rdi, [rel str_pmod_obs_khz]
+    call serial_string
+    mov  rdi, [rel tsc_khz]
+    call serial_hex64
+    lea  rdi, [rel str_pmod_obs_crlf]
+    call serial_string
+    pop  r15
+    pop  r14
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+%endif
+
 pmod_watchdog_init:
     push rbx
     mov  byte [rel pmod_watchdog_deadline_mode], 0
@@ -558,6 +698,12 @@ pmod_watchdog_isr:
     mov  byte [rel pmod_watchdog_periodic_fallback], 1
     jmp  .spurious
 .expired:
+    ; Observability only (ROOT105664): TSC at the expiry decision. RAX/RDX are
+    ; the ISR's own saved registers.
+    rdtsc
+    shl  rdx, 32
+    or   rax, rdx
+    mov  [rel pmod_fence_obs_expire_tsc], rax
     mov  byte [rel pmod_watchdog_armed], 0
     mov  byte [rel pmod_watchdog_timeout_seen], 1
     mov  rax, [rel pmod_watchdog_recover]
@@ -570,7 +716,9 @@ pmod_watchdog_isr:
     iretq
 
 ; pmod_sandbox_call(RDI=fn,RSI=arg,RDX=len,RCX=granted_caps)
-; -> RAX=0 returned / -1 fault / -2 watchdog / -3 sandbox unavailable.
+; -> RAX=0 returned / -1 fault / -2 watchdog / -3 sandbox unavailable /
+;    -4 caller's original deadline already reached at arm (sensitive_until only) /
+;    -5 whole lease + caller reserve no longer fits before D at arm (fullfit only).
 %if !PAOS_PUBLIC_BUILD
 pmod_sandbox_call:
     mov  r8d, PMOD_TIMEOUT_MS
@@ -667,6 +815,10 @@ pmod_sandbox_call_budget:
     jne  .periodic_arm
     ; Preserve the proven PMOD ordering: the sandbox recovery frame exists
     ; before deadline mode is selected or the deadline MSR is armed.
+    ; LVT selection, the TSC sample, the caller-D check and the MSR arm are one
+    ; IF-masked boundary, as in the periodic arm: no IRQ between the D check
+    ; and delivery being armed (review 105547).
+    cli
     mov  byte [rel pmod_watchdog_lvt_ok], 0
     mov  esi, PMOD_APIC_LVT_TIMER
     mov  edx, PMOD_WDOG_VECTOR | (2 << 17)
@@ -680,9 +832,12 @@ pmod_sandbox_call_budget:
     rdtsc
     shl  rdx, 32
     or   rax, rdx
+    mov  rdx, rax                        ; arm TSC for the caller-D cap
     mov  rcx, [rel tsc_khz]
     imul rcx, [rel pmod_call_budget_ms]
     add  rax, rcx
+    call pmod_deadline_cap
+    jc   .deadline_passed
     mov  [rel pmod_watchdog_deadline], rax ; the ISR's expiry test in both modes
     mov  byte [rel pmod_watchdog_rearms], 0
     mov  byte [rel pmod_watchdog_periodic_fallback], 0
@@ -691,6 +846,11 @@ pmod_sandbox_call_budget:
     shr  rdx, 32
     mov  byte [rel pmod_watchdog_armed], 1
     wrmsr
+    ; Armed: run the module with the caller's IF, exactly as before this arm
+    ; was masked (the sensitive gate admits only IF=1 callers).
+    bt   qword [rel pmod_call_host_rflags], 9
+    jnc  .invoke
+    sti
 .invoke:
     mov  rdi, r13
     mov  rsi, r14
@@ -703,9 +863,12 @@ pmod_sandbox_call_budget:
     rdtsc
     shl  rdx, 32
     or   rax, rdx
+    mov  rdx, rax                        ; arm TSC for the caller-D cap
     mov  rcx, [rel tsc_khz]
     imul rcx, [rel pmod_call_budget_ms]
     add  rax, rcx
+    call pmod_deadline_cap
+    jc   .deadline_passed
     mov  [rel pmod_watchdog_deadline], rax
     call smp_preempt_init_local
     mov  esi, PMOD_APIC_LVT_TIMER
@@ -716,6 +879,16 @@ pmod_sandbox_call_budget:
     mov  byte [rel pmod_watchdog_armed], 1
     sti
     jmp  .invoke
+.deadline_passed:
+    ; The caller's original D was already reached at arm (RCX=0), or the whole
+    ; lease plus the full-fit caller's reserve no longer fits before it (RCX=1):
+    ; never enter the module, never renew D. Full common cleanup; the
+    ; watchdog stays usable.
+    mov  byte [rel pmod_call_status], -4
+    test ecx, ecx
+    jz   .cleanup
+    mov  byte [rel pmod_call_status], -5
+    jmp  .cleanup
 .arm_failed:
     ; Never execute a module when the selected LAPIC backend cannot accept
     ; the lease. The common cleanup still restores every host-owned resource.
@@ -745,6 +918,16 @@ pmod_sandbox_call_budget:
     wrmsr
 .disarmed:
     mov  byte [rel diag_fault_expect], 0
+    ; Every exit, not only the next entry, zeroes the shared sandbox stack: the
+    ; page stays readable through the host identity map after return. It is
+    ; mapped at this address only under the sandbox CR3, so wipe before the
+    ; switch. IF is masked; nothing below pops from this page again.
+    mov  rdi, [rel pmod_region_base]
+    add  rdi, PMOD_PAGE_STACK * PMOD_PAGE_SIZE
+    mov  ecx, (PMOD_PAGE_SIZE / 8)       ; spelled apart from the entry scrub's mutant anchors
+    xor  eax, eax
+    cld
+    rep stosq
     mov  rax, [rel pmod_call_host_cr3]
     mov  cr3, rax
     mov  rsp, [rel pmod_call_host_rsp]
@@ -764,6 +947,7 @@ pmod_sandbox_call_budget:
     call pmod_periodic_restore
 .restored:
     call smp_bsp_tick_lease_end          ; RC power I2: back to the BSP LAPIC tick if the restore read back
+    call pmod_fence_obs_exit             ; observability only; IF still masked
     mov  byte [rel pmod_call_active], 0
     mov  rax, [rel pmod_call_host_rflags]
     push rax
@@ -780,6 +964,50 @@ pmod_sandbox_call_budget:
     pop  r12
     pop  rbp
     pop  rbx
+    ret
+
+; Fence timing observability (ROOT105664), called once per completed fence
+; call at the end of cleanup: host CR3/stack/capabilities and the scheduler
+; timer are restored, IF is still masked, caller RFLAGS not yet restored.
+; Every exit stamps the return TSC. A watchdog exit (-2) also records
+;   late    = ISR expiry stamp - programmed deadline (the D cap when it applied)
+;   cleanup = return stamp - ISR expiry stamp
+; signed TSC ticks, last and max, a count, and the timer mode in force (1 TSC
+; deadline, 0 periodic, 2 ADL071 periodic fallback). Values are observations,
+; not bounds. Clobbers RAX/RCX/RDX only; touches no fence state.
+pmod_fence_obs_exit:
+    rdtsc
+    shl  rdx, 32
+    or   rax, rdx
+    mov  [rel pmod_fence_obs_return_tsc], rax
+    mov  byte [rel pmod_fence_obs_stamped], 1   ; this call reached its cleanup stamp
+    cmp  byte [rel pmod_call_status], -2
+    jne  .done
+    inc  qword [rel pmod_fence_obs_timeouts]
+    mov  rcx, rax
+    sub  rcx, [rel pmod_fence_obs_expire_tsc]
+    mov  [rel pmod_fence_obs_last_cleanup_tsc], rcx
+    cmp  rcx, [rel pmod_fence_obs_max_cleanup_tsc]
+    jle  .cleanup_kept
+    mov  [rel pmod_fence_obs_max_cleanup_tsc], rcx
+.cleanup_kept:
+    mov  rcx, [rel pmod_fence_obs_expire_tsc]
+    sub  rcx, [rel pmod_watchdog_deadline]
+    mov  [rel pmod_fence_obs_last_late_tsc], rcx
+    cmp  qword [rel pmod_fence_obs_timeouts], 1
+    je   .late_first
+    cmp  rcx, [rel pmod_fence_obs_max_late_tsc]
+    jle  .late_kept
+.late_first:
+    mov  [rel pmod_fence_obs_max_late_tsc], rcx
+.late_kept:
+    movzx eax, byte [rel pmod_watchdog_deadline_mode]
+    cmp  byte [rel pmod_watchdog_periodic_fallback], 0
+    je   .mode
+    mov  eax, 2
+.mode:
+    mov  [rel pmod_fence_obs_last_mode], al
+.done:
     ret
 
 ; Same scheduler restart and measured postconditions as the deadline hook,
@@ -814,6 +1042,238 @@ pmod_periodic_restore:
     mov  byte [rel smp_timer_restore_ok], 1
     call sched_preempt_post_pmod_request
 .out:
+    ret
+
+; pmod_sandbox_call_sensitive(RDI=trusted entry, RSI=context, RDX=context bytes,
+;   R8=lease ms) -> RAX as pmod_sandbox_call_budget; -3 refused untouched.
+; Earned admission for secret-bearing trusted compute (SEC 105425): the same BSP
+; dispatch context native_app requires (IF=1, logical 0, outside IRQ, idle
+; fence, deadline mode or calibrated periodic tick), no capabilities, the
+; caller's original 1..100 ms lease (one absolute deadline, never renewed) and
+; one bounded, non-wrapping context outside the remapped module window. The
+; module receives RDI=context, RSI=bytes. On every return the host FX image is
+; restored and caller-saved registers are zeroed; RAX is the status and module
+; results stay in pmod_call_rax/rdx. NOT covered: AVX upper halves, the fault
+; ring's RIP/CR2 record, and the context itself (its owner wipes it). The fence
+; is a compute bound with honest-mistake containment: the sandbox CR3 still
+; maps all host memory.
+; RAX=lease deadline TSC, RDX=arm TSC -> RAX=min(RAX, caller cap), CF=1 and
+; RCX=0 if the cap was already reached. Cap 0 (every non-until caller) changes
+; nothing. With a full-fit reserve (fullfit entry only) the whole lease must
+; end no later than cap - reserve: then RAX is kept (never shortened), else
+; CF=1 and RCX=1. Clobbers RCX. Runs inside the CLI arm boundary.
+pmod_deadline_cap:
+    mov  rcx, [rel pmod_call_deadline_cap]
+    test rcx, rcx
+    jz   .keep
+    cmp  rdx, rcx
+    jae  .passed
+    cmp  qword [rel pmod_call_fit_reserve_tsc], 0
+    jne  .fullfit
+    cmp  rax, rcx
+    jbe  .keep
+    mov  rax, rcx                       ; never past the caller's original D
+.keep:
+    clc
+    ret
+.fullfit:
+    sub  rcx, [rel pmod_call_fit_reserve_tsc] ; fit cap = D_tsc - reserve
+    jbe  .nofit                         ; reserve >= D_tsc: nothing fits, no underflow
+    cmp  rax, rcx
+    ja   .nofit                         ; whole lease ends past D - reserve (equality fits)
+    clc
+    ret
+.nofit:
+    mov  ecx, 1
+    stc
+    ret
+.passed:
+    xor  ecx, ecx
+    stc
+    ret
+
+pmod_sandbox_call_sensitive:
+    xor  r9d, r9d                       ; relative lease only, no caller-D cap
+    xor  ecx, ecx                       ; no full-fit reserve
+    jmp  pmod_sensitive_gate
+
+; pmod_sandbox_call_sensitive_until(RDI, RSI, RDX, R8 as above, R9=the caller's
+;   original absolute deadline D in time_monotonic_now_us units) -> RAX as
+;   pmod_sandbox_call_sensitive, or -4 if D was already reached at arm (module
+;   not entered). D is converted exactly once: D_tsc = time_monotonic_tsc_origin
+;   + floor(D * tsc_khz / 1000), so monotonic(D_tsc) <= D. The arm, inside the
+;   existing CLI boundary, uses min(arm + lease, D_tsc); nothing is renewed or
+;   rounded up. The cutoff is strict at D only while TSC-deadline delivery holds
+;   (pmod_call_deadline_strict=1); periodic sampling may add up to one
+;   calibrated tick. IRQ delivery and the cleanup after the cutoff are the
+;   caller's reserve to budget.
+pmod_sandbox_call_sensitive_until:
+    xor  ecx, ecx                       ; no full-fit reserve (RCX is not an argument here)
+pmod_sensitive_until_convert:           ; RCX = full-fit reserve TSC, or 0
+    test r9, r9
+    jz   .refuse
+    mov  r10, [rel tsc_khz]
+    test r10, r10
+    jz   .refuse
+    mov  r11, rdx
+    mov  rax, r9
+    mul  r10                            ; RDX:RAX = D * kHz
+    mov  r10d, 1000
+    cmp  rdx, r10
+    jae  .refuse_rdx                    ; quotient would not fit 64 bits
+    div  r10
+    add  rax, [rel time_monotonic_tsc_origin]
+    jc   .refuse_rdx
+    test rax, rax
+    jz   .refuse_rdx
+    mov  r9, rax                        ; D_tsc, nonzero
+    mov  rdx, r11
+    jmp  pmod_sensitive_gate
+.refuse_rdx:
+    mov  rdx, r11
+.refuse:
+    mov  rax, -3
+    ret
+
+; pmod_sandbox_call_sensitive_until_fullfit(RDI, RSI, RDX, RCX=reserve_us,
+;   R8, R9 as sensitive_until) -> RAX as sensitive_until, or -5 if at the arm
+;   the whole lease plus the reserve no longer fits before D (module not
+;   entered; full common cleanup; pmod_call_deadline_strict=0). RCX is the
+;   caller's whole post-cutoff service reserve (AV105751/SEC105760): nonzero,
+;   converted once, rounded up: reserve_tsc = ceil(reserve_us * tsc_khz / 1000);
+;   zero or an overflowing conversion is refused (-3) before admission. The
+;   lease range, D conversion and every gate check are sensitive_until's; the
+;   lease is never shortened, renewed or widened.
+pmod_sandbox_call_sensitive_until_fullfit:
+    test rcx, rcx
+    jz   .refuse                        ; a zero reserve is refused
+    mov  r10, [rel tsc_khz]
+    test r10, r10
+    jz   .refuse
+    mov  r11, rdx
+    mov  rax, rcx
+    mul  r10                            ; RDX:RAX = reserve_us * kHz
+    test rdx, rdx
+    jnz  .refuse_rdx
+    add  rax, 999                       ; round up to a whole tick
+    jc   .refuse_rdx
+    xor  edx, edx
+    mov  r10d, 1000
+    div  r10
+    mov  rcx, rax                       ; reserve_tsc >= 1
+    mov  rdx, r11
+    jmp  pmod_sensitive_until_convert
+.refuse_rdx:
+    mov  rdx, r11
+.refuse:
+    mov  rax, -3
+    ret
+
+; Shared admission. R9 = D_tsc cap, or 0 for the relative-lease entry.
+; RCX = full-fit reserve TSC (fullfit entry), else 0.
+pmod_sensitive_gate:
+    pushfq
+    pop  rax
+    test eax, 0x200                     ; IF=1: dispatch context, never IRQ/CLI
+    jz   .refuse
+    test r8, r8
+    jz   .refuse
+    cmp  r8, 100
+    ja   .refuse
+    test rdx, rdx
+    jz   .refuse
+    cmp  rdx, PMOD_SENSITIVE_CTX_MAX
+    ja   .refuse
+    test rsi, rsi
+    jz   .refuse
+    mov  rax, rsi
+    add  rax, rdx                       ; exclusive end
+    jc   .refuse
+    mov  r10, [rel pmod_region_base]
+    cmp  rax, r10
+    jbe  .ctx_ok                        ; ends at or below the window
+    add  r10, PMOD_SENSITIVE_WINDOW
+    cmp  rsi, r10
+    jb   .refuse                        ; overlaps [base, base+window)
+.ctx_ok:
+    push rdi
+    push rsi
+    push rdx
+    push r8
+    push r9
+    push rcx
+    sub  rsp, 8                         ; keep the call 16-byte aligned
+    call smp_current_logical
+    add  rsp, 8
+    pop  rcx
+    pop  r9
+    pop  r8
+    pop  rdx
+    pop  rsi
+    pop  rdi
+    test eax, eax
+    jnz  .refuse
+    cmp  byte [rel cpu_irq_depth], 0    ; BSP slot; logical 0 checked above
+    jne  .refuse
+    cmp  byte [rel pmod_call_active], 0
+    jne  .refuse
+    cmp  byte [rel pmod_watchdog_deadline_mode], 1
+    je   .admitted
+    cmp  byte [rel smp_bsp_tick_calibrated], 1
+    jne  .refuse
+.admitted:
+    fxsave64 [rel pmod_sensitive_host_fx]
+    mov  [rel pmod_call_deadline_cap], r9
+    mov  byte [rel pmod_fence_obs_stamped], 0   ; observability: set only by this call's cleanup
+    mov  [rel pmod_call_fit_reserve_tsc], rcx
+    xor  ecx, ecx                       ; no capabilities, whatever the caller held
+    sub  rsp, 8
+    call pmod_sandbox_call_budget
+    add  rsp, 8
+    mov  qword [rel pmod_call_deadline_cap], 0
+    mov  qword [rel pmod_call_fit_reserve_tsc], 0
+    ; Strict only if TSC-deadline delivery held for the whole call.
+    xor  ecx, ecx
+    cmp  rax, -5
+    je   .strict                        ; full-fit refusal: never entered, never strict
+    cmp  byte [rel pmod_watchdog_deadline_mode], 1
+    jne  .strict
+    cmp  byte [rel pmod_watchdog_periodic_fallback], 0
+    sete cl
+.strict:
+    mov  [rel pmod_call_deadline_strict], cl
+    fxrstor64 [rel pmod_sensitive_host_fx]
+    ; Observability only (ROOT105664/AV105691): the sensitive tail after the
+    ; stamped cleanup end (cap clear, strict byte, FXRSTOR). The register
+    ; zeroing below and RET are not covered (8 XOR + RET, no memory access).
+    ; A budget refusal before cleanup (-3 via .unavailable) has no stamp of
+    ; its own: publish nothing rather than measure from an older stamp.
+    cmp  byte [rel pmod_fence_obs_stamped], 1
+    jne  .tail_skip
+    push rax
+    rdtsc
+    shl  rdx, 32
+    or   rax, rdx
+    sub  rax, [rel pmod_fence_obs_return_tsc]
+    mov  [rel pmod_fence_obs_last_tail_tsc], rax
+    cmp  rax, [rel pmod_fence_obs_max_tail_tsc]
+    jbe  .tail_kept
+    mov  [rel pmod_fence_obs_max_tail_tsc], rax
+.tail_kept:
+    pop  rax
+.tail_skip:
+    xor  ecx, ecx
+    xor  edx, edx
+    xor  esi, esi
+    xor  edi, edi
+    xor  r8d, r8d
+    xor  r9d, r9d
+    xor  r10d, r10d
+    xor  r11d, r11d
+    ret
+.refuse:
+    mov  rax, -3
+.refuse_out:
     ret
 
 ; pmod_register_export(RDI=name,RSI=entry,RDX=canonical-fallback,ECX=module-id)
@@ -1345,6 +1805,10 @@ pmod_init:
     mov  byte [rel pmod_watchdog_blocked], 1
     mov  byte [rel pmod_watchdog_compatible], 1
     mov  byte [rel pmod_init_stage], 9
+    call pmod_fence_obs_print            ; the drill's late/cleanup timing, observability only
+%ifdef PAOS_FENCE_TIMING_PROBE
+    call pmod_fence_timing_probe         ; DIAGNOSTIC build only (ROOT105664 twin measurement)
+%endif
 
     ; Measure-and-revert: remove #1's authority and rebind its registry handler
     ; to canonical ROM behavior. PMOD #2 remains registered and active. Its
@@ -1441,7 +1905,24 @@ pmod_watchdog_recover:  dq 0
 pmod_watchdog_deadline: dq 0
 pmod_watchdog_early_fires: dq 0         ; deadline-mode IRQs before the deadline (ADL071), never expiry
 pmod_watchdog_rearm_fallbacks: dq 0     ; calls whose re-arms ran out and moved to the periodic LVT
+; Fence timing observability (ROOT105664); see pmod_fence_obs_exit.
+pmod_fence_obs_expire_tsc:       dq 0    ; ISR expiry decision TSC
+pmod_fence_obs_return_tsc:       dq 0    ; end-of-cleanup TSC, every exit
+pmod_fence_obs_timeouts:         dq 0    ; -2 exits recorded
+pmod_fence_obs_last_late_tsc:    dq 0    ; signed: expiry - programmed deadline
+pmod_fence_obs_last_cleanup_tsc: dq 0    ; return - expiry
+pmod_fence_obs_max_late_tsc:     dq 0
+pmod_fence_obs_max_cleanup_tsc:  dq 0
+pmod_fence_obs_last_tail_tsc:    dq 0    ; sensitive entries: return - cleanup end
+pmod_fence_obs_max_tail_tsc:     dq 0
+pmod_fence_obs_last_mode:        db 0    ; 1 TSC deadline, 0 periodic, 2 ADL071 fallback
+pmod_fence_obs_stamped:          db 0    ; 1 once the current sensitive call's cleanup stamped
 pmod_timer_restore_hook:  dq 0
+align 16
+pmod_sensitive_host_fx:   times 512 db 0 ; host FX image across one sensitive call
+pmod_call_deadline_cap:   dq 0           ; this sensitive_until call's D_tsc, else 0
+pmod_call_fit_reserve_tsc: dq 0          ; this fullfit call's reserve TSC, else 0
+pmod_call_deadline_strict: db 0          ; last sensitive call kept TSC-deadline delivery
 %if !PAOS_PUBLIC_BUILD
 pmod_hello_verb_id:     dd -1
 pmod_nonce_verb_id:     dd -1
@@ -1529,6 +2010,24 @@ str_pmod_merkle_ok: db "[PAOS64] PMOD bundle Merkle tree verified [pmod.bundle.m
 str_pmod_sig_ok: db "[PAOS64] PMOD manifest signature verified [pmod.verify.sig.ok]",13,10,0
 str_pmod_sandbox_ok: db "[PAOS64] PMOD Tier-1 sandbox selftest passed [pmod.sandbox.tier1.ok]",13,10,0
 str_pmod_first_load: db "[PAOS64] first PMOD loaded and integrated [pmod.1st.load.ok]",13,10,0
+str_pmod_obs_head:  db "[PAOS64] PMOD watchdog timing [pmod.wdog.timing] mode=",0
+str_pmod_obs_late:  db " late_tsc=",0
+str_pmod_obs_clean: db " cleanup_tsc=",0
+str_pmod_obs_khz:   db " tsc_khz=",0
+str_pmod_obs_n:     db " timeouts=",0
+str_pmod_obs_crlf:  db 13,10,0
+%ifdef PAOS_FENCE_TIMING_PROBE
+str_pmod_probe_head:  db "[PAOS64] DIAGNOSTIC fence probe [pmod.wdog.probe] calls=",0
+str_pmod_probe_to:    db " timeouts=",0
+str_pmod_probe_other: db " other=",0
+str_pmod_probe_rc:    db " last_rc=",0
+str_pmod_probe_full:  db " cleanup_tail_tsc=",0
+str_pmod_probe_tail:  db " tail_max_tsc=",0
+str_pmod_probe_mode:  db " mode=",0
+align 16
+pmod_probe_ctx:       times 64 db 0
+pmod_probe_last_rc:   dq 0
+%endif
 str_pmod_first_test: db "[PAOS64] first PMOD capability selftest passed [pmod.1st.selftest.pass]",13,10,0
 str_pmod_second_load: db "[PAOS64] second PMOD loaded and integrated [pmod.2nd.load.ok]",13,10,0
 str_pmod_second_test: db "[PAOS64] second PMOD nonce selftest passed [pmod.2nd.selftest.pass]",13,10,0

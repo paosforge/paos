@@ -1,0 +1,94 @@
+{
+  "schema": "paos.sdk-script-icon-runtime-cases.v1",
+  "status": "UNOBSERVED",
+  "producer_owner": "rc-vm-claude",
+  "candidate": null,
+  "format_boundary": {
+    "install": "install48/install96/installnone are signed BASHAPP2 for APPINSTALL",
+    "launch": "runtime48/runtime96/runtimenone are signed BASHAPP1 for APPSCRIPT",
+    "identity": "Same script and request members do not make the two whole-bundle SHA256 values equal; no grant or install identity crosses formats",
+    "missing_join": "VM owns separate native original-BASHAPP2 installed consumer correction. Require its selected payload and actual installed authority; do not substitute the BASHAPP1 companion."
+  },
+  "cases": [
+    {
+      "id": "original_installed_begin_show",
+      "artifacts": [
+        "install96.pax"
+      ],
+      "action": "Owner installs these exact bytes and allows requested BEGIN/POLL through real install policy; read this installation's numeric, nonreused entry ID from the actual authenticated installed catalog, then APPRUN <installed-entry-id> on the compatible native installed consumer payload. org.example.icon96 is the bundle identifier/label, never the operand. After reinstall, read the fresh catalog entry ID; never reuse the retired ID.",
+      "observe": "Original whole BASHAPP2 hash, installation identity, native enforced app window, accepted first guest BEGIN and subsequent native show timestamps; STATUS/VM activation alone do not pass",
+      "negative": "Refuse BEGIN in real policy: no accepted BEGIN/show credit. Keep exactly-one-FORM and installed authority guards. No preselected window, forged grant or BASHAPP1 identity substitution."
+    },
+    {
+      "id": "cached48_and96",
+      "artifacts": [
+        "install96.pax",
+        "runtime96.pax"
+      ],
+      "action": "Owner physically installs the original BASHAPP2 app on provisioned DATA. Read this installation's numeric, nonreused entry ID from the actual authenticated installed catalog, then APPRUN <installed-entry-id> on the compatible VM consumer payload must resolve its actual installed identity. org.example.icon96 remains the bundle identifier/label, never the operand. After reinstall, read the fresh catalog entry ID; never reuse the retired ID. BASHAPP1 APPSCRIPT is a separate route.",
+      "observe": "Exact source PNG colors versus native cached48/96 pixels, preserved after caller input is scrubbed; durable catalog and permissions require their own restart observations"
+    },
+    {
+      "id": "optional96_absent",
+      "artifacts": [
+        "install48.pax",
+        "runtime48.pax"
+      ],
+      "action": "Use the48-only sample; observe48 pixels and missing96 fallback",
+      "observe": "Native app_script_icon_copy returns2/no output for96, not a fabricated96 cache"
+    },
+    {
+      "id": "all_icons_absent",
+      "artifacts": [
+        "installnone.pax",
+        "runtimenone.pax"
+      ],
+      "action": "Use the sample without icon/credits roles",
+      "observe": "Text fallback and missing cache; no previous app icon is reused"
+    },
+    {
+      "id": "signed_wrong_dimensions",
+      "artifacts": [
+        "wrong48.pax"
+      ],
+      "action": "Offer the validly signed BASHAPP1 negative to the trusted snapshot loader",
+      "observe": "Refusal leaves previous private snapshot/cache unchanged; malformed input is49x48"
+    },
+    {
+      "id": "signed_missing_credits",
+      "artifacts": [
+        "missingcredits.pax"
+      ],
+      "action": "Offer the validly signed BASHAPP1 negative to the trusted snapshot loader",
+      "observe": "Refusal: icon present without kind7 NOTICES; renamed metadata is only initial data, not credits"
+    },
+    {
+      "id": "stale_grant_after_remove_or_reinstall",
+      "action": "Preserve the actual runtime WAIT BEGIN descriptor and installed identity from the positive run. Owner confirms Settings Apps Remove. Invoke the preserved request after exact retirement and again after reinstalling the same app id with a fresh installation identity",
+      "native_boundary": "app_grants_check / app_install_grants resolver and original WAIT request",
+      "observe": "Old instance/root/installation identity remains denied; a new owner choice cannot revive the old descriptor. Capture actual reply and catalog/grants/cache before and after restart",
+      "fixture_policy": "VM captures actual live descriptors; this JSON does not forge grants or prescribe guessed nonce/cursor/identity"
+    },
+    {
+      "id": "agent_remove_refused",
+      "action": "With the installed app and Settings Apps confirmation visible, attempt confirmation using the maintained scripted/injected input context rather than local physical owner input",
+      "native_boundary": "settings_apps physical-confirm consumer -> app_remove_begin; no command or guest removal API exists",
+      "observe": "Refused physical intent and unchanged entry/grants/cache; then a fresh owner-confirmed action removes the exact entry. Save original injected provenance and actual result",
+      "fixture_policy": "Do not invent APPREMOVE or treat an unsupported guest command as evidence of the real removal gate"
+    }
+  ],
+  "qualification": "Signed bytes and HOST controls only. No VM, native install, removal, restart, permissions persistence or runtime acceptance is claimed.",
+  "sample": {
+    "form": "main.frm",
+    "form_declaration": "iconcheck",
+    "form_count": 1,
+    "requested_bytes": [
+      0,
+      1,
+      1,
+      0
+    ],
+    "program": "WINDOW then WAIT BEGIN/POLL with actual returned window/cursor/token",
+    "output_pins": "OUTPUT_PINS.json"
+  }
+}

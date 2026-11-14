@@ -13,6 +13,12 @@ The [v1 container](contract-v1/BUNDLE_FORMAT.md) and [signed text grammar](contr
 
 The [system-check public example](examples/system-check/README.md) reconstructs an exact signed development bundle from public inputs and invokes STATUS plus bare HOOK LIST under sys.read.
 
+The [script icon example](examples/script-icon-check/README.md) supplies signed
+BASHAPP2 install inputs, BASHAPP1 launch companions, PNG48/optional96 artwork,
+credits, a real `main.frm`, a WINDOW/WAIT BEGIN/POLL launch program and refusal
+fixtures through the existing script SDK. Their native
+format/identity boundary and pending install/restart/REMOVE proof are explicit.
+
 The [v1 request and reply boundaries](contract-v1/VERBS.md) define the exact
 commands. STATUS replies remain opaque native bytes, preserved without a typed
 field or stable field-order promise. HOOK LIST has a reviewed catalog grammar

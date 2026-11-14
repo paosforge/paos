@@ -1,6 +1,6 @@
 ;; MODULE svc/clipboard
 ;; LAYER 5
-;; EXPORTS clipboard_init, clipboard_bind_textfield, clipboard_audit_line, clipboard_out_buf, clipboard_out_ready
+;; EXPORTS clipboard_commit_entry, clipboard_init, clipboard_bind_textfield, clipboard_audit_line, clipboard_out_buf, clipboard_out_ready
 ;; IMPORTS boot/serial, core/lock, core/lib/fmt, core/lib/str, svc/command, svc/command_auth
 ;; CAPS clipboard.read(slot20), clipboard.write(signed)
 ;; OWNER saga:clipboard_service

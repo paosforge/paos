@@ -7,7 +7,8 @@
 ; Boot-local facts only. An allow count is an admission, not a successful
 ; probe, ownership transfer, working guest, or compatibility PASS. Classes:
 ; 0 platform,1 GOP,2 USB HC,3 HID,4 domain net,5 exact boot storage,
-; 6 native net,7 native sound,8 accelerated display,9 other USB,10 unknown.
+; 6 PCI/unclassified net,7 native sound,8 accelerated display,9 other USB,
+; 10 USB net plus unknown (unknown admission still refuses in selected modes).
 ; The whole compatibility check must separately bind effective coverage and
 ; actual devices to its original build/boot/START generation.
 native_driver_report_selection:

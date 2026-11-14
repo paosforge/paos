@@ -13,6 +13,12 @@ MCA_POLL_COUNT      equ 16                ; saturating software observations
 MCA_POLL_NBANK      equ 24
 MCA_POLL_QUAL       equ 28                ; 0 unchecked,1 Intel,2 vendor,3 feature,4 AMD SMCA
 MCA_POLL_LAST       equ 32                ; 32 raw MCi_STATUS qwords
+; Separate post-boot VAL=1 statuses excluded from corrected accounting.
+; CPU-private saturating observations, committed logs and refused logs. These
+; are sampled software transitions, never containment or physical error totals.
+MCA_POLL_OTHER_SEEN equ 288
+MCA_POLL_OTHER_LOG  equ 296
+MCA_POLL_OTHER_DROP equ 304
 MCA_POLL_STRIDE     equ 320               ; cache-line multiple, CPU-private rows
 
 ; Independent cache-line census: existing event-row stride is unchanged.

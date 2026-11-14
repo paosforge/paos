@@ -219,6 +219,10 @@
 ; Optional reader capability, not authority. Legacy Manager leaves byte89 zero.
 ; Native emits PBICv2 only for explicit2; all other values keep live PBICv1.
 %define PBM_HANDOFF_INIT_READER_OFF   89
+; Same-boot Try projection only. Never a saved enrollment/launch authorization.
+%define PBM_HANDOFF_TRY_TRUST_OFF     90
+%define PBM_HANDOFF_TRY_TRUST_TAG     0x3154 ; T1
+%define PBM_HANDOFF_TRY_CERT_OFF      92     ; exact selected DER SHA256, ends before CRC
 %define PBM_MFLOOR_UNREAD             0
 %define PBM_MFLOOR_HELD               1
 %define PBM_MFLOOR_ABSENT             2

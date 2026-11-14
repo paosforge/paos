@@ -1,6 +1,6 @@
 ;; MODULE core/lib/ed25519
 ;; LAYER 1
-;; EXPORTS ed_wipe_secret_scratch, ed25519_public_from_seed, ed25519_sign, ed25519_verify, ed25519_selftest
+;; EXPORTS ed25519_public_from_seed_context, ed25519_sign_context, ed25519_verify_context, ed_wipe_secret_scratch, ed25519_public_from_seed, ed25519_sign, ed25519_verify, ed25519_selftest
 ;; IMPORTS core/lib/mem, boot/serial
 ;; CAPS
 ;; OWNER saga:sec
@@ -20,10 +20,14 @@
 ; requires canonical point encodings, S < group order L, and refuses small-
 ; order public keys and R points.  Secret hash/scalar scratch is wiped before
 ; returning.  Static scratch makes this baseline serialized/non-reentrant; the
-; shared keep identity service is its serialized owner.
+; shared keep identity service is its serialized owner. Private-context entries
+; reuse this identical algorithm with an owned RBP-relative scratch span; see
+; gauntlet_v2/docs/ed25519_private_context.md. They are not a cancellation,
+; deadline, generation-authorization or secret-work service by themselves.
 ; ============================================================================
 
 ED25519_MAX_MESSAGE equ 1024
+ED25519_CONTEXT_BYTES equ ed_context_end - ed_sha_state
 ED_GF_BYTES          equ 128
 ED_POINT_BYTES       equ 512
 
@@ -38,7 +42,7 @@ ed_sha512_compress:
     push r13
     push r14
     push r15
-    lea  r12, [rel ed_sha_w]
+    lea  r12, [rbp + ed_sha_w - ed_sha_state]
     xor  r13d, r13d
 .load:
     mov  rax, [rdi + r13*8]
@@ -72,11 +76,11 @@ ed_sha512_compress:
     cmp  r13d, 80
     jb   .expand
 
-    lea  rsi, [rel ed_sha_state]
-    lea  rdi, [rel ed_sha_work]
+    lea  rsi, [rbp + ed_sha_state - ed_sha_state]
+    lea  rdi, [rbp + ed_sha_work - ed_sha_state]
     mov  edx, 64
     call memcpy
-    lea  r14, [rel ed_sha_work]
+    lea  r14, [rbp + ed_sha_work - ed_sha_state]
     lea  r15, [rel ed_sha_k]
     xor  r13d, r13d
 .round:
@@ -140,7 +144,7 @@ ed_sha512_compress:
     cmp  r13d, 80
     jb   .round
 
-    lea  rsi, [rel ed_sha_state]
+    lea  rsi, [rbp + ed_sha_state - ed_sha_state]
     xor  ecx, ecx
 .feed:
     mov  rax, [r14 + rcx*8]
@@ -172,7 +176,7 @@ ed_sha512_hash:
     test r12, r12
     jz   .bad
 .ptr_ok:
-    lea  rdi, [rel ed_sha_state]
+    lea  rdi, [rbp + ed_sha_state - ed_sha_state]
     lea  rsi, [rel ed_sha_iv]
     mov  edx, 64
     call memcpy
@@ -186,18 +190,18 @@ ed_sha512_hash:
     sub  r15, 128
     jmp  .blocks
 .tail:
-    lea  rdi, [rel ed_sha_tail]
+    lea  rdi, [rbp + ed_sha_tail - ed_sha_state]
     xor  esi, esi
     mov  edx, 256
     call memset
     test r15, r15
     jz   .pad
-    lea  rdi, [rel ed_sha_tail]
+    lea  rdi, [rbp + ed_sha_tail - ed_sha_state]
     mov  rsi, r12
     mov  rdx, r15
     call memcpy
 .pad:
-    lea  rax, [rel ed_sha_tail]
+    lea  rax, [rbp + ed_sha_tail - ed_sha_state]
     mov  byte [rax + r15], 0x80
     mov  ebx, 128
     cmp  r15, 112
@@ -207,16 +211,16 @@ ed_sha512_hash:
     mov  rax, r13
     shl  rax, 3
     bswap rax
-    lea  rcx, [rel ed_sha_tail]
+    lea  rcx, [rbp + ed_sha_tail - ed_sha_state]
     mov  [rcx + rbx - 8], rax
     mov  rdi, rcx
     call ed_sha512_compress
     cmp  ebx, 128
     je   .output
-    lea  rdi, [rel ed_sha_tail + 128]
+    lea  rdi, [rbp + ed_sha_tail - ed_sha_state + 128]
     call ed_sha512_compress
 .output:
-    lea  rsi, [rel ed_sha_state]
+    lea  rsi, [rbp + ed_sha_state - ed_sha_state]
     xor  ecx, ecx
 .out_loop:
     mov  rax, [rsi + rcx*8]
@@ -318,7 +322,7 @@ ed_gf_mul:
     mov  r12, rdi
     mov  r13, rsi
     mov  r14, rdx
-    lea  rdi, [rel ed_mul_t]
+    lea  rdi, [rbp + ed_mul_t - ed_sha_state]
     xor  esi, esi
     mov  edx, 31*8
     call memset
@@ -329,7 +333,7 @@ ed_gf_mul:
     mov  rax, [r13 + r8*8]
     imul rax, [r14 + r9*8]
     lea  ecx, [r8d + r9d]
-    lea  r10, [rel ed_mul_t]
+    lea  r10, [rbp + ed_mul_t - ed_sha_state]
     add  [r10 + rcx*8], rax
     inc  r9d
     cmp  r9d, 16
@@ -337,7 +341,7 @@ ed_gf_mul:
     inc  r8d
     cmp  r8d, 16
     jb   .outer
-    lea  r10, [rel ed_mul_t]
+    lea  r10, [rbp + ed_mul_t - ed_sha_state]
     xor  ecx, ecx
 .fold:
     mov  rax, [r10 + rcx*8 + 16*8]
@@ -371,19 +375,19 @@ ed_gf_inverse:
     push r14
     mov  r12, rdi
     mov  r13, rsi
-    lea  rdi, [rel ed_pow_c]
+    lea  rdi, [rbp + ed_pow_c - ed_sha_state]
     mov  rsi, r13
     call ed_gf_copy
     mov  r14d, 253
 .loop:
-    lea  rdi, [rel ed_pow_c]
+    lea  rdi, [rbp + ed_pow_c - ed_sha_state]
     mov  rsi, rdi
     call ed_gf_square
     cmp  r14d, 2
     je   .next
     cmp  r14d, 4
     je   .next
-    lea  rdi, [rel ed_pow_c]
+    lea  rdi, [rbp + ed_pow_c - ed_sha_state]
     mov  rsi, rdi
     mov  rdx, r13
     call ed_gf_mul
@@ -391,7 +395,7 @@ ed_gf_inverse:
     dec  r14d
     jns  .loop
     mov  rdi, r12
-    lea  rsi, [rel ed_pow_c]
+    lea  rsi, [rbp + ed_pow_c - ed_sha_state]
     call ed_gf_copy
     pop  r14
     pop  r13
@@ -404,17 +408,17 @@ ed_gf_pow2523:
     push r14
     mov  r12, rdi
     mov  r13, rsi
-    lea  rdi, [rel ed_pow_c]
+    lea  rdi, [rbp + ed_pow_c - ed_sha_state]
     mov  rsi, r13
     call ed_gf_copy
     mov  r14d, 250
 .loop:
-    lea  rdi, [rel ed_pow_c]
+    lea  rdi, [rbp + ed_pow_c - ed_sha_state]
     mov  rsi, rdi
     call ed_gf_square
     cmp  r14d, 1
     je   .next
-    lea  rdi, [rel ed_pow_c]
+    lea  rdi, [rbp + ed_pow_c - ed_sha_state]
     mov  rsi, rdi
     mov  rdx, r13
     call ed_gf_mul
@@ -422,7 +426,7 @@ ed_gf_pow2523:
     dec  r14d
     jns  .loop
     mov  rdi, r12
-    lea  rsi, [rel ed_pow_c]
+    lea  rsi, [rbp + ed_pow_c - ed_sha_state]
     call ed_gf_copy
     pop  r14
     pop  r13
@@ -436,19 +440,19 @@ ed_gf_pack:
     push r14
     mov  r12, rdi
     mov  r13, rsi
-    lea  rdi, [rel ed_pack_t]
+    lea  rdi, [rbp + ed_pack_t - ed_sha_state]
     mov  rsi, r13
     call ed_gf_copy
-    lea  rdi, [rel ed_pack_t]
+    lea  rdi, [rbp + ed_pack_t - ed_sha_state]
     call ed_gf_carry
-    lea  rdi, [rel ed_pack_t]
+    lea  rdi, [rbp + ed_pack_t - ed_sha_state]
     call ed_gf_carry
-    lea  rdi, [rel ed_pack_t]
+    lea  rdi, [rbp + ed_pack_t - ed_sha_state]
     call ed_gf_carry
     xor  ebx, ebx
 .reduce:
-    lea  r14, [rel ed_pack_m]
-    lea  r10, [rel ed_pack_t]
+    lea  r14, [rbp + ed_pack_m - ed_sha_state]
+    lea  r10, [rbp + ed_pack_t - ed_sha_state]
     mov  rax, [r10]
     sub  rax, 0xffed
     mov  [r14], rax
@@ -476,14 +480,14 @@ ed_gf_pack:
     sar  rax, 16
     and  eax, 1
     xor  eax, 1
-    lea  rdi, [rel ed_pack_t]
-    lea  rsi, [rel ed_pack_m]
+    lea  rdi, [rbp + ed_pack_t - ed_sha_state]
+    lea  rsi, [rbp + ed_pack_m - ed_sha_state]
     mov  edx, eax
     call ed_gf_select
     inc  ebx
     cmp  ebx, 2
     jb   .reduce
-    lea  r10, [rel ed_pack_t]
+    lea  r10, [rbp + ed_pack_t - ed_sha_state]
     xor  ecx, ecx
 .emit:
     mov  rax, [r10 + rcx*8]
@@ -533,14 +537,14 @@ ed_gf_equal:
     push r13
     mov  r12, rdi
     mov  r13, rsi
-    lea  rdi, [rel ed_equal_a]
+    lea  rdi, [rbp + ed_equal_a - ed_sha_state]
     mov  rsi, r12
     call ed_gf_pack
-    lea  rdi, [rel ed_equal_b]
+    lea  rdi, [rbp + ed_equal_b - ed_sha_state]
     mov  rsi, r13
     call ed_gf_pack
-    lea  rdi, [rel ed_equal_a]
-    lea  rsi, [rel ed_equal_b]
+    lea  rdi, [rbp + ed_equal_a - ed_sha_state]
+    lea  rsi, [rbp + ed_equal_b - ed_sha_state]
     call ed_verify32
     test eax, eax
     setz al
@@ -550,11 +554,11 @@ ed_gf_equal:
     ret
 
 ed_gf_parity:
-    lea  rax, [rel ed_parity_tmp]
+    lea  rax, [rbp + ed_parity_tmp - ed_sha_state]
     xchg rdi, rax
     mov  rsi, rax
     call ed_gf_pack
-    movzx eax, byte [rel ed_parity_tmp]
+    movzx eax, byte [rbp + ed_parity_tmp - ed_sha_state]
     and  eax, 1
     ret
 
@@ -567,77 +571,77 @@ ed_point_add:
     push r13
     mov  r12, rdi
     mov  r13, rsi
-    lea  rdi, [rel ed_add_a]
+    lea  rdi, [rbp + ed_add_a - ed_sha_state]
     lea  rsi, [r12 + ED_GF_BYTES]
     mov  rdx, r12
     call ed_gf_sub
-    lea  rdi, [rel ed_add_b]
+    lea  rdi, [rbp + ed_add_b - ed_sha_state]
     lea  rsi, [r12 + ED_GF_BYTES]
     mov  rdx, r12
     call ed_gf_add
-    lea  rdi, [rel ed_add_c]
+    lea  rdi, [rbp + ed_add_c - ed_sha_state]
     lea  rsi, [r13 + ED_GF_BYTES]
     mov  rdx, r13
     call ed_gf_add
-    lea  rdi, [rel ed_add_d]
+    lea  rdi, [rbp + ed_add_d - ed_sha_state]
     lea  rsi, [r13 + ED_GF_BYTES]
     mov  rdx, r13
     call ed_gf_sub
-    lea  rdi, [rel ed_add_a]
+    lea  rdi, [rbp + ed_add_a - ed_sha_state]
     mov  rsi, rdi
-    lea  rdx, [rel ed_add_d]
+    lea  rdx, [rbp + ed_add_d - ed_sha_state]
     call ed_gf_mul
-    lea  rdi, [rel ed_add_b]
+    lea  rdi, [rbp + ed_add_b - ed_sha_state]
     mov  rsi, rdi
-    lea  rdx, [rel ed_add_c]
+    lea  rdx, [rbp + ed_add_c - ed_sha_state]
     call ed_gf_mul
-    lea  rdi, [rel ed_add_c]
+    lea  rdi, [rbp + ed_add_c - ed_sha_state]
     lea  rsi, [r12 + 3*ED_GF_BYTES]
     lea  rdx, [r13 + 3*ED_GF_BYTES]
     call ed_gf_mul
-    lea  rdi, [rel ed_add_c]
+    lea  rdi, [rbp + ed_add_c - ed_sha_state]
     mov  rsi, rdi
     lea  rdx, [rel ed_const_d2]
     call ed_gf_mul
-    lea  rdi, [rel ed_add_d]
+    lea  rdi, [rbp + ed_add_d - ed_sha_state]
     lea  rsi, [r12 + 2*ED_GF_BYTES]
     lea  rdx, [r13 + 2*ED_GF_BYTES]
     call ed_gf_mul
-    lea  rdi, [rel ed_add_d]
+    lea  rdi, [rbp + ed_add_d - ed_sha_state]
     mov  rsi, rdi
     mov  rdx, rdi
     call ed_gf_add
-    lea  rdi, [rel ed_add_e]
-    lea  rsi, [rel ed_add_b]
-    lea  rdx, [rel ed_add_a]
+    lea  rdi, [rbp + ed_add_e - ed_sha_state]
+    lea  rsi, [rbp + ed_add_b - ed_sha_state]
+    lea  rdx, [rbp + ed_add_a - ed_sha_state]
     call ed_gf_sub
-    lea  rdi, [rel ed_add_f]
-    lea  rsi, [rel ed_add_d]
-    lea  rdx, [rel ed_add_c]
+    lea  rdi, [rbp + ed_add_f - ed_sha_state]
+    lea  rsi, [rbp + ed_add_d - ed_sha_state]
+    lea  rdx, [rbp + ed_add_c - ed_sha_state]
     call ed_gf_sub
-    lea  rdi, [rel ed_add_g]
-    lea  rsi, [rel ed_add_d]
-    lea  rdx, [rel ed_add_c]
+    lea  rdi, [rbp + ed_add_g - ed_sha_state]
+    lea  rsi, [rbp + ed_add_d - ed_sha_state]
+    lea  rdx, [rbp + ed_add_c - ed_sha_state]
     call ed_gf_add
-    lea  rdi, [rel ed_add_h]
-    lea  rsi, [rel ed_add_b]
-    lea  rdx, [rel ed_add_a]
+    lea  rdi, [rbp + ed_add_h - ed_sha_state]
+    lea  rsi, [rbp + ed_add_b - ed_sha_state]
+    lea  rdx, [rbp + ed_add_a - ed_sha_state]
     call ed_gf_add
     mov  rdi, r12
-    lea  rsi, [rel ed_add_e]
-    lea  rdx, [rel ed_add_f]
+    lea  rsi, [rbp + ed_add_e - ed_sha_state]
+    lea  rdx, [rbp + ed_add_f - ed_sha_state]
     call ed_gf_mul
     lea  rdi, [r12 + ED_GF_BYTES]
-    lea  rsi, [rel ed_add_h]
-    lea  rdx, [rel ed_add_g]
+    lea  rsi, [rbp + ed_add_h - ed_sha_state]
+    lea  rdx, [rbp + ed_add_g - ed_sha_state]
     call ed_gf_mul
     lea  rdi, [r12 + 2*ED_GF_BYTES]
-    lea  rsi, [rel ed_add_g]
-    lea  rdx, [rel ed_add_f]
+    lea  rsi, [rbp + ed_add_g - ed_sha_state]
+    lea  rdx, [rbp + ed_add_f - ed_sha_state]
     call ed_gf_mul
     lea  rdi, [r12 + 3*ED_GF_BYTES]
-    lea  rsi, [rel ed_add_e]
-    lea  rdx, [rel ed_add_h]
+    lea  rsi, [rbp + ed_add_e - ed_sha_state]
+    lea  rdx, [rbp + ed_add_h - ed_sha_state]
     call ed_gf_mul
     pop  r13
     pop  r12
@@ -726,21 +730,21 @@ ed_point_scalarbase:
     push r13
     mov  r12, rdi
     mov  r13, rsi
-    lea  rdi, [rel ed_point_base]
+    lea  rdi, [rbp + ed_point_base - ed_sha_state]
     lea  rsi, [rel ed_const_x]
     call ed_gf_copy
-    lea  rdi, [rel ed_point_base + ED_GF_BYTES]
+    lea  rdi, [rbp + ed_point_base - ed_sha_state + ED_GF_BYTES]
     lea  rsi, [rel ed_const_y]
     call ed_gf_copy
-    lea  rdi, [rel ed_point_base + 2*ED_GF_BYTES]
+    lea  rdi, [rbp + ed_point_base - ed_sha_state + 2*ED_GF_BYTES]
     lea  rsi, [rel ed_const_one]
     call ed_gf_copy
-    lea  rdi, [rel ed_point_base + 3*ED_GF_BYTES]
+    lea  rdi, [rbp + ed_point_base - ed_sha_state + 3*ED_GF_BYTES]
     lea  rsi, [rel ed_const_x]
     lea  rdx, [rel ed_const_y]
     call ed_gf_mul
     mov  rdi, r12
-    lea  rsi, [rel ed_point_base]
+    lea  rsi, [rbp + ed_point_base - ed_sha_state]
     mov  rdx, r13
     call ed_point_scalarmult
     pop  r13
@@ -752,21 +756,21 @@ ed_point_pack:
     push r13
     mov  r12, rdi
     mov  r13, rsi
-    lea  rdi, [rel ed_point_zi]
+    lea  rdi, [rbp + ed_point_zi - ed_sha_state]
     lea  rsi, [r13 + 2*ED_GF_BYTES]
     call ed_gf_inverse
-    lea  rdi, [rel ed_point_x]
+    lea  rdi, [rbp + ed_point_x - ed_sha_state]
     mov  rsi, r13
-    lea  rdx, [rel ed_point_zi]
+    lea  rdx, [rbp + ed_point_zi - ed_sha_state]
     call ed_gf_mul
-    lea  rdi, [rel ed_point_y]
+    lea  rdi, [rbp + ed_point_y - ed_sha_state]
     lea  rsi, [r13 + ED_GF_BYTES]
-    lea  rdx, [rel ed_point_zi]
+    lea  rdx, [rbp + ed_point_zi - ed_sha_state]
     call ed_gf_mul
     mov  rdi, r12
-    lea  rsi, [rel ed_point_y]
+    lea  rsi, [rbp + ed_point_y - ed_sha_state]
     call ed_gf_pack
-    lea  rdi, [rel ed_point_x]
+    lea  rdi, [rbp + ed_point_x - ed_sha_state]
     call ed_gf_parity
     shl  al, 7
     xor  [r12 + 31], al
@@ -788,67 +792,67 @@ ed_point_unpackneg:
     lea  rdi, [r12 + ED_GF_BYTES]
     mov  rsi, r13
     call ed_gf_unpack
-    lea  rdi, [rel ed_u_num]
+    lea  rdi, [rbp + ed_u_num - ed_sha_state]
     lea  rsi, [r12 + ED_GF_BYTES]
     call ed_gf_square
-    lea  rdi, [rel ed_u_den]
-    lea  rsi, [rel ed_u_num]
+    lea  rdi, [rbp + ed_u_den - ed_sha_state]
+    lea  rsi, [rbp + ed_u_num - ed_sha_state]
     lea  rdx, [rel ed_const_d]
     call ed_gf_mul
-    lea  rdi, [rel ed_u_num]
+    lea  rdi, [rbp + ed_u_num - ed_sha_state]
     mov  rsi, rdi
     lea  rdx, [r12 + 2*ED_GF_BYTES]
     call ed_gf_sub
-    lea  rdi, [rel ed_u_den]
+    lea  rdi, [rbp + ed_u_den - ed_sha_state]
     lea  rsi, [r12 + 2*ED_GF_BYTES]
     mov  rdx, rdi
     call ed_gf_add
-    lea  rdi, [rel ed_u_den2]
-    lea  rsi, [rel ed_u_den]
+    lea  rdi, [rbp + ed_u_den2 - ed_sha_state]
+    lea  rsi, [rbp + ed_u_den - ed_sha_state]
     call ed_gf_square
-    lea  rdi, [rel ed_u_den4]
-    lea  rsi, [rel ed_u_den2]
+    lea  rdi, [rbp + ed_u_den4 - ed_sha_state]
+    lea  rsi, [rbp + ed_u_den2 - ed_sha_state]
     call ed_gf_square
-    lea  rdi, [rel ed_u_den6]
-    lea  rsi, [rel ed_u_den4]
-    lea  rdx, [rel ed_u_den2]
+    lea  rdi, [rbp + ed_u_den6 - ed_sha_state]
+    lea  rsi, [rbp + ed_u_den4 - ed_sha_state]
+    lea  rdx, [rbp + ed_u_den2 - ed_sha_state]
     call ed_gf_mul
-    lea  rdi, [rel ed_u_t]
-    lea  rsi, [rel ed_u_den6]
-    lea  rdx, [rel ed_u_num]
+    lea  rdi, [rbp + ed_u_t - ed_sha_state]
+    lea  rsi, [rbp + ed_u_den6 - ed_sha_state]
+    lea  rdx, [rbp + ed_u_num - ed_sha_state]
     call ed_gf_mul
-    lea  rdi, [rel ed_u_t]
+    lea  rdi, [rbp + ed_u_t - ed_sha_state]
     mov  rsi, rdi
-    lea  rdx, [rel ed_u_den]
+    lea  rdx, [rbp + ed_u_den - ed_sha_state]
     call ed_gf_mul
-    lea  rdi, [rel ed_u_t]
+    lea  rdi, [rbp + ed_u_t - ed_sha_state]
     mov  rsi, rdi
     call ed_gf_pow2523
-    lea  rdi, [rel ed_u_t]
+    lea  rdi, [rbp + ed_u_t - ed_sha_state]
     mov  rsi, rdi
-    lea  rdx, [rel ed_u_num]
+    lea  rdx, [rbp + ed_u_num - ed_sha_state]
     call ed_gf_mul
-    lea  rdi, [rel ed_u_t]
+    lea  rdi, [rbp + ed_u_t - ed_sha_state]
     mov  rsi, rdi
-    lea  rdx, [rel ed_u_den]
+    lea  rdx, [rbp + ed_u_den - ed_sha_state]
     call ed_gf_mul
-    lea  rdi, [rel ed_u_t]
+    lea  rdi, [rbp + ed_u_t - ed_sha_state]
     mov  rsi, rdi
-    lea  rdx, [rel ed_u_den]
+    lea  rdx, [rbp + ed_u_den - ed_sha_state]
     call ed_gf_mul
     mov  rdi, r12
-    lea  rsi, [rel ed_u_t]
-    lea  rdx, [rel ed_u_den]
+    lea  rsi, [rbp + ed_u_t - ed_sha_state]
+    lea  rdx, [rbp + ed_u_den - ed_sha_state]
     call ed_gf_mul
-    lea  rdi, [rel ed_u_chk]
+    lea  rdi, [rbp + ed_u_chk - ed_sha_state]
     mov  rsi, r12
     call ed_gf_square
-    lea  rdi, [rel ed_u_chk]
+    lea  rdi, [rbp + ed_u_chk - ed_sha_state]
     mov  rsi, rdi
-    lea  rdx, [rel ed_u_den]
+    lea  rdx, [rbp + ed_u_den - ed_sha_state]
     call ed_gf_mul
-    lea  rdi, [rel ed_u_chk]
-    lea  rsi, [rel ed_u_num]
+    lea  rdi, [rbp + ed_u_chk - ed_sha_state]
+    lea  rsi, [rbp + ed_u_num - ed_sha_state]
     call ed_gf_equal
     test eax, eax
     jnz  .root_ok
@@ -856,15 +860,15 @@ ed_point_unpackneg:
     mov  rsi, r12
     lea  rdx, [rel ed_const_i]
     call ed_gf_mul
-    lea  rdi, [rel ed_u_chk]
+    lea  rdi, [rbp + ed_u_chk - ed_sha_state]
     mov  rsi, r12
     call ed_gf_square
-    lea  rdi, [rel ed_u_chk]
+    lea  rdi, [rbp + ed_u_chk - ed_sha_state]
     mov  rsi, rdi
-    lea  rdx, [rel ed_u_den]
+    lea  rdx, [rbp + ed_u_den - ed_sha_state]
     call ed_gf_mul
-    lea  rdi, [rel ed_u_chk]
-    lea  rsi, [rel ed_u_num]
+    lea  rdi, [rbp + ed_u_chk - ed_sha_state]
+    lea  rsi, [rbp + ed_u_num - ed_sha_state]
     call ed_gf_equal
     test eax, eax
     jz   .fail
@@ -886,24 +890,24 @@ ed_point_unpackneg:
     call ed_gf_mul
 
     ; Reconstruct +A from returned -A and demand byte-for-byte canonical input.
-    lea  rdi, [rel ed_point_chk]
+    lea  rdi, [rbp + ed_point_chk - ed_sha_state]
     lea  rsi, [rel ed_const_zero]
     mov  rdx, r12
     call ed_gf_sub
-    lea  rdi, [rel ed_point_chk + ED_GF_BYTES]
+    lea  rdi, [rbp + ed_point_chk - ed_sha_state + ED_GF_BYTES]
     lea  rsi, [r12 + ED_GF_BYTES]
     call ed_gf_copy
-    lea  rdi, [rel ed_point_chk + 2*ED_GF_BYTES]
+    lea  rdi, [rbp + ed_point_chk - ed_sha_state + 2*ED_GF_BYTES]
     lea  rsi, [r12 + 2*ED_GF_BYTES]
     call ed_gf_copy
-    lea  rdi, [rel ed_point_chk + 3*ED_GF_BYTES]
+    lea  rdi, [rbp + ed_point_chk - ed_sha_state + 3*ED_GF_BYTES]
     lea  rsi, [rel ed_const_zero]
     lea  rdx, [r12 + 3*ED_GF_BYTES]
     call ed_gf_sub
-    lea  rdi, [rel ed_encoded_chk]
-    lea  rsi, [rel ed_point_chk]
+    lea  rdi, [rbp + ed_encoded_chk - ed_sha_state]
+    lea  rsi, [rbp + ed_point_chk - ed_sha_state]
     call ed_point_pack
-    lea  rdi, [rel ed_encoded_chk]
+    lea  rdi, [rbp + ed_encoded_chk - ed_sha_state]
     mov  rsi, r13
     call ed_verify32
     test eax, eax
@@ -921,23 +925,23 @@ ed_point_unpackneg:
 ed_point_small_order:
     push r12
     mov  r12, rdi
-    lea  rdi, [rel ed_point_tmp]
+    lea  rdi, [rbp + ed_point_tmp - ed_sha_state]
     mov  rsi, r12
     mov  edx, ED_POINT_BYTES
     call memcpy
-    lea  rdi, [rel ed_point_tmp]
+    lea  rdi, [rbp + ed_point_tmp - ed_sha_state]
     mov  rsi, rdi
     call ed_point_add
-    lea  rdi, [rel ed_point_tmp]
+    lea  rdi, [rbp + ed_point_tmp - ed_sha_state]
     mov  rsi, rdi
     call ed_point_add
-    lea  rdi, [rel ed_point_tmp]
+    lea  rdi, [rbp + ed_point_tmp - ed_sha_state]
     mov  rsi, rdi
     call ed_point_add
-    lea  rdi, [rel ed_encoded_chk]
-    lea  rsi, [rel ed_point_tmp]
+    lea  rdi, [rbp + ed_encoded_chk - ed_sha_state]
+    lea  rsi, [rbp + ed_point_tmp - ed_sha_state]
     call ed_point_pack
-    lea  rdi, [rel ed_encoded_chk]
+    lea  rdi, [rbp + ed_encoded_chk - ed_sha_state]
     lea  rsi, [rel ed_identity_encoding]
     call ed_verify32
     test eax, eax
@@ -1041,11 +1045,11 @@ ed_mod_l:
 ed_reduce:
     push r12
     mov  r12, rdi
-    lea  rdi, [rel ed_scalar_x]
+    lea  rdi, [rbp + ed_scalar_x - ed_sha_state]
     xor  esi, esi
     mov  edx, 64*8
     call memset
-    lea  r8, [rel ed_scalar_x]
+    lea  r8, [rbp + ed_scalar_x - ed_sha_state]
     xor  ecx, ecx
 .copy:
     movzx eax, byte [r12 + rcx]
@@ -1054,7 +1058,7 @@ ed_reduce:
     cmp  ecx, 64
     jb   .copy
     mov  rdi, r12
-    lea  rsi, [rel ed_scalar_x]
+    lea  rsi, [rbp + ed_scalar_x - ed_sha_state]
     call ed_mod_l
     pop  r12
     ret
@@ -1081,7 +1085,192 @@ ed_scalar_canonical:
 ; Public API
 ; ---------------------------------------------------------------------------
 
+; Private trusted-kernel ABI: the ordinary API inputs plus RAX=context,
+; R10=ED25519_CONTEXT_BYTES. The caller owns the entire mapped span exclusively.
+; Refuse malformed/aliased spans before touching memory; once admitted, wipe
+; ALL private scratch on every ordinary return. No shared context pointer or
+; mutable global selector is installed. BSP-only ownership remains required.
+;
+; RAX=context and R11=context end survive validation. Ordinary ABI args survive.
+ed_context_validate:
+    test rax, rax
+    jz   .bad
+    test al, 15
+    jnz  .bad
+    cmp  r10, ED25519_CONTEXT_BYTES
+    jne  .bad
+    mov  r11, rax
+    add  r11, ED25519_CONTEXT_BYTES
+    jc   .bad
+    lea  r10, [rel ed_context_end]
+    cmp  rax, r10
+    jae  .ok
+    lea  r10, [rel ed_sha_state]
+    cmp  r11, r10
+    ja   .bad
+.ok:
+    clc
+    ret
+.bad:
+    stc
+    ret
+
+; R10=buffer start, RBX=length, RAX/R11=context [start,end).
+; Zero-length messages may be NULL; nonempty spans must not wrap or alias.
+ed_context_disjoint:
+    test rbx, rbx
+    jz   .ok
+    test r10, r10
+    jz   .bad
+    add  rbx, r10
+    jc   .bad
+    cmp  r10, r11
+    jae  .ok
+    cmp  rbx, rax
+    ja   .bad
+.ok:
+    clc
+    ret
+.bad:
+    stc
+    ret
+
+ed25519_public_from_seed_context:
+    push rbx
+    push rbp
+    sub  rsp, 8
+    mov  rbp, rax
+    call ed_context_validate
+    jc   .bad
+    cmp  rsi, 32
+    jne  .bad
+    mov  r10, rdi
+    mov  ebx, 32
+    call ed_context_disjoint
+    jc   .bad
+    mov  r10, rdx
+    mov  ebx, 32
+    call ed_context_disjoint
+    jc   .bad
+    call ed25519_public_from_seed_impl
+    ; The result is public/status only. The caller's seed/input remain its
+    ; property; the future work owner must erase its seed and abandoned stack
+    ; before cancellation ACK or any public result commit.
+    mov  r10d, eax
+    mov  rdi, rbp
+    mov  ecx, ED25519_CONTEXT_BYTES
+    xor  eax, eax
+    cld
+    rep  stosb
+    mov  eax, r10d
+    jmp  .out
+.bad:
+    mov  eax, -1
+.out:
+    add  rsp, 8
+    pop  rbp
+    pop  rbx
+    ret
+
+ed25519_sign_context:
+    push rbx
+    push rbp
+    sub  rsp, 8
+    mov  rbp, rax
+    call ed_context_validate
+    jc   .bad
+    cmp  rsi, 32
+    jne  .bad
+    cmp  r9, 64
+    jne  .bad
+    cmp  rcx, ED25519_MAX_MESSAGE
+    ja   .bad
+    mov  r10, rdi
+    mov  ebx, 32
+    call ed_context_disjoint
+    jc   .bad
+    mov  r10, rdx
+    mov  rbx, rcx
+    call ed_context_disjoint
+    jc   .bad
+    mov  r10, r8
+    mov  ebx, 64
+    call ed_context_disjoint
+    jc   .bad
+    call ed25519_sign_impl
+    ; The result is public/status only. The caller's seed/input remain its
+    ; property; the future work owner must erase its seed and abandoned stack
+    ; before cancellation ACK or any public result commit.
+    mov  r10d, eax
+    mov  rdi, rbp
+    mov  ecx, ED25519_CONTEXT_BYTES
+    xor  eax, eax
+    cld
+    rep  stosb
+    mov  eax, r10d
+    jmp  .out
+.bad:
+    mov  eax, -1
+.out:
+    add  rsp, 8
+    pop  rbp
+    pop  rbx
+    ret
+
+ed25519_verify_context:
+    push rbx
+    push rbp
+    sub  rsp, 8
+    mov  rbp, rax
+    call ed_context_validate
+    jc   .bad
+    cmp  rsi, 32
+    jne  .bad
+    cmp  r9, 64
+    jne  .bad
+    cmp  rcx, ED25519_MAX_MESSAGE
+    ja   .bad
+    mov  r10, rdi
+    mov  ebx, 32
+    call ed_context_disjoint
+    jc   .bad
+    mov  r10, rdx
+    mov  rbx, rcx
+    call ed_context_disjoint
+    jc   .bad
+    mov  r10, r8
+    mov  ebx, 64
+    call ed_context_disjoint
+    jc   .bad
+    call ed25519_verify_impl
+    ; The result is public/status only. The caller's seed/input remain its
+    ; property; the future work owner must erase its seed and abandoned stack
+    ; before cancellation ACK or any public result commit.
+    mov  r10d, eax
+    mov  rdi, rbp
+    mov  ecx, ED25519_CONTEXT_BYTES
+    xor  eax, eax
+    cld
+    rep  stosb
+    mov  eax, r10d
+    jmp  .out
+.bad:
+    mov  eax, -1
+.out:
+    add  rsp, 8
+    pop  rbp
+    pop  rbx
+    ret
+
+
 ed25519_public_from_seed:
+    push rbp
+    lea  rbp, [rel ed_sha_state]
+    call ed25519_public_from_seed_impl
+    pop  rbp
+    ret
+
+ed25519_public_from_seed_impl:
     push r12
     push r13
     mov  r12, rdi
@@ -1094,20 +1283,20 @@ ed25519_public_from_seed:
     jz   .bad
     mov  rdi, r12
     mov  esi, 32
-    lea  rdx, [rel ed_secret_hash]
+    lea  rdx, [rbp + ed_secret_hash - ed_sha_state]
     call ed_sha512_hash
     test eax, eax
     jnz  .bad
-    and  byte [rel ed_secret_hash], 248
-    and  byte [rel ed_secret_hash + 31], 127
-    or   byte [rel ed_secret_hash + 31], 64
-    lea  rdi, [rel ed_point_p]
-    lea  rsi, [rel ed_secret_hash]
+    and  byte [rbp + ed_secret_hash - ed_sha_state], 248
+    and  byte [rbp + ed_secret_hash - ed_sha_state + 31], 127
+    or   byte [rbp + ed_secret_hash - ed_sha_state + 31], 64
+    lea  rdi, [rbp + ed_point_p - ed_sha_state]
+    lea  rsi, [rbp + ed_secret_hash - ed_sha_state]
     call ed_point_scalarbase
     mov  rdi, r13
-    lea  rsi, [rel ed_point_p]
+    lea  rsi, [rbp + ed_point_p - ed_sha_state]
     call ed_point_pack
-    call ed_wipe_secret_scratch
+    call ed_wipe_secret_scratch_impl
     xor  eax, eax
     jmp  .done
 .bad:
@@ -1118,6 +1307,13 @@ ed25519_public_from_seed:
     ret
 
 ed25519_sign:
+    push rbp
+    lea  rbp, [rel ed_sha_state]
+    call ed25519_sign_impl
+    pop  rbp
+    ret
+
+ed25519_sign_impl:
     push rbx
     push r12
     push r13
@@ -1144,72 +1340,72 @@ ed25519_sign:
     jne  .bad
     mov  rdi, r12
     mov  esi, 32
-    lea  rdx, [rel ed_secret_hash]
+    lea  rdx, [rbp + ed_secret_hash - ed_sha_state]
     call ed_sha512_hash
     test eax, eax
     jnz  .bad
-    and  byte [rel ed_secret_hash], 248
-    and  byte [rel ed_secret_hash + 31], 127
-    or   byte [rel ed_secret_hash + 31], 64
-    lea  rdi, [rel ed_point_p]
-    lea  rsi, [rel ed_secret_hash]
+    and  byte [rbp + ed_secret_hash - ed_sha_state], 248
+    and  byte [rbp + ed_secret_hash - ed_sha_state + 31], 127
+    or   byte [rbp + ed_secret_hash - ed_sha_state + 31], 64
+    lea  rdi, [rbp + ed_point_p - ed_sha_state]
+    lea  rsi, [rbp + ed_secret_hash - ed_sha_state]
     call ed_point_scalarbase
-    lea  rdi, [rel ed_public_tmp]
-    lea  rsi, [rel ed_point_p]
+    lea  rdi, [rbp + ed_public_tmp - ed_sha_state]
+    lea  rsi, [rbp + ed_point_p - ed_sha_state]
     call ed_point_pack
 
-    lea  rdi, [rel ed_hash_input]
-    lea  rsi, [rel ed_secret_hash + 32]
+    lea  rdi, [rbp + ed_hash_input - ed_sha_state]
+    lea  rsi, [rbp + ed_secret_hash - ed_sha_state + 32]
     mov  edx, 32
     call memcpy
     test r14, r14
     jz   .nonce_hash
-    lea  rdi, [rel ed_hash_input + 32]
+    lea  rdi, [rbp + ed_hash_input - ed_sha_state + 32]
     mov  rsi, r13
     mov  rdx, r14
     call memcpy
 .nonce_hash:
-    lea  rdi, [rel ed_hash_input]
+    lea  rdi, [rbp + ed_hash_input - ed_sha_state]
     lea  rsi, [r14 + 32]
-    lea  rdx, [rel ed_scalar_r]
+    lea  rdx, [rbp + ed_scalar_r - ed_sha_state]
     call ed_sha512_hash
-    lea  rdi, [rel ed_scalar_r]
+    lea  rdi, [rbp + ed_scalar_r - ed_sha_state]
     call ed_reduce
-    lea  rdi, [rel ed_point_p]
-    lea  rsi, [rel ed_scalar_r]
+    lea  rdi, [rbp + ed_point_p - ed_sha_state]
+    lea  rsi, [rbp + ed_scalar_r - ed_sha_state]
     call ed_point_scalarbase
     mov  rdi, r15
-    lea  rsi, [rel ed_point_p]
+    lea  rsi, [rbp + ed_point_p - ed_sha_state]
     call ed_point_pack
 
-    lea  rdi, [rel ed_hash_input]
+    lea  rdi, [rbp + ed_hash_input - ed_sha_state]
     mov  rsi, r15
     mov  edx, 32
     call memcpy
-    lea  rdi, [rel ed_hash_input + 32]
-    lea  rsi, [rel ed_public_tmp]
+    lea  rdi, [rbp + ed_hash_input - ed_sha_state + 32]
+    lea  rsi, [rbp + ed_public_tmp - ed_sha_state]
     mov  edx, 32
     call memcpy
     test r14, r14
     jz   .challenge
-    lea  rdi, [rel ed_hash_input + 64]
+    lea  rdi, [rbp + ed_hash_input - ed_sha_state + 64]
     mov  rsi, r13
     mov  rdx, r14
     call memcpy
 .challenge:
-    lea  rdi, [rel ed_hash_input]
+    lea  rdi, [rbp + ed_hash_input - ed_sha_state]
     lea  rsi, [r14 + 64]
-    lea  rdx, [rel ed_scalar_h]
+    lea  rdx, [rbp + ed_scalar_h - ed_sha_state]
     call ed_sha512_hash
-    lea  rdi, [rel ed_scalar_h]
+    lea  rdi, [rbp + ed_scalar_h - ed_sha_state]
     call ed_reduce
 
-    lea  rdi, [rel ed_scalar_x]
+    lea  rdi, [rbp + ed_scalar_x - ed_sha_state]
     xor  esi, esi
     mov  edx, 64*8
     call memset
-    lea  r10, [rel ed_scalar_r]
-    lea  r11, [rel ed_scalar_x]
+    lea  r10, [rbp + ed_scalar_r - ed_sha_state]
+    lea  r11, [rbp + ed_scalar_x - ed_sha_state]
     xor  ecx, ecx
 .copy_r:
     movzx eax, byte [r10 + rcx]
@@ -1217,9 +1413,9 @@ ed25519_sign:
     inc  ecx
     cmp  ecx, 32
     jb   .copy_r
-    lea  r10, [rel ed_scalar_h]
-    lea  r11, [rel ed_secret_hash]
-    lea  rsi, [rel ed_scalar_x]
+    lea  r10, [rbp + ed_scalar_h - ed_sha_state]
+    lea  r11, [rbp + ed_secret_hash - ed_sha_state]
+    lea  rsi, [rbp + ed_scalar_x - ed_sha_state]
     xor  ecx, ecx
 .mul_i:
     xor  edx, edx
@@ -1236,9 +1432,9 @@ ed25519_sign:
     cmp  ecx, 32
     jb   .mul_i
     lea  rdi, [r15 + 32]
-    lea  rsi, [rel ed_scalar_x]
+    lea  rsi, [rbp + ed_scalar_x - ed_sha_state]
     call ed_mod_l
-    call ed_wipe_secret_scratch
+    call ed_wipe_secret_scratch_impl
     xor  eax, eax
     jmp  .done
 .bad:
@@ -1252,6 +1448,13 @@ ed25519_sign:
     ret
 
 ed25519_verify:
+    push rbp
+    lea  rbp, [rel ed_sha_state]
+    call ed25519_verify_impl
+    pop  rbp
+    ret
+
+ed25519_verify_impl:
     push rbx
     push r12
     push r13
@@ -1276,21 +1479,21 @@ ed25519_verify:
     jz   .bad
     cmp  r9, 64
     jne  .bad
-    lea  rdi, [rel ed_point_q]
+    lea  rdi, [rbp + ed_point_q - ed_sha_state]
     mov  rsi, r12
     call ed_point_unpackneg
     test eax, eax
     jnz  .bad
-    lea  rdi, [rel ed_point_q]
+    lea  rdi, [rbp + ed_point_q - ed_sha_state]
     call ed_point_small_order
     test eax, eax
     jnz  .bad
-    lea  rdi, [rel ed_point_r]
+    lea  rdi, [rbp + ed_point_r - ed_sha_state]
     mov  rsi, r15
     call ed_point_unpackneg
     test eax, eax
     jnz  .bad
-    lea  rdi, [rel ed_point_r]
+    lea  rdi, [rbp + ed_point_r - ed_sha_state]
     call ed_point_small_order
     test eax, eax
     jnz  .bad
@@ -1299,41 +1502,41 @@ ed25519_verify:
     test eax, eax
     jz   .bad
 
-    lea  rdi, [rel ed_hash_input]
+    lea  rdi, [rbp + ed_hash_input - ed_sha_state]
     mov  rsi, r15
     mov  edx, 32
     call memcpy
-    lea  rdi, [rel ed_hash_input + 32]
+    lea  rdi, [rbp + ed_hash_input - ed_sha_state + 32]
     mov  rsi, r12
     mov  edx, 32
     call memcpy
     test r14, r14
     jz   .hash
-    lea  rdi, [rel ed_hash_input + 64]
+    lea  rdi, [rbp + ed_hash_input - ed_sha_state + 64]
     mov  rsi, r13
     mov  rdx, r14
     call memcpy
 .hash:
-    lea  rdi, [rel ed_hash_input]
+    lea  rdi, [rbp + ed_hash_input - ed_sha_state]
     lea  rsi, [r14 + 64]
-    lea  rdx, [rel ed_scalar_h]
+    lea  rdx, [rbp + ed_scalar_h - ed_sha_state]
     call ed_sha512_hash
-    lea  rdi, [rel ed_scalar_h]
+    lea  rdi, [rbp + ed_scalar_h - ed_sha_state]
     call ed_reduce
-    lea  rdi, [rel ed_point_p]
-    lea  rsi, [rel ed_point_q]
-    lea  rdx, [rel ed_scalar_h]
+    lea  rdi, [rbp + ed_point_p - ed_sha_state]
+    lea  rsi, [rbp + ed_point_q - ed_sha_state]
+    lea  rdx, [rbp + ed_scalar_h - ed_sha_state]
     call ed_point_scalarmult
-    lea  rdi, [rel ed_point_q]
+    lea  rdi, [rbp + ed_point_q - ed_sha_state]
     lea  rsi, [r15 + 32]
     call ed_point_scalarbase
-    lea  rdi, [rel ed_point_p]
-    lea  rsi, [rel ed_point_q]
+    lea  rdi, [rbp + ed_point_p - ed_sha_state]
+    lea  rsi, [rbp + ed_point_q - ed_sha_state]
     call ed_point_add
-    lea  rdi, [rel ed_encoded_chk]
-    lea  rsi, [rel ed_point_p]
+    lea  rdi, [rbp + ed_encoded_chk - ed_sha_state]
+    lea  rsi, [rbp + ed_point_p - ed_sha_state]
     call ed_point_pack
-    lea  rdi, [rel ed_encoded_chk]
+    lea  rdi, [rbp + ed_encoded_chk - ed_sha_state]
     mov  rsi, r15
     call ed_verify32
     test eax, eax
@@ -1343,7 +1546,7 @@ ed25519_verify:
 .bad:
     mov  ebx, -1
 .done:
-    lea  rdi, [rel ed_scalar_h]
+    lea  rdi, [rbp + ed_scalar_h - ed_sha_state]
     xor  esi, esi
     mov  edx, 64
     call memset
@@ -1356,33 +1559,40 @@ ed25519_verify:
     ret
 
 ed_wipe_secret_scratch:
+    push rbp
+    lea  rbp, [rel ed_sha_state]
+    call ed_wipe_secret_scratch_impl
+    pop  rbp
+    ret
+
+ed_wipe_secret_scratch_impl:
     ; SHA-512's final state and schedule contain the expanded seed digest after
     ; public-key derivation/signing; treat them as secret scratch too.
-    lea  rdi, [rel ed_sha_state]
+    lea  rdi, [rbp + ed_sha_state - ed_sha_state]
     xor  esi, esi
     mov  edx, 1024                     ; state + work + W[80] + two tail blocks
     call memset
-    lea  rdi, [rel ed_mul_t]
+    lea  rdi, [rbp + ed_mul_t - ed_sha_state]
     xor  esi, esi
     mov  edx, ed_secret_hash - ed_mul_t ; field/point intermediates
     call memset
-    lea  rdi, [rel ed_secret_hash]
+    lea  rdi, [rbp + ed_secret_hash - ed_sha_state]
     xor  esi, esi
     mov  edx, 64
     call memset
-    lea  rdi, [rel ed_scalar_r]
+    lea  rdi, [rbp + ed_scalar_r - ed_sha_state]
     xor  esi, esi
     mov  edx, 64
     call memset
-    lea  rdi, [rel ed_scalar_h]
+    lea  rdi, [rbp + ed_scalar_h - ed_sha_state]
     xor  esi, esi
     mov  edx, 64
     call memset
-    lea  rdi, [rel ed_scalar_x]
+    lea  rdi, [rbp + ed_scalar_x - ed_sha_state]
     xor  esi, esi
     mov  edx, 64*8
     call memset
-    lea  rdi, [rel ed_hash_input]
+    lea  rdi, [rbp + ed_hash_input - ed_sha_state]
     xor  esi, esi
     mov  edx, ED25519_MAX_MESSAGE + 64
     call memset
@@ -1687,6 +1897,7 @@ ed_scalar_h:    times 64 db 0
 ed_scalar_x:    times 64 dq 0
 ed_public_tmp:  times 32 db 0
 ed_hash_input:  times ED25519_MAX_MESSAGE + 64 db 0
+ed_context_end:
 %endmacro
 WDATA_DEFER WDATA_ed25519
 

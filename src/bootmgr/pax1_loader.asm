@@ -908,6 +908,13 @@ pax1_prepare_verified_paos:
     mov  [rel pax1_placement_size], eax ; diagnostic: SizeOfImage being placed
     shr  eax, 12
     mov  [rel pax1_image_pages], rax
+    ; Firmware need not reserve PaOS's retained diagnostic/identity pages.
+    ; When the known preferred extent crosses them, do not request it: a
+    ; successful firmware allocation would otherwise be freed and refused
+    ; without ever trying the safe max-address placement. SizeOfImage is
+    ; already bounded/aligned; the fixed preferred base lies below keep-out.
+    cmp  dword [rel pax1_placement_size], PAX1_KEEP_OUT_START - PAX1_IMAGE_BASE
+    ja   .allocate_max
     mov  qword [rel pax1_image_base], PAX1_IMAGE_BASE
     mov  rax, [rel boot_services]
     mov  ecx, 2                     ; AllocateAddress
@@ -918,6 +925,7 @@ pax1_prepare_verified_paos:
     mov  [rel pax1_alloc_status_1m], rax ; diagnostic: firmware's answer at 1 MiB
     test rax, rax
     jz   .validate_placement
+.allocate_max:
     mov  eax, PAX1_PLACE_CEILING
     mov  [rel pax1_image_base], rax
     mov  rax, [rel boot_services]

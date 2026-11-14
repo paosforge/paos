@@ -1,7 +1,7 @@
 ;; MODULE svc/boot_failure_control
 ;; LAYER 5
 ;; EXPORTS boot_b1_failure_control
-;; IMPORTS boot/boot_v2_handoff, boot/boot_v2_health, svc/command_software_stop
+;; IMPORTS boot/boot_v2_handoff, boot/boot_v2_health, svc/command_software_stop, svc/boot_ab, core/idt
 ;; CAPS
 ;; OWNER saga:boot
 ; Source-only diagnostic fixture. Existing Manager recovery policy owns what
@@ -13,8 +13,9 @@
 
 %if PAOS_LAB_B1_STARTING_FAILURE
 ; EAX is the actual C3WD_EDGE result, preserved by face_checkpoint_observe.
-; No allocations, firmware calls, storage writes or waits. The existing early
-; fatal handler handles this actual #UD, including its ordinary reset path.
+; No allocations, firmware calls, checkpoint writes or waits. P0 uses the existing
+; early fatal handler. P2 counts this pre-boot_ab_early attempt and arms the
+; installed native IDT/diag fatal reset only after every LAB admission guard.
 boot_b1_failure_control:
     test eax,eax
     jnz .out
@@ -48,14 +49,24 @@ boot_b1_failure_control:
     cmp word [r8+PBM_INIT_VERSION_OFF],PBM_INIT_GRAPH_VERSION
     jne .out
 .version:
-    cmp byte [r8+PBM_INIT_STAGE_OFF],PBM_INIT_STAGE_P0
+    cmp byte [r8+PBM_INIT_STAGE_OFF],PAOS_LAB_B1_STARTING_STAGE
     jne .out
     cmp byte [r8+PBM_INIT_TRANSITION_OFF],PBM_INIT_TRANSITION_STARTING
     jne .out
     cmp byte [r8+PBM_INIT_RESULT_OFF],PBM_INIT_RESULT_NONE
     jne .out
-    cmp word [r8+PBM_INIT_COMPLETED_MASK_OFF],0
+    cmp word [r8+PBM_INIT_COMPLETED_MASK_OFF],(1 << PAOS_LAB_B1_STARTING_STAGE)-1
     jne .out
+%if PAOS_LAB_B1_STARTING_STAGE == 2
+    ; Bind the original P2 core edge, including the completed P0/P1 dependency
+    ; prefix. Never treat a cached P0 or an unrelated subsystem as this edge.
+    cmp word [r8+PBM_INIT_SUBSYSTEM_OFF],PBM_INIT_SUBSYS_CORE
+    jne .out
+    cmp word [r8+PBM_INIT_IMPLICATED_OFF],PBM_INIT_SUBSYS_CORE
+    jne .out
+    cmp word [r8+PBM_INIT_DEPENDENCIES_OFF],3
+    jne .out
+%endif
     cmp byte [r8+PBM_INIT_PROFILE_OFF],PBM_PROFILE_NORMAL
     jne .out
     mov al,[rel pbm_entry]
@@ -84,6 +95,17 @@ boot_b1_failure_control:
     jb .hash
     test r10,r10
     jz .out
+%if PAOS_LAB_B1_STARTING_STAGE == 2
+    ; Count before arming: P2 STARTING precedes boot_ab_early, so this failure
+    ; would otherwise leave the CMOS ladder frozen. Use the early-fault bump,
+    ; then the same demotion/CF9 decision as the native fatal path. This explicit
+    ; LAB fixture needs a real reset on its twin as well as metal; the ordinary
+    ; fault_warmreset_arm hypervisor policy and all other faults stay unchanged.
+    call boot_ab_fault_bump
+    lea rax,[rel boot_ab_demote]
+    mov [rel fault_demote_hook],rax
+    mov byte [rel fault_warmreset_armed],1
+%endif
     ud2
 .out:
     xor eax,eax

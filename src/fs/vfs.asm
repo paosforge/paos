@@ -1,7 +1,7 @@
 ;; MODULE fs/vfs
 ;; LAYER 4
-;; EXPORTS vfs_register_guest_source, vfs_open_guest_source, vfs_guest_source_hint, vfs_copy_partial_snapshot, vfs_copy_partial_ready, vfs_builtin_census, vfs_mount_usage, vfs_select_fat_ro_exact, vfs_select_ntfs_exact, vfs_write_generation, vfs_copy_busy, vfs_dirent_name, vfs_dirent_set_long_name, vfs_selftest, vfs_init, vfs_register_mount, vfs_mount_ptr, vfs_writefile, vfs_update, vfs_rename, vfs_readfile, vfs_delete, vfs_stat, vfs_read_at, vfs_info, vfs_list_root, vfs_path_to_name11, vfs_path_stat, vfs_readfile_path, vfs_write_at, vfs_select_disk_by_name, vfs_stat_path, vfs_read_at_path, vfs_write_at_path, vfs_list_dir, vfs_mutate_path, vfs_copy_start, vfs_copy_start_mode, vfs_copy_enqueue, vfs_copy_tick, vfs_copy_cancel, vfs_copy_status, vfs_copy_note_recovery, vfs_copy_recovery, vfs_copy_refusal, vfs_copy_stamp_hook, vfs_copy_session_sweep, vfs_copy_dropped_status, vfs_file_extents, vfs_file_extents_current, vfs_open_boot_esp, vfs_copy_start_between, vfs_ntfs_selection_state, vfs_copy_snapshot, vfs_copy_current, vfs_copy_item_note, vfs_copy_paths, vfs_copy_progress, vfs_copy_fail_note, vfs_copy_begin_failure, vfs_copy_source_note, vfs_copy_fail_entry, vfs_copy_check, vfs_copy_check_issue, vfs_check, vfs_list_skip, vfs_copy_scan, vfs_copy_scan_issue, vfs_copy_wait_note, vfs_copy_wait_entry, vfs_copy_answer, vfs_copy_policy_ptr, vfs_copy_differs, vfs_ask_job, vfs_ask_phase, vfs_ask_answer, vfs_ask_n, vfs_dos_to_unix, vfs_mtime_older
-;; IMPORTS boot/serial, boot/header, boot/nvram_access, core/lib/mem, core/lib/fmt, core/lib/sha256, core/heap, fs/blockdev, fs/fat32_disk, fs/ntfs_disk, fs/ext4_disk, fs/data_crypto_store, fs/guest_volume, fs/vfs_copy_service
+;; EXPORTS vfs_info_facts, vfs_register_guest_source, vfs_open_guest_source, vfs_guest_source_hint, vfs_copy_partial_snapshot, vfs_copy_partial_ready, vfs_builtin_census, vfs_mount_usage, vfs_select_fat_ro_exact, vfs_select_ntfs_exact, vfs_write_generation, vfs_copy_busy, vfs_dirent_name, vfs_dirent_set_long_name, vfs_selftest, vfs_init, vfs_register_mount, vfs_mount_ptr, vfs_writefile, vfs_update, vfs_rename, vfs_readfile, vfs_delete, vfs_stat, vfs_read_at, vfs_info, vfs_list_root, vfs_path_to_name11, vfs_path_stat, vfs_readfile_path, vfs_write_at, vfs_select_disk_by_name, vfs_stat_path, vfs_read_at_path, vfs_write_at_path, vfs_list_dir, vfs_mutate_path, vfs_copy_start, vfs_copy_start_mode, vfs_copy_enqueue, vfs_copy_tick, vfs_copy_cancel, vfs_copy_status, vfs_copy_note_recovery, vfs_copy_recovery, vfs_copy_refusal, vfs_copy_stamp_hook, vfs_copy_session_sweep, vfs_copy_dropped_status, vfs_file_extents, vfs_file_extents_current, vfs_open_boot_esp, vfs_copy_start_between, vfs_ntfs_selection_state, vfs_copy_snapshot, vfs_copy_current, vfs_copy_item_note, vfs_copy_paths, vfs_copy_progress, vfs_copy_fail_note, vfs_copy_begin_failure, vfs_copy_source_note, vfs_copy_fail_entry, vfs_copy_check, vfs_copy_check_issue, vfs_check, vfs_list_skip, vfs_copy_scan, vfs_copy_scan_issue, vfs_copy_wait_note, vfs_copy_wait_entry, vfs_copy_answer, vfs_copy_policy_ptr, vfs_copy_differs, vfs_ask_job, vfs_ask_phase, vfs_ask_answer, vfs_ask_n, vfs_dos_to_unix, vfs_mtime_older
+;; IMPORTS boot/serial, boot/header, boot/nvram_access, core/lib/mem, core/lib/fmt, core/lib/sha256, core/heap, fs/blockdev, fs/fat32_disk, fs/ntfs_disk, fs/ext4_disk, fs/data_crypto_store, fs/guest_volume, fs/vfs_copy_service, fs/fs_format
 ;; CAPS
 ;; OWNER saga:vfs_fat_seam
 ; ============================================================================
@@ -436,12 +436,15 @@ FS_QUEUE_MAX      equ 4
 FS_QPATH_CAP      equ 256  ; a queued path with its NUL
 ; RCQ-20 S5c (rc-sec rev 3 6454fc74, root 14:09:28): a queued ext4 job carries its owner's console decision to
 ; the dequeue's BEGIN as an argument, never as request state. Recorded at FSCOPY (ext_w_carry_record), re-checked
-; at the dequeue and by the sweep (ext_w_carry_check), consumed once (ext_w_job_open_carried). A FAT record's
+; at the dequeue and by the sweep (ext_w_carry_check), consumed once (ext_w_job_open_carried). A FAT DATA record's
 ; carry is all zero (kind 0): it is never begun with FS_COPY_BEGIN_CARRIED.
+; FAT scratch (ROOT105787, rc-sec 105819/105840 C1-C12): the exact armed fd_scratch mount carries the same way
+; (fd_scratch_carry_record / fd_scratch_carry_check / fd_scratch_job_open_carried); .owned_token holds its arm epoch.
 FS_CARRY_EXT4       equ 1
+FS_CARRY_FAT_SCRATCH equ 2
 FS_CARRY_MAX_AGE_MS equ 900000   ; 15 min on the boot clock (rev 3 C3 (g), root Q5)
 struc fs_copy_carry
-  .kind:         resd 1   ; 0 none (FAT) / FS_CARRY_EXT4
+  .kind:         resd 1   ; 0 none (FAT DATA) / FS_CARRY_EXT4 / FS_CARRY_FAT_SCRATCH
   .intent:       resd 1   ; SA_INTENT_* of the FSCOPY's request
   .owner:        resd 1   ; its OWNER bit (1: an ext4 enqueue needs it)
   .class:        resd 1   ; SA_CLASS_* of the mount's partition window then
@@ -459,7 +462,12 @@ struc fs_copy_carry
   .priv:         resq 1
   .info:         resq 1
   .geometry:     resb blk_info_size - blk_info.sector_size
+  ; SEC106668 R2: who asked, recorded at enqueue for receipts; no BEGIN, check or sweep reads it.
+  .frame:        resq 1   ; FS_CARRY_FRAME_CONSOLE / FS_CARRY_FRAME_REMOTE_OWNER
+  .spare:        resq 1   ; zero; keeps the size a multiple of 16
 endstruc
+FS_CARRY_FRAME_CONSOLE      equ 0
+FS_CARRY_FRAME_REMOTE_OWNER equ 1   ; a consumed signed OWNER frame (command_auth_owner_consumed_for)
 struc fs_copy_qrec
   .job:    resb fs_copy_job_size   ; what FSJOB reads while it waits (state FS_JOB_QUEUED)
   .mode:   resd 1
@@ -508,6 +516,9 @@ struc fs_info
   .free_clusters: resq 1   ; exact validated allocation count, -1 if unsupported
   .orphans:       resq 1   ; reclaimed since mount, -1 if unsupported
 endstruc
+; vfs_info_facts sets free_clusters to this before the backend runs: facts only, so a backend whose free count
+; walks the volume (FAT32's dual-FAT scan) skips the walk.  Callers never see it: it leaves as -1 or a cached count.
+FS_INFO_FACTS equ -2
 
 FS_SCHEME_SUPERFLOPPY equ 0
 FS_SCHEME_MBR         equ 1
@@ -844,6 +855,11 @@ vfs_register_mount:
     mov  r13, rsi
     mov  r14, rdx
     call guest_volume_mount_allowed
+    test rax,rax
+    jnz .fail
+    mov  rdi, r12
+    mov  rsi, r13
+    call fs_format_mount_allowed          ; Format F1 custody (SEC 108221 C1/C7): no native remount
     test rax,rax
     jnz .fail
     test r12, r12
@@ -1463,6 +1479,10 @@ vfs_mount_ptr:
     mov rsi,[rax+fsmount.priv]
     call guest_volume_mount_allowed
     test rax,rax
+    jnz .deny
+    call fs_format_mount_allowed          ; Format F1 custody: same RDI/RSI, only RAX changes
+    test rax,rax
+.deny:
     pop rax
     pop rsi
     pop rdi
@@ -1830,7 +1850,7 @@ vfs_copy_begin:
     cmp  qword [r10 + fs_ops.copy], 0
     je   .fail
     ; This finite option is same-volume mode0, never queued/carried/tree/ask.
-    ; Only the two native producers below implement its prepublication boundary.
+    ; Only these exact native producers implement its prepublication boundary.
     test r14d, FS_COPY_HOLD_PARTIAL
     jz .partial_checked
     cmp r14d, FS_COPY_HOLD_PARTIAL
@@ -1845,6 +1865,9 @@ vfs_copy_begin:
     cmp r10, rdx
     je .partial_checked
     lea rdx, [rel nt_ops]
+    cmp r10, rdx
+    je .partial_checked
+    lea rdx, [rel exf_ops]
     cmp r10, rdx
     jne .fail
 .partial_checked:
@@ -1969,7 +1992,7 @@ vfs_copy_begin:
 .service_id_ready:
     test r14d, FS_COPY_HOLD_PARTIAL
     jz .partial_bound
-    ; NT BEGIN may have produced its private file already. BEGIN's ordinary
+    ; NT/exFAT BEGIN may have produced its private file already. BEGIN's ordinary
     ; bookkeeping above clears pause; install the actual hold only now, with ID.
     cmp qword [rel vfs_partial_record + fs_copy_partial.stage], 3
     jne .partial_bound
@@ -2248,10 +2271,13 @@ vfs_copy_dequeue:
     call vfs_copy_stamp                  ; before the BEGIN: the reason channel starts clear
     mov  r10d, FS_COPY_BEGIN
     cmp  dword [rbx + fs_copy_qrec.carry + fs_copy_carry.kind], FS_CARRY_EXT4
-    jne  .begin
+    je   .carried
+    cmp  dword [rbx + fs_copy_qrec.carry + fs_copy_carry.kind], FS_CARRY_FAT_SCRATCH
+    jne  .begin                          ; (stamp op 3 above refused a scratch kind on any other mount)
+.carried:
     lea  rax, [rbx + fs_copy_qrec.carry]
     mov  [rel vfs_copy_job + fs_copy_job.carry], rax   ; RCQ-20 S5c: the one writer; its consumer clears it
-    mov  r10d, FS_COPY_BEGIN_CARRIED     ; only here, and only for an ext4 record (FAT refuses it: BAD_ARG)
+    mov  r10d, FS_COPY_BEGIN_CARRIED     ; only here: an ext4 or FAT scratch record (FAT DATA refuses it: BAD_ARG)
 .begin:
     mov  edi, [rbx + fs_copy_qrec.handle]
     lea  rsi, [rbx + fs_copy_qrec.src]
@@ -2590,7 +2616,7 @@ vfs_copy_pause:
     ret
 
 ; Producer-only observation, no authority or I/O. RDI=exact active job,
-; RSI=private Z path, RDX=durable bytes, ECX=2 ext append /3 NT CREATE.
+; RSI=private Z path, RDX=durable bytes, ECX=2 ext append /3 NT or exFAT CREATE.
 ; A hold can be emitted once. All native writer/current guards run before it.
 vfs_copy_partial_ready:
     cmp rdi, [rel vfs_partial_job]
@@ -5730,6 +5756,35 @@ vfs_info:
     pop  rbx
     ret
 .fail:
+    mov  rax, -1
+    pop  rbx
+    ret
+
+; vfs_info_facts(RDI=handle,RSI=fs_info*) -> 0/-1.  vfs_info's facts with no whole-volume walk (ROOT108324): the
+; census prints identity and geometry only, so its cost must not grow with the volume.  free_clusters is a count
+; the backend already holds, else -1.  The mount's own free-count state is not changed.
+vfs_info_facts:
+    mov  qword [rsi + fs_info.orphans], -1
+    push rbx
+    mov  rbx, rsi
+    mov  qword [rbx + fs_info.free_clusters], FS_INFO_FACTS
+    call vfs_mount_ptr
+    test rax, rax
+    jz   .fail
+    mov  r10, [rax + fsmount.ops]
+    cmp  qword [r10 + fs_ops.info], 0
+    je   .fail
+    mov  rdi, rax
+    mov  rsi, rbx
+    call [r10 + fs_ops.info]
+    cmp  qword [rbx + fs_info.free_clusters], FS_INFO_FACTS
+    jne  .out
+    mov  qword [rbx + fs_info.free_clusters], -1 ; a backend that ignored the request: unknown, never the marker
+.out:
+    pop  rbx
+    ret
+.fail:
+    mov  qword [rbx + fs_info.free_clusters], -1
     mov  rax, -1
     pop  rbx
     ret

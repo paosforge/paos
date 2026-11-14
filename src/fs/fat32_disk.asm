@@ -1,14 +1,14 @@
 ;; MODULE fs/fat32_disk
 ;; LAYER 4
-;; EXPORTS fat32_disk_guest_source_open, fat32_disk_guest_source_hint, fat32_disk_read_device, fat32_disk_scratch_diagnostic, fat32_disk_scratch_arm, fat32_disk_scratch_off, fat32_disk_ro_diag, fat32_disk_select_ro_exact, fat32_disk_source_dir, fat32_disk_source_node, fat32_disk_source_next, fat32_disk_source_device, fat32_disk_source_bind, fat32_disk_source_token, fat32_disk_source_current, fat32_disk_source_stat, fat32_disk_read_at_path, fat32_disk_boot_esp_open, fat32_disk_dirs_lfn_kat, fat32_disk_register, fat32_disk_select_exact, fat32_disk_kat, fat32_disk_create_kat, fat32_disk_txn_kat, fat32_disk_idle_arm, fat32_disk_media_kat, fat32_disk_kat_mount, fat32_disk_kat_finish, fat32_disk_selected_dev, fat32_disk_selected_port, fat32_disk_selected_volume_id, fat32_disk_selection_reason, fat32_disk_last_error, fat32_disk_dirs_write_kat, fat32_disk_copy, fat32_disk_idle_observer, fat32_disk_part_type, fat32_disk_replay_state, fat32_disk_descriptor_absent, fat32_disk_source_mtime, fat32_disk_format_ops
-;; IMPORTS fs/data_config_provider, core/lib/crc32, fs/ext4_copy, fs/blockdev, fs/storage_access, fs/vfs, core/lib/mem, core/unicode_edit, core/cadence, core/time, boot/serial
+;; EXPORTS fat32_disk_select_owned_ro, fat32_disk_owned_read_state, fat32_disk_is_boot_extent, update_esp_current, update_esp_readonly, update_esp_begin, update_esp_io, update_esp_freeze, update_esp_reclaim, fat32_disk_list_observe, fat32_disk_guest_source_open, fat32_disk_guest_source_hint, fat32_disk_read_device, fat32_disk_scratch_diagnostic, fat32_disk_scratch_arm, fat32_disk_scratch_off, fat32_disk_ro_diag, fat32_disk_select_ro_exact, fat32_disk_source_dir, fat32_disk_source_node, fat32_disk_source_next, fat32_disk_source_device, fat32_disk_source_bind, fat32_disk_source_token, fat32_disk_source_current, fat32_disk_source_stat, fat32_disk_read_at_path, fat32_disk_boot_esp_open, fat32_disk_dirs_lfn_kat, fat32_disk_register, fat32_disk_select_exact, fat32_disk_kat, fat32_disk_create_kat, fat32_disk_txn_kat, fat32_disk_idle_arm, fat32_disk_media_kat, fat32_disk_kat_mount, fat32_disk_kat_finish, fat32_disk_selected_dev, fat32_disk_selected_port, fat32_disk_selected_volume_id, fat32_disk_selection_reason, fat32_disk_last_error, fat32_disk_dirs_write_kat, fat32_disk_copy, fat32_disk_idle_observer, fat32_disk_part_type, fat32_disk_replay_state, fat32_disk_descriptor_absent, fat32_disk_source_mtime, fat32_disk_format_ops
+;; IMPORTS fs/fs_identify, fs/guest_volume, fs/update_esp, fs/data_config_provider, core/lib/crc32, fs/ext4_copy, fs/blockdev, fs/storage_access, fs/vfs, fs/vol_owner, core/lib/mem, core/unicode_edit, core/cadence, core/time, boot/serial, boot/boot_esp_guid
 ;; CAPS
 ;; OWNER saga:fs_wave
 ; ============================================================================
 ; Physical FAT32 backend. Media is reachable ONLY through the struct dev*
 ; supplied in the backend context and blk_* class dispatch. No AHCI/NVMe symbol
 ; or chip global is imported. Writes additionally require the descriptor-exact
-; DATA binding and the root scratch-name allowlist below.
+; DATA binding, and the volume rule's protected-name floor below.
 ; ============================================================================
 
 FD_DEV            equ 0
@@ -108,6 +108,7 @@ FD_ERR_NOT_EMPTY    equ 12
 FD_ERR_CROSS_DIR    equ 13
 FD_ERR_NOT_READY    equ 14                  ; RCQ-20: the idle cadence that runs copy jobs is not armed
 FD_ERR_TOO_DEEP     equ 15                  ; RCQ-20 S5b: a tree's directory below FS_TREE_DEPTH_MAX levels
+FD_ERR_VOLUME_RO    equ 17                  ; T5-15.4: this volume is read-only to this request
 FD_ERR_SOURCE_CHANGED equ 16                ; source identity/size/mtime changed during copy
 
 FD_FAULT_NONE       equ 0
@@ -600,6 +601,37 @@ fd_ro_mount:
     mov  qword [rel fd_want_guid], 0
     ret
 
+; fd_want_fault_latch(R12=ctx): latch this scan's fault; the first medium that
+; latched it is kept for the diagnostic. Written on every 0->1, so whenever the
+; fault is set the device names this scan's medium. Clobbers RAX and flags only.
+fd_want_fault_latch:
+    cmp  byte [rel fd_want_fault], 0
+    jne  .kept
+    mov  rax, [r12 + FD_DEV]
+    mov  [rel fd_want_fault_dev], rax
+.kept:
+    mov  byte [rel fd_want_fault], 1
+    ret
+
+; Serial diagnostic only: names the medium that latched the guest-source fault.
+fd_guest_fault_dev_log:
+    sub  rsp, 8
+    lea  rdi, [rel str_fd_guest_fault_dev]
+    call serial_string
+    lea  rdi, [rel str_fd_guest_fault_noname]
+    mov  rax, [rel fd_want_fault_dev]
+    test rax, rax
+    jz   .name
+    mov  rax, [rax + dev.name]
+    test rax, rax
+    jz   .name
+    mov  rdi, rax
+.name:
+    call serial_string
+    call serial_newline
+    add  rsp, 8
+    ret
+
 ; Exact guest-source location from an untrusted hint; content authority stays
 ; with the signed VM profile. Separate unnamed RO context, BSP/non-reentrant.
 ; Same GUID is idempotent; another GUID cannot rebind an open handle.
@@ -661,7 +693,7 @@ fat32_disk_guest_source_open:
     mov  dword [rel fat32_disk_last_error], FD_ERR_IO
     lea  rdi, [rel str_fd_guest_fault]
     cmp  byte [rel fd_want_fault], 0
-    jne  .fail_log                        ; a medium could not be read or parsed: fail closed
+    jne  .fail_fault_log                        ; a medium could not be read or parsed: fail closed
     mov  dword [rel fat32_disk_last_error], FD_ERR_NOT_FOUND
     lea  rdi, [rel str_fd_guest_ambiguous]
     cmp  dword [rel fd_want_seen], 1
@@ -682,6 +714,11 @@ fat32_disk_guest_source_open:
 .fail_log:
     call serial_string                    ; diagnostic only; caller decides refusal, no fallback authority
     call serial_newline
+    jmp  .fail
+.fail_fault_log:
+    call serial_string                    ; the unchanged cause line, then the medium that latched it
+    call serial_newline
+    call fd_guest_fault_dev_log           ; diagnostic only
 .fail:
     mov  qword [rel fd_guest_guid], 0
     mov  qword [rel fd_guest_guid + 8], 0
@@ -1158,11 +1195,17 @@ fat32_disk_select_ro_exact:
     mov  r13d, esi
     mov  r14, rdx
     mov  r15, rcx
+    cmp  byte [rel fd_select_press], 1  ; T5-15.4 press route: only its one caller sets it
+    mov  byte [rel fd_select_press], 0
+    je   .authorized
     call storage_access_request_owner
     cmp  eax, 1
     jne  .auth
     call storage_access_request_intent
     cmp  eax, SA_INTENT_SPECIAL
+    je   .authorized
+    call storage_access_request_local   ; read-only; only fat32_disk_local_arm reaches
+    cmp  eax, 1                         ; here with this bit, naming a live removable mount
     jne  .auth
 .authorized:
     call vfs_copy_busy
@@ -1888,6 +1931,8 @@ fd_ro_diag_io_end:
     ret
 
 fd_selected_invalidate:
+    mov  byte [rel fd_owned_active], 0
+    mov  byte [rel fd_owned_dirty], 0
     mov  dword [rel fd_selected_sector], 512
     mov  dword [rel fd_selected_ctx + FD_MOUNTED], 0
     mov  qword [rel fd_selected_generation], 0
@@ -1949,6 +1994,21 @@ fd_selected_current:
     mov  rdx, [rel fd_selected_max]
     cmp  rdx, [rax + blk_info.lba_max]
     FD_RO_STEP 407
+    jne  .fail
+    ; A sealed read view must not survive release/reset/reload or owner lock.
+    ; This getter only reads the cached catalog; no firmware or media I/O.
+    cmp  byte [rel fd_owned_active], 1
+    jne  .ok
+    mov  edi, [rel fd_owned_index]
+    lea  rsi, [rel fd_owned_token]
+    call vol_owner_read_catalog
+    cmp  eax, 1
+    jne  .fail
+    mov  rax, [rel fd_owned_token]
+    cmp  rax, [rel fd_owned_read + 48]
+    jne  .fail
+    mov  rax, [rel fd_owned_token + 8]
+    cmp  rax, [rel fd_owned_read + 56]
     jne  .fail
 .ok:
     xor  eax, eax
@@ -2150,6 +2210,9 @@ fd_selected_extent_check:
 ; Mutations are permitted only on the descriptor-exact DATA context.  The
 ; QEMU fixture has a separate, boot-local arm that can never name a real dev*.
 fd_mutation_authorized:
+    call ue_context
+    test eax,eax
+    jnz ue_mutation
     lea  rax, [rel fd_dir_ctx]
     cmp  rdi, rax
     jne  .ordinary
@@ -2215,6 +2278,13 @@ fd_mutation_authorized:
 .device:
     cmp  dword [rdi + FD_NFATS], 2
     jne  .fail
+    lea  rax, [rel fd_kat_ctx]
+    cmp  rdi, rax
+    je   .pinned                         ; a KAT's RAM device has no identity to pin
+    call fd_volume_pin
+    test rax, rax
+    jnz  .fail
+.pinned:
     mov  rax, [rdi + FD_DEV]
     test rax, rax
     jz   .fail
@@ -2236,11 +2306,39 @@ fd_mutation_authorized:
     mov  rax, -1
     ret
 
-; RDI=name11, RSI=ctx. Root permits exact FAT 8.3 FSW*.TST names only;
-; an internally armed subdirectory view also permits its validated leaf names.
-; Re-validating the already-normalized name here keeps non-command VFS callers
-; from bypassing the destructive-name policy.
+; RDI=ctx -> RAX 0 / -1. The MSI pin, at the one tail every FAT write passes. DATA
+; and scratch both present their live GPT identity; anything else refuses on an MSI.
+fd_volume_pin:
+    push rdi
+    push rsi
+    push rdx
+    push rcx
+    push r8
+    mov  r8, [rdi + FD_PART_SECTORS]
+    mov  rcx, [rdi + FD_PART_LBA]
+    lea  rsi, [rdi + FD_DISK_GUID]
+    lea  rdx, [rdi + FD_PART_GUID]       ; live GPT identity for DATA and scratch alike
+    mov  rdi, [rdi + FD_DEV]
+    call volume_pin_admits
+    pop  r8
+    pop  rcx
+    pop  rdx
+    pop  rsi
+    pop  rdi
+    ret
+
+; RDI=name11, RSI=ctx. T5-15.4 (root 88569, SEC 88677 V-C1): the VOLUME decides
+; where a write may go, this floor decides only what a name may be. Service
+; contexts pass through fd_data_name_gate. Every other context refuses PaOS's own
+; stores and journals, here and not at the verb floor, because fd_tx_recover,
+; copy, update and rename all arrive without passing a verb. Non-command VFS
+; callers and journal names read from media take the same check.
 fd_scratch_name_allowed:
+    call ue_name_gate
+    cmp eax,1
+    je .yes
+    test eax,eax
+    js .no
     call fd_data_name_gate
     cmp eax, 1
     je .yes
@@ -2248,28 +2346,35 @@ fd_scratch_name_allowed:
     js .no
     lea  rax, [rel fd_dir_ctx]
     cmp  rsi, rax
-    jne  .root
+    jne  .protected
     cmp  dword [rel fd_dir_gate], 1
     jne  .no
-    cmp  byte [rel fd_dir_inside], 1
-    je   .yes                           ; leaf validated before constructing view
-.root:
-    cmp  byte [rdi], 'F'
-    jne  .no
-    cmp  byte [rdi + 1], 'S'
-    jne  .no
-    cmp  byte [rdi + 2], 'W'
-    jne  .no
-    cmp  byte [rdi + 8], 'T'
-    jne  .no
-    cmp  byte [rdi + 9], 'S'
-    jne  .no
-    cmp  byte [rdi + 10], 'T'
-    jne  .no
-    mov  ecx, 3
-    xor  edx, edx                         ; once padded, the rest must be padding
-.base:
+.protected:
+    lea  rdx, [rel fd_protected_names]
+    mov  ecx, FD_PROTECTED_COUNT
+.entry:
+    mov  rax, [rdi]
+    cmp  rax, [rdx]
+    jne  .other
+    mov  eax, [rdi + 7]
+    cmp  eax, [rdx + 7]
+    je   .no
+.other:
+    add  rdx, 11
+    dec  ecx
+    jnz  .entry
+    ; Canonical short name: a real base, then only the set fd_component_to_short
+    ; produces, with padding only at the end of each part.
+    xor  ecx, ecx
+    xor  edx, edx
+    cmp  byte [rdi], ' '
+    je   .no
+.char:
     cmp  ecx, 8
+    jne  .same_part
+    xor  edx, edx                         ; the extension has its own padding
+.same_part:
+    cmp  ecx, 11
     jae  .yes
     movzx eax, byte [rdi + rcx]
     cmp  al, ' '
@@ -2280,10 +2385,13 @@ fd_scratch_name_allowed:
     je   .next
     cmp  al, '-'
     je   .next
+    cmp  al, '~'
+    je   .next
     cmp  al, 'A'
     jb   .digit
     cmp  al, 'Z'
     jbe  .next
+    jmp  .no
 .digit:
     cmp  al, '0'
     jb   .no
@@ -2291,11 +2399,11 @@ fd_scratch_name_allowed:
     ja   .no
 .next:
     inc  ecx
-    jmp  .base
+    jmp  .char
 .padding:
     mov  edx, 1
     inc  ecx
-    jmp  .base
+    jmp  .char
 .yes:
     xor  eax, eax
     ret
@@ -2346,6 +2454,12 @@ fd_read_cache_drop:
 ; Write only inside the selected filesystem extent.  Inputs are absolute LBAs
 ; derived from FD_PART_LBA/FD_FAT_LBA/FD_DATA_LBA, never raw caller LBAs.
 fd_write_sectors:
+    call ue_context
+    test eax,eax
+    jz .legacy
+    mov eax,1
+    jmp ue_sectors
+.legacy:
     push rbx
     push r12
     push r13
@@ -2481,6 +2595,9 @@ fd_write_sectors:
     ret
 
 fd_flush:
+    call ue_context
+    test eax,eax
+    jnz ue_flush
     push rbx
     push r12
     mov  rbx, rdi
@@ -3766,8 +3883,16 @@ fd_name_commit:
 ; All writers serialize with the idle sweep. A remounted volume completes its
 ; bounded root scan before accepting writes; readers can already select the
 ; committed entry by its durable transaction tag.
+; DATA (fat32_disk_ctx) takes one bounded step per writer; fat32_disk_idle_tick
+; advances the rest between commands. No idle sweep reaches the armed scratch
+; mount (its gate needs the live owner request the tick does not have), so for
+; fd_scratch_ctx alone the writer runs its root sweep to completion here, after
+; fd_mutation_authorized and under FD_TX_BUSY, within the same bound as the
+; dir view's recovery in fat32_disk_mutate_path (ROOT on FS 105939, option A).
 fd_writer_enter:
     push r12
+    push rbx
+    sub  rsp, 8
     mov  r12, rdi
     call fd_mutation_authorized
     test rax, rax
@@ -3776,12 +3901,20 @@ fd_writer_enter:
     xchg eax, [r12 + FD_TX_BUSY]
     test eax, eax
     jnz  .busy
+    mov  ebx, 1                          ; one bounded step: every ctx the idle tick sweeps
+    lea  rax, [rel fd_scratch_ctx]
+    cmp  r12, rax
+    jne  .sweep
+    mov  ebx, FD_DIR_MAX_CLUSTERS * 128 + 64   ; scratch: the whole bounded root sweep
+.sweep:
     cmp  dword [r12 + FD_SWEEP_DONE], 1
     je   .ok
     mov  rdi, r12
     call fd_sweep_step
     test rax, rax
     jnz  .release
+    dec  ebx
+    jnz  .sweep
     cmp  dword [r12 + FD_SWEEP_DONE], 1
     je   .ok
 .release:
@@ -3795,6 +3928,8 @@ fd_writer_enter:
     call fd_invalidate_caches
     xor  eax, eax
 .out:
+    add  rsp, 8
+    pop  rbx
     pop  r12
     ret
 
@@ -4820,8 +4955,7 @@ fd_cp_begin:
     cmp  rax, -1
     je   .unlock
     mov  ebx, eax                        ; destination parent cluster
-    ; fd_mut_parent also admits a root FSWDIR* leaf (for MKDIR); a copy writes a file,
-    ; and a tree's top directory is never a root name (S5b, .tree): only inside an FSWDIR* tree.
+    ; The copy's own leaf takes the one name floor under the directory view.
     lea  rdi, [rel fd_cp_name]
     lea  rsi, [rel fd_dir_ctx]
     call fd_scratch_name_allowed
@@ -4938,12 +5072,10 @@ fd_cp_begin:
     xor  eax, eax
     jmp  .release_view
 ; RCQ-20 S5b: a tree. The source must be a directory (not a label); the destination parent
-; is inside an FSWDIR* tree (the name check above) and is not the source or below it.
+; is not the source or below it. The name check above already took the destination leaf.
 ; The top directory takes the request's conflict policy; then it is made, empty, and the
 ; job walks the source from its first entry. Nothing below the top is touched in BEGIN.
 .tree:
-    cmp  byte [rel fd_dir_inside], 1
-    jne  .allowlist                      ; /FSWDIRxx/<leaf> only: every name made stays inside it
     test byte [rel fd_found_attr], 0x08
     jnz  .not_dir
     test byte [rel fd_found_attr], 0x10
@@ -5405,8 +5537,7 @@ fd_tree_level:
 ; alias or long name equals the candidate, case-insensitively (the long-name
 ; resolver: the copy never shadows another file's visible name), or a live short
 ; entry in the destination directory (fd_find_root_slot, labels included). Each
-; alias must pass the scratch allowlist; the root's admits no '~', so keep-both
-; into the FAT root is name_unrepresentable. The job holds the writer until its
+; alias must pass the protected-name floor. The job holds the writer until its
 ; COMMIT, so nothing else can take the name in between.
 ; -> RAX 0 (fd_cp_name, fd_cp_kept) / -1 (vfs_copy_refusal or fat32_disk_last_error)
 fd_cp_pick:
@@ -5603,6 +5734,9 @@ fd_cp_source_save:
 ; RDI=ctx, EAX=0 unchanged, 1 changed, -1 read/identity failure.
 ; A vanished/renamed/non-file slot is listed, never recopied as another file.
 fd_cp_source_check:
+    call ue_context
+    test eax,eax
+    jnz ue_guard
     lea rax, [rel fd_data_ctx]
     cmp rdi, rax
     jne .disk_source
@@ -7240,6 +7374,14 @@ fd_tree_dir_probe:
 
 ; RDI=ctx, ESI=cluster -> RAX=next data cluster, or -1 when the chain ends or is bad.
 fd_cp_next_data:
+    cmp esi,UE_SOURCE
+    jne .ue_legacy
+    call ue_context
+    test eax,eax
+    jz .ue_legacy
+    mov eax,UE_SOURCE
+    ret
+.ue_legacy:
     cmp esi, FD_DATA_SOURCE
     jne .disk_source
     lea rax, [rel fd_data_ctx]
@@ -7361,6 +7503,12 @@ fd_cp_alloc:
 ; Smart copy C: R8D=2 compares the first fd_cp_cmp_left bytes only (it counts down) and answers
 ; RAX 1 when they differ; a source read fault marks fd_cp_src_fault, as a copy's does.
 fd_cp_sectors:
+    cmp esi,UE_SOURCE
+    jne .ue_legacy
+    call ue_context
+    test eax,eax
+    jnz ue_memory_sectors
+.ue_legacy:
     cmp esi, FD_DATA_SOURCE
     jne .disk_source
     lea rax, [rel fd_data_ctx]
@@ -8316,6 +8464,14 @@ WDATA_BSS_DEFER WDATA_BSS_fs_fat32_guest_source
 str_fd_guest_fault: db "[PAOS64] guest source unreadable/malformed",0
 str_fd_guest_ambiguous: db "[PAOS64] guest source ambiguous",0
 str_fd_guest_none: db "[PAOS64] guest source absent/unmountable",0
+str_fd_guest_fault_dev: db "[PAOS64] guest source fault dev=",0
+str_fd_guest_fault_noname: db "-",0
+; Its own block: the diagnostic's device, meaningful only while fd_want_fault is set.
+%macro WDATA_BSS_fs_fat32_guest_fault_dev 0
+alignb 8
+fd_want_fault_dev: resq 1 ; dev* of the first medium that latched fd_want_fault (diagnostic only)
+%endmacro
+WDATA_BSS_DEFER WDATA_BSS_fs_fat32_guest_fault_dev
 ; RCQ-20 S5b: its own block (the tree walk; every field is meaningful only while fd_tree_on).
 %macro WDATA_BSS_fs_fat32_copy_s5b 0
 alignb 8
@@ -8836,8 +8992,8 @@ fat32_disk_mutate_path:
     ret
 
 ; RDI=real ctx, RSI=absolute Z path, RDX=leaf name11 output; RAX=parent.
-; Reject traversal/empty components before resolving. Only root FSW*.TST files
-; and extensionless FSWDIR* trees enter this seam. No caller can supply an LBA.
+; Reject traversal/empty components before resolving. The leaf takes the one name
+; floor (fd_scratch_name_allowed); depth stays bounded. No caller can supply an LBA.
 fd_mut_parent:
     push rbx
     push r12
@@ -8876,23 +9032,6 @@ fd_mut_parent:
     mov  byte [rel fd_dir_inside], 0
     cmp  ebx, 1
     je   .convert
-    ; Exact first directory component; FSWDIRX.BIN is not a scratch tree.
-    cmp  edx, 7
-    jb   .allow
-    cmp  edx, 9
-    ja   .allow
-    push rdx
-    lea  rdi, [r13 + 1]
-    lea  esi, [rdx - 1]
-    lea  rdx, [rel fd_dir_first]
-    call fd_component_to_short
-    pop  rdx
-    test rax, rax
-    jnz  .bad
-    lea  rdi, [rel fd_dir_first]
-    call fd_scratch_dir_name
-    test eax, eax
-    jnz  .allow
     mov  byte [rel fd_dir_inside], 1
 .convert:
     lea  rdi, [r13 + rbx]
@@ -8918,10 +9057,6 @@ fd_mut_parent:
     mov  rsi, r12
     call fd_scratch_name_allowed
     test rax, rax
-    jz   .root
-    mov  rdi, r14
-    call fd_scratch_dir_name
-    test eax, eax
     jnz  .allow
 .root:
     mov  eax, [r12 + FD_ROOT_CLUSTER]
@@ -8962,21 +9097,6 @@ fd_mut_parent:
     pop  rbx
     ret
 
-fd_scratch_dir_name:
-    cmp  dword [rdi], 'FSWD'
-    jne  .no
-    cmp  word [rdi + 4], 'IR'
-    jne  .no
-    cmp  word [rdi + 8], '  '
-    jne  .no
-    cmp  byte [rdi + 10], ' '
-    jne  .no
-    xor  eax, eax
-    ret
-.no:
-    mov  rax, -1
-    ret
-
 fd_mkdir_locked:
     push rbx
     push rbp
@@ -8984,12 +9104,6 @@ fd_mkdir_locked:
     push r13
     mov  r12, [rdi + fsmount.priv]
     mov  r13, rsi
-    cmp  byte [rel fd_dir_inside], 1
-    je   .slot
-    mov  rdi, r13
-    call fd_scratch_dir_name
-    test eax, eax
-    jnz  .allow
 .slot:
     mov  rdi, r12
     mov  rsi, r13
@@ -9578,7 +9692,7 @@ fat32_disk_mount_ctx:
     mov  byte [r12 + FD_SCAN_ERR], 1
     cmp  qword [rel fd_want_guid], 0
     je   .gpt_next
-    mov  byte [rel fd_want_fault], 1      ; G1b (rc-sec b1): the wanted entry's volume did not read
+    call fd_want_fault_latch              ; G1b (rc-sec b1): the wanted entry's volume did not read
 .gpt_next:
     inc  r13d
     jmp  .gpt_loop
@@ -9593,7 +9707,7 @@ fat32_disk_mount_ctx:
     cmp  qword [rel fd_want_guid], 0
     FD_RO_STEP 520
     je   .fail
-    mov  byte [rel fd_want_fault], 1      ; G1b (rc-sec b1): unreadable or unparsable GPT refuses the open
+    call fd_want_fault_latch              ; G1b (rc-sec b1): unreadable or unparsable GPT refuses the open
 .fail:
     call fd_ro_diag_fail
     mov  dword [r12 + FD_MOUNTED], 0
@@ -9773,6 +9887,12 @@ fd_validate_bpb:
     ret
 
 fd_read_sectors:
+    call ue_context
+    test eax,eax
+    jz .legacy
+    xor eax,eax
+    jmp ue_sectors
+.legacy:
     push rbx
     push r12
     push r13
@@ -11018,7 +11138,18 @@ fat32_disk_resolve_path_lfn:
     je   .fail
     mov  [rel fd_path_len], eax
     cmp  byte [rel fd_resolve_strict],1
-    je   .walk_begin
+    jne  .ordinary
+    ; '/' has no component to walk. Strict consumers still need the actual
+    ; mounted root and a freshly validated complete chain, never a cached name.
+    cmp  eax,1
+    jne  .walk_begin
+    mov  rdi,r12
+    mov  esi,[r12 + FD_ROOT_CLUSTER]
+    call fd_validate_dir_chain
+    test rax,rax
+    jnz  .fail
+    jmp  .root
+.ordinary:
     mov  rdi, r12
     mov  rsi, r13
     call fd_path_cache_lookup
@@ -11026,6 +11157,7 @@ fat32_disk_resolve_path_lfn:
     jz   .ok
     cmp  dword [rel fd_path_len], 1
     jne  .fast_try
+.root:
     mov  eax, [r12 + FD_ROOT_CLUSTER]
     mov  [rel fd_found_cluster], eax
     mov  qword [rel fd_found_size], 0
@@ -11356,11 +11488,14 @@ fat32_disk_info:
     mov  r12, rsi
     cmp  dword [rbx + FD_MOUNTED], 1
     jne  .fail
+    mov  rax, [r12 + fs_info.free_clusters] ; FS_INFO_FACTS: vfs_info_facts, no FAT walk
     mov  qword [r12 + fs_info.free_clusters], -1
     cmp  dword [rbx + FD_NFATS], 2
     jne  .free_ready                       ; retain read-only support for other layouts
     cmp  dword [rbx + FD_FREE_VALID], 1
     je   .free_ready
+    cmp  rax, FS_INFO_FACTS
+    je   .free_ready                       ; not counted: exported as -1 below
     mov  rdi, rbx
     call fd_count_free
     test rax, rax
@@ -11389,6 +11524,8 @@ fat32_disk_info:
     mov  [r12 + fs_info.part_sectors], rax
     mov  dword [r12 + fs_info.part_count], 1
     cmp  dword [rbx + FD_NFATS], 2
+    jne  .free_exported
+    cmp  dword [rbx + FD_FREE_VALID], 1    ; only an exact count; a facts call that skipped leaves -1
     jne  .free_exported
     mov  rax, [rbx + FD_FREE_COUNT]
     mov  [r12 + fs_info.free_clusters], rax
@@ -11515,6 +11652,44 @@ fat32_disk_list_root:
 
 ; fat32_disk_list_path(self,path,entries,cap,result) validates the complete
 ; target directory chain and continues validation after output truncation.
+; Retained observation of the most recent synchronous directory enumeration.
+; Read-only accessor never initiates I/O, invalidation, remount or selection.
+; RDI=mount -> RAX=global enumeration serial, RDX=actual successful directory
+; sector reads, RCX=result, R8=1 only for this FAT context, R9/R10=mount/namespace
+; generations. Foreign/unsupported contexts expose no other context's result.
+fat32_disk_list_observe:
+    mov  rax, [rel fd_list_observe_seq]
+    xor  edx, edx
+    mov  rcx, -1
+    xor  r8d, r8d
+    xor  r9d, r9d
+    xor  r10d, r10d
+    test rdi, rdi
+    jz   .out
+    mov  r11, [rdi + fsmount.ops]
+    lea  rsi, [rel fat32_disk_ops]
+    cmp  r11, rsi
+    je   .fat
+    lea  rsi, [rel fd_ro_ops]
+    cmp  r11, rsi
+    je   .fat
+    lea  rsi, [rel fd_scratch_ops]
+    cmp  r11, rsi
+    jne  .out
+.fat:
+    mov  r11, [rdi + fsmount.priv]
+    test r11, r11
+    jz   .out
+    cmp  r11, [rel fd_list_observe_ctx]
+    jne  .out
+    mov  rdx, [rel fd_list_observe_reads]
+    mov  rcx, [rel fd_list_observe_rc]
+    mov  r8d, 1
+    mov  r9, [r11 + FD_MOUNT_GEN]
+    mov  r10, [r11 + FD_NAMESPACE_GEN]
+.out:
+    ret
+
 fat32_disk_list_path:
     push rbx
     push rbp
@@ -11523,6 +11698,10 @@ fat32_disk_list_path:
     push r14
     push r15
     mov  r12, [rdi + fsmount.priv]
+    inc  qword [rel fd_list_observe_seq]
+    mov  [rel fd_list_observe_ctx], r12
+    mov  qword [rel fd_list_observe_reads], 0
+    mov  qword [rel fd_list_observe_rc], -1
     mov  r13, rdx
     mov  r14d, ecx
     mov  r15, r8
@@ -11588,6 +11767,9 @@ fat32_disk_list_path:
     call fd_read_sectors
     test rax, rax
     jnz  .fail
+    ; Count only a completed real blk_read through fd_read_sectors and its
+    ; unchanged exact-device/media guards, never cached GUI rows or attempts.
+    inc  qword [rel fd_list_observe_reads]
     mov  dword [rel fd_list_entry_index], 0
 .entry:
     mov  eax, [rel fd_list_entry_index]
@@ -11665,6 +11847,7 @@ fat32_disk_list_path:
     mov  [rel fd_list_cluster], ebx
     jmp  .cluster
 .success:
+    mov  qword [rel fd_list_observe_rc], 0
     xor  eax, eax
     jmp  .out
 .fail:
@@ -12228,6 +12411,24 @@ fat32_disk_source_device:              ; RDI=registered fsmount -> dev / 0
     call fd_scratch_current             ; registry, exact info/ops/geometry/generation
     test rax, rax
     jnz  .scratch_bad
+    cmp dword [rel fd_scratch_mbr_slot],0
+    je .gpt_identity
+    mov eax,[rel fd_scratch_mbr_slot]
+    dec eax
+    shl eax,4
+    lea rcx,[rel fd_scratch_header+446]
+    add rcx,rax
+    mov eax,[rcx+8]
+    cmp rax,[rel fd_scratch_ctx+FD_PART_LBA]
+    jne .scratch_bad
+    mov eax,[rcx+12]
+    cmp rax,[rel fd_scratch_ctx+FD_PART_SECTORS]
+    jne .scratch_bad
+    call fd_scratch_metadata
+    test rax,rax
+    jnz .scratch_bad
+    jmp .serial
+.gpt_identity:
     ; Retain the exact accepted GPT extent and identities, not another context
     ; or a self-consistent replacement BPB at a different partition offset.
     mov  eax, [rel fd_scratch_ctx + FD_PART_INDEX]
@@ -12260,6 +12461,7 @@ fat32_disk_source_device:              ; RDI=registered fsmount -> dev / 0
     mov  rax, [rel fd_scratch_header + 64]
     cmp  rax, [rel fd_scratch_ctx + FD_DISK_GUID + 8]
     jne  .scratch_bad
+.serial:
     mov  eax, [rel fd_scratch_boot + 67]
     cmp  eax, [rel fd_scratch_ctx + FD_VOLUME_ID]
     jne  .scratch_bad
@@ -14382,7 +14584,7 @@ fat32_disk_dirs_write_kat:
 
 fd_dirs_write_active: db 0
 fd_dw_dir: db "/FSWDIR1",0
-fd_dw_denied: db "/OTHER1",0
+fd_dw_denied: db "/PAOS.CFG",0
 fd_dw_nested: db "/FSWDIR1/SUBDIR",0
 fd_dw_file: db "/FSWDIR1/FILE.BIN",0
 .len equ $ - fd_dw_file - 1
@@ -15188,6 +15390,10 @@ fat32_disk_saved_dev: dq 0
 align 8
 fd_gpt_entries_lba: dq 0
 fd_gpt_count:       dd 0
+fd_list_observe_seq: dq 0
+fd_list_observe_ctx: dq 0
+fd_list_observe_reads: dq 0
+fd_list_observe_rc: dq -1
 fd_list_seen_count: dd 0
 fd_list_sector_index: dd 0
 fd_list_entry_index: dd 0
@@ -15206,6 +15412,28 @@ fd_tx_fault:        db 0                   ; boot-local KAT only; never exported
 fd_tx_fault_seen:   db 0
 fd_tx_kat_active:   db 0
 fd_tx_commit_seen:  db 0
+; T5-15.4 V-C3: everything PaOS itself keeps on a FAT volume. test_rc_volume_rule_host
+; censuses native writers against this list; a new store reddens it until listed.
+; VR-1 (ROOT109242): PAOS2 CFG (input settings v2) and UPDATE CFG (update consent) are
+; DATA policy stores like PAOS CFG; only the DATA context may create or replace them.
+FD_PROTECTED_COUNT equ 16
+fd_protected_names:
+    db 'PAOSDOCSBIN'
+    db 'PAOSAPPSBIN'
+    db 'PAOS    CFG'
+    db 'PAOS2   CFG'
+    db 'UPDATE  CFG'
+    db 'DDLEARN0BIN'
+    db 'DDLEARN1BIN'
+    db '~TMPPLAN   '
+    db '~TMPREPL   '
+    db '~TMPSWAP   '
+    db '~TMPGROW   '
+    db 'INITRD  GZ '
+    db 'BZIMAGE    '
+    db 'BZIMAGE2   '
+    db 'INITRD2 GZ '
+    db 'MODEL   PXG'
 fd_tx_plan:         db "~TMPPLAN   "
 fd_tx_repl:         db "~TMPREPL   "       ; E2r: a replace's old-chain record, beside the plan
 fd_tx_temp:         db "~TMPSWAP   "
@@ -15376,6 +15604,13 @@ fd_ro_diag_candidate_name: resb 64
 fd_ro_diag_step: resq 1
 fd_ro_diag_active: resb 1
 alignb 8
+fd_owned_read: resb 96
+fd_owned_check: resb 96
+fd_owned_index: resd 1
+fd_owned_token: resb 16
+fd_owned_active: resb 1
+fd_owned_dirty: resb 1
+alignb 8
 fd_selected_ctx: resb FD_CTX_SIZE
 fd_selected_ops: resb fs_ops_size
 fd_selected_guid: resb 16
@@ -15398,6 +15633,111 @@ str_fd_selected_backend: db 'fat32_selected_ro', 0
 ; Binding: disk GUID[16], volume serial u32, partition GUID[16], start/sectors.
 ; select_ro_exact supplies complete CRC/overlap/clone validation; this copy
 ; pins that exact GPT and BPB and never refreshes its media generation.
+; Native local MBR path only. The remote GUID selector never accepts zero
+; GUIDs. RDI=registered dev*, ESI=BPB serial, RCX=first, R8=count.
+; The actual primary slot/signature/type come from fs_identify's live walk.
+fd_scratch_arm_mbr:
+    mov [rel fd_mbr_request_dev],rdi
+    lea rdi,[rel fd_mbr_zero_guid]
+    mov rdx,rdi
+    call fat32_disk_scratch_arm
+    mov qword [rel fd_mbr_request_dev],0
+    ret
+
+; Called only inside the arm after its OWNER/busy guards. No writes/mount
+; publication. Generation/extent and BPB are actual current registered media.
+fd_scratch_select_mbr:
+    ; An MBR boot has no ESP GUID. Until firmware identifies the boot volume,
+    ; a removable (or unknown-removability) boot could be this FAT32 primary.
+    ; Never arm it speculatively; do this before any arm media probing.
+    cmp byte [rel boot_esp_removable],0
+    je .boot_named
+    cmp byte [rel boot_esp_part_guid_ok],1
+    jne .no
+.boot_named:
+    mov rdi,[rel fd_mbr_request_dev]
+    call guest_volume_native_allowed
+    test rax,rax
+    jnz .no
+    mov rdi,[rel fd_mbr_request_dev]
+    mov rsi,r15
+    mov rdx,[rsp+8]                     ; caller's saved count, after CALL
+    lea rcx,[rel fd_mbr_tuple]
+    call fs_identify_primary
+    test rax,rax
+    jnz .no
+    cmp dword [rel fd_mbr_tuple+36],FS_SCHEME_MBR
+    jne .no
+    mov eax,[rel fd_mbr_tuple+40]
+    cmp eax,0x0b
+    je .type
+    cmp eax,0x0c
+    jne .no                            ; hidden/ESP/extended are never writers
+.type:
+    call fd_selected_invalidate
+    mov dword [rel vfs_disk_handle],-1
+    lea rdi,[rel fd_selected_ctx]
+    xor eax,eax
+    mov ecx,FD_CTX_SIZE/8
+    rep stosq
+    mov rdi,[rel fd_mbr_request_dev]
+    mov [rel fd_selected_ctx+FD_DEV],rdi
+    mov rsi,[rel fd_mbr_tuple+16]
+    mov [rel fd_selected_ctx+FD_PART_LBA],rsi
+    mov rax,[rel fd_mbr_tuple+24]
+    mov [rel fd_selected_ctx+FD_PART_SECTORS],rax
+    mov rax,[rel fd_mbr_tuple+8]
+    mov [rel fd_selected_ctx+FD_MOUNT_GEN],rax
+    mov [rel fd_selected_generation],rax
+    mov dword [rel fd_selected_logical],512
+    mov rax,[rdi+dev.info]
+    cmp dword [rax+blk_info.logical_sector_bytes],512
+    jne .no
+    mov rax,[rax+blk_info.lba_max]
+    mov [rel fd_selected_max],rax
+    mov dword [rel fd_selected_ctx+FD_PART_INDEX],-1
+    mov edx,1
+    lea rcx,[rel fd_sector]
+    call blk_read
+    test rax,rax
+    jnz .no
+    lea rdi,[rel fd_selected_ctx]
+    lea rsi,[rel fd_sector]
+    call fd_validate_bpb
+    test rax,rax
+    jnz .no
+    cmp r13d,[rel fd_selected_ctx+FD_VOLUME_ID]
+    jne .no
+    ; Save the table bytes BEFORE the final independent exact-walk comparison.
+    mov rdi,[rel fd_mbr_request_dev]
+    xor esi,esi
+    mov edx,1
+    lea rcx,[rel fd_selected_gpt_saved]
+    call blk_read
+    test rax,rax
+    jnz .no
+    mov rdi,[rel fd_mbr_request_dev]
+    mov rsi,r15
+    mov rdx,[rsp+8]
+    lea rcx,[rel fd_mbr_recheck]
+    call fs_identify_primary
+    test rax,rax
+    jnz .no
+    lea rdi,[rel fd_mbr_tuple]
+    lea rsi,[rel fd_mbr_recheck]
+    mov ecx,6
+    repe cmpsq
+    jne .no
+    mov eax,[rel fd_mbr_tuple+44]
+    cmp eax,[rel fd_selected_gpt_saved+440]
+    jne .no
+    call fd_selected_build_ops
+    xor eax,eax
+    ret
+.no:
+    mov rax,-1
+    ret
+
 fat32_disk_scratch_arm:                 ; RDI=disk GUID, ESI=serial, RDX=part GUID,
                                       ; RCX=start, R8=sectors -> handle / -1/-2/-3
     push rbx
@@ -15427,17 +15767,40 @@ fat32_disk_scratch_arm:                 ; RDI=disk GUID, ESI=serial, RDX=part GU
     mov dword [rel fd_scratch_ctx + FD_MOUNTED], 0
     lea rax, [rel str_fd_scratch_select]
     mov [rel fd_scratch_stage], rax
+    mov dword [rel fd_scratch_mbr_slot],0
+    cmp qword [rel fd_mbr_request_dev],0
+    je .gpt_select
+    call fd_scratch_select_mbr
+    test rax,rax
+    jnz .fail
+    mov eax,[rel fd_mbr_tuple+32]
+    mov [rel fd_scratch_mbr_slot],eax
+    jmp .selected
+.gpt_select:
     mov rdi, r14
     mov rdx, r15
     mov rcx, [rsp]
     call fat32_disk_select_ro_exact
+.selected:
     test rax, rax
     js .out
     lea rax, [rel str_fd_scratch_identity]
     mov [rel fd_scratch_stage], rax
-    ; No ESP, superfloppy, MBR, zero serial or descriptor inference.
+    ; No ESP, superfloppy, zero serial or descriptor inference.
     cmp byte [rel fd_selected_ctx + FD_PART_ESP], 0
     jne .fail
+    ; T5-15.4: the volume the INITRD.GZ boot marker selected is never scratch (as vol_owner).
+    cmp byte [rel fat32_disk_selection_reason], FD_SELECT_MARKER
+    jne .not_marker
+    mov rax, [rel fd_selected_ctx + FD_DEV]
+    cmp rax, [rel fat32_disk_selected_dev]
+    jne .not_marker
+    mov eax, [rel fd_selected_ctx + FD_VOLUME_ID]
+    cmp eax, [rel fat32_disk_selected_volume_id]
+    je .fail
+.not_marker:
+    cmp dword [rel fd_scratch_mbr_slot],0
+    jne .serial
     mov eax, [rel fd_selected_ctx + FD_PART_INDEX]
     cmp eax, 128
     jae .fail
@@ -15452,6 +15815,7 @@ fat32_disk_scratch_arm:                 ; RDI=disk GUID, ESI=serial, RDX=part GU
     jne .fail
     cmp qword [rbp + 48], 0             ; no hidden/read-only/required GPT attributes
     jne .fail
+.serial:
     test r13d, r13d
     jz .fail
     cmp r13d, [rel fd_selected_ctx + FD_VOLUME_ID]
@@ -15481,6 +15845,9 @@ fat32_disk_scratch_arm:                 ; RDI=disk GUID, ESI=serial, RDX=part GU
     lea rsi, [rel fd_selected_gpt_saved]
     mov edx, 512
     call memcpy
+    mov dword [rel fd_scratch_table_sectors],0
+    cmp dword [rel fd_scratch_mbr_slot],0
+    jne .boot
     ; The selected validator zeros this field while computing its CRC.
     mov eax, [rel fat32_disk_ro_diag + FD_RO_HEADER_CRC]
     mov [rel fd_scratch_header + 16], eax
@@ -15493,6 +15860,7 @@ fat32_disk_scratch_arm:                 ; RDI=disk GUID, ESI=serial, RDX=part GU
     shl eax, 9
     mov edx, eax
     call memcpy
+.boot:
     ; mount_ctx's final fd_sector is the exact accepted partition BPB.
     lea rdi, [rel fd_scratch_boot]
     lea rsi, [rel fd_sector]
@@ -15560,6 +15928,10 @@ fat32_disk_scratch_arm:                 ; RDI=disk GUID, ESI=serial, RDX=part GU
     call fd_scratch_request
     test rax, rax
     jnz .fail
+    lock inc qword [rel fd_scratch_arm_epoch]   ; rc-sec 105819 C5: a new arm, never 0, never reused
+    jnz .epoch
+    lock inc qword [rel fd_scratch_arm_epoch]
+.epoch:
     mov byte [rel fd_scratch_armed], 1
     mov eax, [rel fd_scratch_handle]
     dec eax
@@ -15589,6 +15961,655 @@ fat32_disk_scratch_diagnostic:
     mov rax, [rel fd_scratch_stage]
     ret
 
+; T5-15.4 local arm (V-C7). RDI=the FAT context the mount holds -> RAX 0 / negative.
+; No verb: dispatch calls it under the local bit. The identity is the context's own
+; live GPT and BPB identity, revalidated by the arm; fat32_disk_scratch_arm keeps
+; its ESP, attribute, type, boot-marker and generation refusals, and ends on swap.
+fat32_disk_local_arm:
+    lea rax, [rel fd_scratch_ctx]
+    cmp rdi, rax
+    jne .check
+    cmp byte [rel fd_scratch_armed], 1
+    je .done
+.check:
+    push rdi
+    mov rdi,[rdi+FD_DEV]
+    call guest_volume_native_allowed
+    pop rdi
+    test rax,rax
+    jnz .no
+    mov rax, [rdi + FD_DEV]
+    test rax, rax
+    jz .no
+    mov rax, [rax + dev.info]
+    test rax, rax
+    jz .no
+    cmp byte [rax + blk_info.removable], 0
+    jne .copy
+    test dword [rax + blk_info.flags], BLKF_REMOVABLE
+    jnz .copy
+    ; Own partition A1: a fixed FAT32 arms only as the selected mount's live adopted extent,
+    ; checked before the arm touches any selection; fd_scratch_request decides again.
+    cmp dword [rel vfs_disk_handle], -1
+    je .no                              ; no selected mount
+    push rdi
+    mov rsi, rdi
+    mov rdx, rdi
+    mov edi, [rel vfs_disk_handle]
+    call fd_adopted_extent
+    pop rdi
+    test rax, rax
+    jnz .no
+.copy:
+    mov rax,[rdi+FD_DISK_GUID]
+    or rax,[rdi+FD_DISK_GUID+8]
+    jnz .gpt
+    cmp qword [rdi+FD_PART_LBA],0
+    je .no
+    mov esi,[rdi+FD_VOLUME_ID]
+    mov rcx,[rdi+FD_PART_LBA]
+    mov r8,[rdi+FD_PART_SECTORS]
+    mov rdi,[rdi+FD_DEV]
+    call fd_scratch_arm_mbr
+    jmp .armed
+.gpt:
+    mov rax, [rdi + FD_DISK_GUID]
+    mov [rel fd_local_disk], rax
+    mov rax, [rdi + FD_DISK_GUID + 8]
+    mov [rel fd_local_disk + 8], rax
+    mov rax, [rdi + FD_PART_GUID]
+    mov [rel fd_local_part], rax
+    mov rax, [rdi + FD_PART_GUID + 8]
+    mov [rel fd_local_part + 8], rax
+    mov esi, [rdi + FD_VOLUME_ID]
+    mov rcx, [rdi + FD_PART_LBA]
+    mov r8, [rdi + FD_PART_SECTORS]
+    lea rdi, [rel fd_local_disk]
+    lea rdx, [rel fd_local_part]
+    call fat32_disk_scratch_arm
+.armed:
+    test rax, rax
+    js .out
+    mov byte [rel fat32_disk_local_moved], 1
+.done:
+    xor eax, eax
+.out:
+    ret
+.no:
+    mov rax, -1
+    ret
+
+; A2/D3 explicit native Explorer press: EDI=sealed slot, RSI=visible 16-byte
+; token -> RAX mount handle / negative. The registry independently checks the
+; unlocked owner, whole identity, uniqueness and session before giving a READ
+; extent. Install only the existing selected context's read slots; no arm,
+; recovery, bind or write call. The original strict vol_owner_probe is intact.
+fat32_disk_select_owned_ro:
+    push rbx
+    push r12
+    push r13
+    mov  r12d, edi
+    mov  r13, rsi
+    mov  al, [rel hv_linux_running]
+    or   al, [rel hv_linux_start_active]
+    or   al, [rel hv_linux_run_req]
+    or   al, [rel vtd_owner_guest]
+    test al, al
+    jnz  .busy
+    call vfs_copy_busy
+    test eax, eax
+    jnz  .busy
+    call storage_access_binding_busy
+    test eax, eax
+    jnz  .busy
+    cmp  dword [rel fd_scratch_ctx + FD_MOUNTED], 0
+    jne  .busy
+    mov  edi, r12d
+    mov  rsi, r13
+    lea  rdx, [rel fd_owned_read]
+    call vol_owner_read_resolve
+    test eax, eax
+    jz   .resolved
+    cmp  eax, 9                         ; VO_E_DIRTY: readable observation only
+    jne  .no
+.resolved:
+    ; Every pre-selection refusal above preserves the current view. Once a
+    ; rebind begins, a failure invalidates it; never resurrect a stale context.
+    lock inc qword [rel vfs_write_generation]
+    mov  dword [rel vfs_disk_handle], -1
+    call fd_selected_invalidate
+    lea  rdi, [rel fd_selected_ctx]
+    xor  esi, esi
+    mov  edx, FD_CTX_SIZE
+    call memset
+    mov  rax, [rel fd_owned_read]
+    test rax, rax
+    jz   .fail
+    mov  [rel fd_selected_ctx + FD_DEV], rax
+    mov  rax, [rel fd_owned_read + 8]
+    mov  [rel fd_selected_ctx + FD_PART_LBA], rax
+    mov  rax, [rel fd_owned_read + 16]
+    mov  [rel fd_selected_ctx + FD_PART_SECTORS], rax
+    mov  rax, [rel fd_owned_read + 24]
+    mov  [rel fd_selected_generation], rax
+    mov  [rel fd_selected_ctx + FD_MOUNT_GEN], rax
+    mov  rax, [rel fd_owned_read + 32]
+    mov  [rel fd_selected_max], rax
+    mov  eax, [rel fd_owned_read + 40]
+    mov  [rel fd_selected_logical], eax
+    mov  dword [rel fd_selected_sector], 512
+    mov  rax, [rel fd_owned_read + 64]
+    mov  [rel fd_selected_ctx + FD_DISK_GUID], rax
+    mov  rax, [rel fd_owned_read + 72]
+    mov  [rel fd_selected_ctx + FD_DISK_GUID + 8], rax
+    mov  rax, [rel fd_owned_read + 80]
+    mov  [rel fd_selected_ctx + FD_PART_GUID], rax
+    mov  rax, [rel fd_owned_read + 88]
+    mov  [rel fd_selected_ctx + FD_PART_GUID + 8], rax
+    lea  rdi, [rel fd_selected_ctx]
+    mov  rsi, [rel fd_selected_ctx + FD_PART_LBA]
+    mov  edx, 1
+    lea  rcx, [rel fd_sector]
+    call fd_read_sectors
+    test rax, rax
+    jnz  .fail
+    lea  rdi, [rel fd_selected_ctx]
+    lea  rsi, [rel fd_sector]
+    call fd_validate_bpb
+    test rax, rax
+    jnz  .fail
+    ; A second full native resolution must still describe these very bytes,
+    ; generation and geometry. Keep the first snapshot until this comparison.
+    mov  edi, r12d
+    mov  rsi, r13
+    lea  rdx, [rel fd_owned_check]
+    call vol_owner_read_resolve
+    test eax, eax
+    jz   .compare
+    cmp  eax, 9
+    jne  .fail
+.compare:
+    lea  rdi, [rel fd_owned_read]
+    lea  rsi, [rel fd_owned_check]
+    mov  edx, 96
+    call memcmp
+    test eax, eax
+    jnz  .fail
+    lea  rdi, [rel fd_selected_ctx]
+    call fd_selected_current
+    test rax, rax
+    jnz  .fail
+    mov  edi, [rel fd_selected_handle]
+    test edi, edi
+    jz   .register
+    dec  edi
+    call vfs_mount_ptr
+    test rax, rax
+    jz   .fail
+    lea  rdx, [rel fd_selected_ops]
+    cmp  [rax + fsmount.ops], rdx
+    jne  .fail
+    lea  rdx, [rel fd_selected_ctx]
+    cmp  [rax + fsmount.priv], rdx
+    jne  .fail
+    jmp  .publish
+.register:
+    call fd_selected_build_ops
+    lea  rdi, [rel fd_selected_ops]
+    lea  rsi, [rel fd_selected_ctx]
+    lea  rdx, [rel str_fd_selected_name]
+    call vfs_register_mount
+    test rax, rax
+    js   .fail
+    inc  eax
+    mov  [rel fd_selected_handle], eax
+.publish:
+    mov  [rel fd_owned_index], r12d
+    mov  byte [rel fd_owned_active], 1
+    mov  eax, [rel fd_owned_read + 44]
+    mov  [rel fd_owned_dirty], al
+    lea  rdi, [rel fd_selected_ctx]
+    call fd_read_cache_drop
+    mov  eax, [rel fd_selected_handle]
+    dec  eax
+    mov  [rel vfs_disk_handle], eax
+    jmp  .out
+.fail:
+    call fd_selected_invalidate
+.no:
+    mov  rax, -1
+    jmp  .out
+.busy:
+    mov  rax, -2
+.out:
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+
+; Cached status for the current adopted read view: EDI=mount -> EAX 0 clean
+; read-only, 1 dirty read-only, -1 not this view. No media I/O, recovery or grant.
+fat32_disk_owned_read_state:
+    cmp  byte [rel fd_owned_active], 1
+    jne  .no
+    mov  eax, [rel fd_selected_handle]
+    dec  eax
+    cmp  edi, eax
+    jne  .no
+    cmp  dword [rel fd_selected_ctx + FD_MOUNTED], 1
+    jne  .no
+    movzx eax, byte [rel fd_owned_dirty]
+    ret
+.no:
+    mov  eax, -1
+    ret
+
+; A2/D3 observation guard. No I/O or authority: does this exact fixed
+; window hold the native FAT volume selected by the INITRD.GZ boot marker?
+; RDI=dev, RSI=first, RDX=count -> EAX 1 yes / 0 no.
+fat32_disk_is_boot_extent:
+    xor  eax, eax
+    cmp  byte [rel fat32_disk_selection_reason], FD_SELECT_MARKER
+    jne  .out
+    cmp  dword [rel fat32_disk_ctx + FD_MOUNTED], 0
+    je   .out
+    cmp  rdi, [rel fat32_disk_ctx + FD_DEV]
+    jne  .out
+    cmp  rsi, [rel fat32_disk_ctx + FD_PART_LBA]
+    jne  .out
+    cmp  rdx, [rel fat32_disk_ctx + FD_PART_SECTORS]
+    jne  .out
+    inc  eax
+.out:
+    ret
+
+; T5-15.4 press route (SEC 90164). RDI=row's device -> RAX mount handle / negative.
+; The caller, form_exp_drive_select, holds Explorer's owner, focus and frame gates.
+; Read-only: the exact GPT selector or the unique MBR FAT32 reader, no recovery, arm or write. It
+; refuses, and keeps the current selection, while any selected or scratch FAT is live.
+; Removable is the driver's flag, never the media.
+fat32_disk_select_removable_ro:
+    push rbx
+    push r12
+    push r13
+    mov  rbx, rdi
+    mov  al, [rel hv_linux_running]     ; cmd_verb_fsfatro's guard, which the selector lacks
+    or   al, [rel hv_linux_start_active]
+    or   al, [rel hv_linux_run_req]
+    or   al, [rel vtd_owner_guest]
+    test al, al
+    jnz  .busy
+    cmp  dword [rel fd_selected_ctx + FD_MOUNTED], 0
+    jne  .busy
+    cmp  dword [rel fd_scratch_ctx + FD_MOUNTED], 0
+    jne  .busy
+    xor  r12d, r12d
+.live:
+    mov  rdi, r12
+    mov  esi, BLKCAP_READ
+    xor  edx, edx
+    call blk_iter_after
+    test rax, rax
+    jz   .no
+    mov  r12, rax
+    cmp  rax, rbx
+    jne  .live
+    mov  rax, [rbx + dev.info]
+    test rax, rax
+    jz   .no
+    cmp  byte [rax + blk_info.removable], 0
+    jne  .native
+    test dword [rax + blk_info.flags], BLKF_REMOVABLE
+    jz   .no
+.native:
+    cmp  dword [rax + blk_info.sector_size], 512
+    jne  .no
+    mov  r13d, [rel vfs_disk_handle]
+    mov  rdi, rbx
+    call fd_removable_pick
+    cmp  rax, 1                         ; a readable non-GPT header, not a GPT parse failure
+    je   .mbr
+    test rax, rax
+    jnz  .no
+    mov  byte [rel fd_select_press], 1  ; spent by the selector's own authority check
+    lea  rdi, [rel fd_local_part]
+    mov  esi, -1                        ; no compiled maximum assertion
+    mov  rdx, [rel fd_local_start]
+    mov  rcx, [rel fd_local_sectors]
+    call fat32_disk_select_ro_exact
+    test rax, rax
+    js   .restore
+    cmp  rbx, [rel fd_selected_ctx + FD_DEV]
+    je   .out
+    call fd_selected_invalidate         ; the same GUID on another device
+    mov  rax, -1
+    jmp  .restore
+.mbr:
+    mov  rdi, rbx
+    call fd_removable_mbr_ro
+    test rax, rax
+    jns  .out
+.restore:
+    mov  [rel vfs_disk_handle], r13d    ; only fat-ro0 was rebound, and it was not live
+    jmp  .out
+.busy:
+    mov  rax, -2
+    jmp  .out
+.no:
+    mov  rax, -1
+.out:
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+
+; RDI=dev -> RAX 0 with fd_local_part/start/sectors for the ONE Basic Data entry;
+; 1 only for a readable non-GPT LBA1, -1 on read/malformed GPT failure.
+; Hostile media: this only locates. The selector then validates CRCs, bounds,
+; overlap and clones on its own reads.
+fd_removable_pick:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov  rbx, rdi
+    mov  rsi, 1
+    mov  edx, 1
+    lea  rcx, [rel fd_local_sector]
+    call blk_read
+    test rax, rax
+    jnz  .no
+    mov  rax, 0x5452415020494645        ; "EFI PART"
+    cmp  [rel fd_local_sector], rax
+    jne  .mbr
+    mov  r12, [rel fd_local_sector + 72]
+    cmp  r12, 2
+    jb   .no
+    mov  rax, [rbx + dev.info]
+    cmp  r12, [rax + blk_info.lba_max]
+    ja   .no
+    mov  r13d, [rel fd_local_sector + 80]
+    test r13d, r13d
+    jz   .no
+    cmp  r13d, 128
+    ja   .no
+    cmp  dword [rel fd_local_sector + 84], 128
+    jne  .no
+    xor  r14d, r14d                     ; entry
+    xor  r15d, r15d                     ; matches
+.entry:
+    cmp  r14d, r13d
+    jae  .done
+    test r14d, 3
+    jnz  .have
+    mov  rax, r12
+    mov  ecx, r14d
+    shr  ecx, 2
+    add  rax, rcx
+    jc   .no
+    mov  rdi, rbx
+    mov  rsi, rax
+    mov  edx, 1
+    lea  rcx, [rel fd_local_sector]
+    call blk_read
+    test rax, rax
+    jnz  .no
+.have:
+    mov  eax, r14d
+    and  eax, 3
+    shl  eax, 7
+    lea  rdx, [rel fd_local_sector]
+    add  rdx, rax
+    mov  rax, 0x4433b9e5ebd0a0a2
+    cmp  [rdx], rax
+    jne  .next
+    mov  rax, 0xc79926b7b668c087
+    cmp  [rdx + 8], rax
+    jne  .next
+    inc  r15d
+    mov  rax, [rdx + 16]
+    mov  [rel fd_local_part], rax
+    mov  rax, [rdx + 24]
+    mov  [rel fd_local_part + 8], rax
+    mov  rax, [rdx + 32]
+    mov  rcx, [rdx + 40]
+    test rax, rax
+    jz   .no
+    cmp  rcx, rax
+    jb   .no
+    mov  [rel fd_local_start], rax
+    sub  rcx, rax
+    inc  rcx
+    jz   .no
+    mov  [rel fd_local_sectors], rcx
+.next:
+    inc  r14d
+    jmp  .entry
+.done:
+    cmp  r15d, 1                        ; which of several is the owner's choice, not ours
+    jne  .no
+    xor  eax, eax
+    jmp  .out
+.mbr:
+    mov  eax, 1
+    jmp  .out
+.no:
+    mov  rax, -1
+.out:
+    pop  r15
+    pop  r14
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+
+; Original local press only: discover one ordinary MBR FAT32 primary on this
+; registered removable device. Reuse the maintained identifier and FAT reader,
+; then publish the same read-only fat-ro0 ops. This grants no scratch/Format
+; authority and never calls mount recovery, an arm, write, or flush.
+fd_removable_mbr_ro:
+    push rbx
+    mov  rbx, rdi
+    call vfs_copy_busy
+    test eax, eax
+    jnz  .busy
+    call storage_access_binding_busy
+    test eax, eax
+    jnz  .busy
+    mov  rdi, rbx
+    call guest_volume_native_allowed
+    test rax, rax
+    jnz  .no
+    mov  rdi, rbx
+    xor  esi, esi                       ; discover: never choose among multiple primaries
+    xor  edx, edx
+    lea  rcx, [rel fd_local_mbr_tuple]
+    call fs_identify_primary
+    test rax, rax
+    jnz  .no
+    cmp  dword [rel fd_local_mbr_tuple + 36], FS_SCHEME_MBR
+    jne  .no
+    mov  eax, [rel fd_local_mbr_tuple + 40]
+    cmp  eax, 0x0b
+    je   .fat
+    cmp  eax, 0x0c
+    jne  .no                           ; hidden/ESP/extended/non-FAT never become this view
+.fat:
+    mov  rax, [rbx + dev.info]
+    test rax, rax
+    jz   .no
+    cmp  dword [rax + blk_info.sector_size], 512
+    jne  .no
+    cmp  dword [rax + blk_info.logical_sector_bytes], 512
+    jne  .no
+    cmp  qword [rel fd_local_mbr_tuple + 8], 0
+    je   .no
+    lock inc qword [rel vfs_write_generation]
+    mov  dword [rel vfs_disk_handle], -1
+    call fd_selected_invalidate
+    lea  rdi, [rel fd_selected_ctx]
+    xor  eax, eax
+    mov  ecx, FD_CTX_SIZE / 8
+    rep stosq
+    mov  [rel fd_selected_ctx + FD_DEV], rbx
+    mov  rsi, [rel fd_local_mbr_tuple + 16]
+    mov  [rel fd_selected_ctx + FD_PART_LBA], rsi
+    mov  rax, [rel fd_local_mbr_tuple + 24]
+    mov  [rel fd_selected_ctx + FD_PART_SECTORS], rax
+    mov  rax, [rel fd_local_mbr_tuple + 8]
+    mov  [rel fd_selected_ctx + FD_MOUNT_GEN], rax
+    mov  [rel fd_selected_generation], rax
+    mov  dword [rel fd_selected_logical], 512
+    mov  rax, [rbx + dev.info]
+    mov  rax, [rax + blk_info.lba_max]
+    mov  [rel fd_selected_max], rax
+    mov  dword [rel fd_selected_ctx + FD_PART_INDEX], -1
+    mov  rdi, rbx
+    mov  edx, 1
+    lea  rcx, [rel fd_local_sector]
+    call blk_read
+    test rax, rax
+    jnz  .fail
+    lea  rbx, [rel fd_local_sector]
+    call fd_is_fat32_bpb
+    mov  rbx, [rel fd_selected_ctx + FD_DEV]
+    test eax, eax
+    jnz  .fail
+    lea  rdi, [rel fd_selected_ctx]
+    lea  rsi, [rel fd_local_sector]
+    call fd_validate_bpb
+    test rax, rax
+    jnz  .fail
+    ; A second discovery must independently retain the complete incarnation,
+    ; extent, primary slot, type and MBR signature, including uniqueness.
+    mov  rdi, rbx
+    xor  esi, esi
+    xor  edx, edx
+    lea  rcx, [rel fd_local_mbr_recheck]
+    call fs_identify_primary
+    test rax, rax
+    jnz  .fail
+    lea  rdi, [rel fd_local_mbr_tuple]
+    lea  rsi, [rel fd_local_mbr_recheck]
+    mov  ecx, 6
+    repe cmpsq
+    jne  .fail
+    mov  rdi, rbx
+    mov  rsi, [rel fd_selected_ctx + FD_PART_LBA]
+    mov  edx, 1
+    lea  rcx, [rel fd_sector]
+    call blk_read
+    test rax, rax
+    jnz  .fail
+    lea  rdi, [rel fd_local_sector]
+    lea  rsi, [rel fd_sector]
+    mov  ecx, 64
+    repe cmpsq
+    jne  .fail                          ; full BPB, not only the volume serial
+    lea  rdi, [rel fd_selected_ctx]
+    call fd_selected_current           ; final READ/health/member/generation/geometry check
+    test rax, rax
+    jnz  .fail
+    mov  edi, [rel fd_selected_handle]
+    test edi, edi
+    jz   .register
+    dec  edi
+    call vfs_mount_ptr
+    test rax, rax
+    jz   .fail
+    lea  rdx, [rel fd_selected_ops]
+    cmp  [rax + fsmount.ops], rdx
+    jne  .fail
+    lea  rdx, [rel fd_selected_ctx]
+    cmp  [rax + fsmount.priv], rdx
+    jne  .fail
+    jmp  .publish
+.register:
+    call fd_selected_build_ops
+    lea  rdi, [rel fd_selected_ops]
+    lea  rsi, [rel fd_selected_ctx]
+    lea  rdx, [rel str_fd_selected_name]
+    call vfs_register_mount
+    test rax, rax
+    js   .fail
+    inc  eax
+    mov  [rel fd_selected_handle], eax
+.publish:
+    lea  rdi, [rel fd_selected_ctx]
+    call fd_read_cache_drop
+    mov  eax, [rel fd_selected_handle]
+    dec  eax
+    mov  [rel vfs_disk_handle], eax
+    jmp  .out
+.fail:
+    call fd_selected_invalidate
+.no:
+    mov  rax, -1
+    jmp  .out
+.busy:
+    mov  rax, -2
+.out:
+    pop  rbx
+    ret
+
+; fat32_disk_next_unviewed(RDI=previous dev or 0) -> RAX the next native removable
+; device no FAT or exFAT mount views, or 0; RDX its name. Reads no media.
+fat32_disk_next_unviewed:
+    push rbx
+    mov  rbx, rdi
+.next:
+    mov  rdi, rbx
+    mov  esi, BLKCAP_READ
+    xor  edx, edx
+    call blk_iter_after
+    test rax, rax
+    jz   .out
+    mov  rbx, rax
+    mov  rax, [rbx + dev.info]
+    test rax, rax
+    jz   .next
+    cmp  byte [rax + blk_info.removable], 0
+    jne  .native
+    test dword [rax + blk_info.flags], BLKF_REMOVABLE
+    jz   .next
+.native:
+    mov  rdi, rbx
+    call fat32_disk_device_mounted
+    test eax, eax
+    jnz  .next
+    mov  rdi, rbx
+    call exfat_disk_device_mounted
+    test eax, eax
+    jnz  .next
+    mov  rax, rbx
+    mov  rdx, [rbx + dev.name]
+.out:
+    pop  rbx
+    ret
+
+; RDI=dev -> EAX 1 when a FAT mount this module holds already views it. No I/O.
+fat32_disk_device_mounted:
+    xor  eax, eax
+    cmp  dword [rel fd_selected_ctx + FD_MOUNTED], 0
+    je   .scratch
+    cmp  rdi, [rel fd_selected_ctx + FD_DEV]
+    je   .yes
+.scratch:
+    cmp  dword [rel fd_scratch_ctx + FD_MOUNTED], 0
+    je   .data
+    cmp  rdi, [rel fd_scratch_ctx + FD_DEV]
+    je   .yes
+.data:
+    cmp  dword [rel fat32_disk_ctx + FD_MOUNTED], 0
+    je   .out
+    cmp  rdi, [rel fat32_disk_ctx + FD_DEV]
+    jne  .out
+.yes:
+    mov  eax, 1
+.out:
+    ret
+
 fat32_disk_scratch_off:
     call fd_scratch_owner
     test rax, rax
@@ -15609,7 +16630,11 @@ fd_scratch_owner:
     jne .no
     call storage_access_request_intent
     cmp eax, SA_INTENT_SPECIAL
+    je .yes
+    call storage_access_request_local   ; T5-15.4: fd_scratch_request binds the device
+    cmp eax, 1
     jne .no
+.yes:
     xor eax, eax
     ret
 .no:
@@ -15643,6 +16668,8 @@ fd_scratch_copy:
     lea rax, [rel fd_scratch_ctx]
     cmp [rdi + fsmount.priv], rax
     jne .fail
+    cmp ebx, FS_COPY_BEGIN_CARRIED
+    je .carried
     cmp ebx, FS_COPY_BEGIN
     jne .existing
     test r9d, r9d                        ; selected simple file copy only: no TREE/replace/ask/queue
@@ -15663,6 +16690,21 @@ fd_scratch_copy:
     test rax, rax
     jle .fail
     mov [rel fd_scratch_job_tag], rax
+    xor r9d, r9d
+    jmp .invoke
+.carried:
+    ; A queued scratch BEGIN from vfs_copy_dequeue (rc-sec 105819 C9/C10, 105868 step 2). The carry,
+    ; not the absent request, decides; the opener consumes it before any check and refuses
+    ; mode, a retained job or a live phase exactly as the plain BEGIN above does. Its BEGIN
+    ; writes then take fd_scratch_request's .carried_begin (step 2), never the live-request path.
+    mov rdi, r15
+    mov esi, r9d
+    call fd_scratch_job_open_carried     ; -> tag > 0 / -1 (vfs_copy_refusal typed)
+    test rax, rax
+    jle .fail
+    mov [rel fd_scratch_job_tag], rax
+    mov byte [rel fd_scratch_job_step], 2 ; rc-sec 105868: the one writer of 2, after the tag is stored
+    mov ebx, FS_COPY_BEGIN
     xor r9d, r9d
     jmp .invoke
 .existing:
@@ -15709,6 +16751,359 @@ fd_scratch_copy:
     pop r12
     pop rbx
     ret
+
+; ---------------------------------------------------------------------------
+; FAT-scratch carried copy (ROOT105787 option A; rc-sec 105819 C1-C12, 105840).
+; A queued FSCOPY on the exact armed fd_scratch mount carries its owner's console
+; decision to the dequeue's BEGIN in its fs_copy_carry (kind FS_CARRY_FAT_SCRATCH;
+; .owned_token holds the arm epoch). Recorded at FSCOPY (fd_scratch_carry_record),
+; re-checked by the dequeue and the sweep (fd_scratch_carry_check), consumed once at
+; BEGIN (fd_scratch_job_open_carried, called only from fd_scratch_copy). Compiled
+; out of a public build exactly as EXT_W_OWNED (C2): nothing records, nothing opens.
+%define FD_SCRATCH_CARRY 1
+%ifdef PAOS_PUBLIC_BUILD
+%if PAOS_PUBLIC_BUILD != 0
+%define FD_SCRATCH_CARRY 0
+%endif
+%endif
+
+; fd_scratch_carry_record(RDI=fsmount, RSI=fs_copy_carry, EDX=FS_CMODE_* of the FSCOPY)
+;   -> RAX 0 recorded / -1 this enqueue carries nothing (job_active). C1: the
+;   OWNER's own request, owned ops not latched, the full fd_scratch_owner. C3: the
+;   live request passes fd_scratch_request's SPECIAL rule; the recorded intent is
+;   exactly sa_intent_for(FD_DEV) (storage_access_intent_for_dev, D-a); UNKNOWN
+;   class refused, SENSITIVE needs SPECIAL. C4: identity from fd_scratch_ctx,
+;   snapshotted after fd_scratch_metadata and before the classify read, checked
+;   again after it. C6: mode 0 only. Writes the carry only on success.
+fd_scratch_carry_record:
+%if FD_SCRATCH_CARRY
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    sub  rsp, fs_copy_carry_size + 8
+    mov  [rsp + fs_copy_carry_size], rsi
+    mov  rbx, rdi
+    mov  r13, rsp                        ; publish nothing until every check holds
+    test edx, edx
+    jnz  .no                             ; C6: a simple selected file copy (the BEGIN refuses any mode)
+    lea  rax, [rel fd_scratch_ops]
+    cmp  [rbx + fsmount.ops], rax
+    jne  .no
+    lea  r12, [rel fd_scratch_ctx]
+    cmp  [rbx + fsmount.priv], r12
+    jne  .no                             ; C7: the exact scratch mount
+    cmp  byte [rel fd_scratch_armed], 1
+    jne  .no
+    call storage_access_request_owner
+    cmp  eax, 1
+    jne  .no                             ; C1: only the OWNER's own request carries
+    call storage_access_owned_latched
+    test eax, eax
+    jnz  .no
+    call fd_scratch_owner                ; C1: the full live predicate
+    test rax, rax
+    jnz  .no
+    call storage_access_request_intent   ; C3 step 1: fd_scratch_request's own rule, on the live request
+    cmp  eax, SA_INTENT_SPECIAL
+    je   .special
+    mov  rdi, [r12 + FD_DEV]
+    call storage_access_intent_for_dev
+    cmp  eax, SA_INTENT_SPECIAL
+    jne  .no                             ; the live gate would refuse this request
+.special:
+    mov  rdi, [r12 + FD_DEV]
+    call storage_access_intent_for_dev   ; C3: exactly sa_intent_for(FD_DEV)
+    mov  r15d, eax
+    call fd_scratch_metadata             ; C4: current medium + full GPT/table/BPB first
+    test rax, rax
+    jnz  .no
+    mov  rax, [r12 + FD_DEV]             ; C4: snapshot before the classification read
+    test rax, rax
+    jz   .no
+    mov  [r13 + fs_copy_carry.dev], rax
+    mov  rdx, [r12 + FD_PART_LBA]
+    mov  [r13 + fs_copy_carry.part_lba], rdx
+    mov  rdx, [r12 + FD_PART_SECTORS]
+    mov  [r13 + fs_copy_carry.part_sectors], rdx
+    mov  rdx, [rax + dev.ops]
+    mov  [r13 + fs_copy_carry.ops], rdx
+    mov  rdx, [rax + dev.priv]
+    mov  [r13 + fs_copy_carry.priv], rdx
+    mov  rsi, [rax + dev.info]
+    test rsi, rsi
+    jz   .no
+    mov  [r13 + fs_copy_carry.info], rsi
+    mov  r14, [rel fd_scratch_generation]
+    test r14, r14
+    jz   .no
+    cmp  r14, [rsi + blk_info.media_generation]
+    jne  .no
+    cmp  r14, [r12 + FD_MOUNT_GEN]
+    jne  .no
+    mov  [r13 + fs_copy_carry.gen], r14
+    mov  rax, [rel fd_scratch_arm_epoch]
+    test rax, rax
+    jz   .no
+    mov  [r13 + fs_copy_carry.owned_token], rax   ; C5/C6: the arm epoch (this kind has no owned token)
+    mov  [r13 + fs_copy_carry.ctx], r12
+    add  rsi, blk_info.sector_size
+    lea  rdi, [r13 + fs_copy_carry.geometry]
+    mov  edx, blk_info_size - blk_info.sector_size
+    call memcpy
+    call boot_ms_now
+    mov  [r13 + fs_copy_carry.t_enqueue], rax
+    mov  rdi, [r13 + fs_copy_carry.dev]
+    mov  rsi, [r13 + fs_copy_carry.part_lba]
+    mov  rdx, [r13 + fs_copy_carry.part_sectors]
+    call storage_access_classify         ; a read of LBA 1: no grant, no window
+    cmp  eax, SA_CLASS_UNKNOWN
+    je   .no
+    cmp  eax, SA_CLASS_SENSITIVE
+    jne  .classed
+    cmp  r15d, SA_INTENT_SPECIAL
+    jne  .no                             ; as the gate would refuse this window under this intent
+.classed:
+    mov  [r13 + fs_copy_carry.class], eax
+    mov  rdi, r13
+    call fd_scratch_carry_check          ; the route, generation and arm still hold after that read
+    test eax, eax
+    jnz  .no
+    mov  [r13 + fs_copy_carry.intent], r15d
+    mov  dword [r13 + fs_copy_carry.owner], 1
+    mov  rax, [rel fd_scratch_carry_seq]
+    inc  rax
+    jz   .no                             ; C6: 64-bit, never 0, never reissued
+    mov  [rel fd_scratch_carry_seq], rax
+    mov  [r13 + fs_copy_carry.id], rax
+    mov  dword [r13 + fs_copy_carry.kind], FS_CARRY_FAT_SCRATCH
+    mov  rdi, [rsp + fs_copy_carry_size]
+    mov  rsi, r13
+    mov  edx, fs_copy_carry_size
+    call memcpy
+    xor  eax, eax
+    jmp  .out
+.no:
+    mov  rax, -1
+.out:
+    add  rsp, fs_copy_carry_size + 8
+    pop  r15
+    pop  r14
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+%else
+    mov  rax, -1                         ; C2: a public build carries nothing
+    ret
+%endif
+
+; fd_scratch_carry_check(RDI=fs_copy_carry) -> EAX 0 it still holds / the FS_CREF_*
+;   it no longer holds by: mount_changed (not fd_scratch_ctx or unmounted, another
+;   device, window, backend route, geometry or generation), arm_changed (disarmed,
+;   or armed again: another epoch), carry_expired (older than FS_CARRY_MAX_AGE_MS).
+;   No I/O, no grant. The dequeue (stamp op 3), the sweep (op 4), the record and
+;   fd_scratch_job_open_carried ask it. Preserves RDI; clobbers RAX, RCX, RDX, R8.
+fd_scratch_carry_check:
+%if FD_SCRATCH_CARRY
+    lea  r8, [rel fd_scratch_ctx]
+    cmp  [rdi + fs_copy_carry.ctx], r8
+    jne  .mount
+    cmp  dword [r8 + FD_MOUNTED], 1
+    jne  .mount
+    mov  rax, [r8 + FD_DEV]
+    test rax, rax
+    jz   .mount
+    cmp  rax, [rdi + fs_copy_carry.dev]
+    jne  .mount
+    mov  rcx, [r8 + FD_PART_LBA]
+    cmp  rcx, [rdi + fs_copy_carry.part_lba]
+    jne  .mount
+    mov  rcx, [r8 + FD_PART_SECTORS]
+    cmp  rcx, [rdi + fs_copy_carry.part_sectors]
+    jne  .mount
+    mov  rcx, [rax + dev.ops]
+    cmp  rcx, [rdi + fs_copy_carry.ops]
+    jne  .mount
+    mov  rcx, [rax + dev.priv]
+    cmp  rcx, [rdi + fs_copy_carry.priv]
+    jne  .mount
+    mov  rdx, [rax + dev.info]
+    test rdx, rdx
+    jz   .mount
+    cmp  rdx, [rdi + fs_copy_carry.info]
+    jne  .mount
+    xor  ecx, ecx
+.bytes:
+    mov  al, [rdx + rcx + blk_info.sector_size]
+    cmp  al, [rdi + rcx + fs_copy_carry.geometry]
+    jne  .mount
+    inc  ecx
+    cmp  ecx, blk_info_size - blk_info.sector_size
+    jb   .bytes
+    mov  rax, [rel fd_scratch_generation]
+    test rax, rax
+    jz   .mount                          ; an unreadable generation counts as changed
+    cmp  rax, [rdi + fs_copy_carry.gen]
+    jne  .mount
+    cmp  rax, [rdx + blk_info.media_generation]
+    jne  .mount
+    cmp  rax, [r8 + FD_MOUNT_GEN]
+    jne  .mount
+    cmp  byte [rel fd_scratch_armed], 1
+    jne  .arm
+    mov  rax, [rel fd_scratch_arm_epoch]
+    test rax, rax
+    jz   .arm
+    cmp  rax, [rdi + fs_copy_carry.owned_token]
+    jne  .arm                            ; C5: off then arm again is another epoch
+    push rdi
+    call boot_ms_now
+    pop  rdi
+    sub  rax, [rdi + fs_copy_carry.t_enqueue]
+    cmp  rax, FS_CARRY_MAX_AGE_MS
+    ja   .expired
+    xor  eax, eax
+    ret
+.arm:
+    mov  eax, FS_CREF_ARM_CHANGED
+    ret
+.expired:
+    mov  eax, FS_CREF_CARRY_EXPIRED
+    ret
+%endif
+.mount:
+    mov  eax, FS_CREF_MOUNT_CHANGED
+    ret
+
+; fd_scratch_job_open_carried(RDI=the job: .carry -> its fs_copy_carry, ESI=FS_CMODE_*)
+;   -> RAX the job tag > 0 / -1 (FD_ERR_NOT_EXACT; vfs_copy_refusal names
+;   mount_changed, arm_changed, carry_expired or class_changed when that is why).
+;   C9, failing on the first miss: the job's .carry is cleared and the carry itself
+;   zeroed before any check; kind; an id at or below the last spent one never
+;   begins (take-once); the plain BEGIN's own refusals (mode, a retained job, a live
+;   engine); owner and ctx; the arm and its epoch; current medium + full GPT/BPB
+;   and the carried route; age; owned ops not latched; the same class, SENSITIVE
+;   only under a carried SPECIAL; the arm and medium again after that read;
+;   fpw_gate and fd_data_write_gate; then the one carried grant. C10: this replaces
+;   only fd_scratch_owner and fd_scratch_request's live-request pieces. Referenced
+;   only from fd_scratch_copy (storage_grant_lint).
+fd_scratch_job_open_carried:
+%if FD_SCRATCH_CARRY
+    push rbx
+    push r13
+    sub  rsp, fs_copy_carry_size + 8
+    mov  r13d, esi
+    mov  rbx, [rdi + fs_copy_job.carry]
+    mov  qword [rdi + fs_copy_job.carry], 0   ; consumed before any check
+    test rbx, rbx
+    jz   .denied
+    mov  rdi, rsp
+    mov  rsi, rbx
+    mov  edx, fs_copy_carry_size
+    call memcpy
+    mov  rdi, rbx
+    xor  esi, esi
+    mov  edx, fs_copy_carry_size
+    call memset                          ; the carry reads zero from here on
+    mov  rbx, rsp                        ; the spent copy
+    cmp  dword [rbx + fs_copy_carry.kind], FS_CARRY_FAT_SCRATCH
+    jne  .denied
+    mov  rax, [rbx + fs_copy_carry.id]
+    cmp  rax, [rel fd_scratch_carry_spent]
+    jbe  .denied                         ; take-once
+    mov  [rel fd_scratch_carry_spent], rax
+    test r13d, r13d
+    jnz  .denied                         ; the plain BEGIN's refusals, unchanged
+    cmp  qword [rel fd_scratch_job_tag], 0
+    jne  .denied
+    cmp  dword [rel fd_cp_phase], FD_CP_IDLE
+    jne  .denied
+    cmp  dword [rbx + fs_copy_carry.owner], 1
+    jne  .denied
+    lea  rax, [rel fd_scratch_ctx]
+    cmp  [rbx + fs_copy_carry.ctx], rax
+    jne  .mount
+    call .medium                         ; arm + epoch, then medium, route and age
+    test eax, eax
+    jnz  .typed
+    call storage_access_owned_latched
+    test eax, eax
+    jnz  .denied
+    mov  rdi, [rbx + fs_copy_carry.dev]
+    mov  rsi, [rbx + fs_copy_carry.part_lba]
+    mov  rdx, [rbx + fs_copy_carry.part_sectors]
+    call storage_access_classify
+    cmp  eax, [rbx + fs_copy_carry.class]
+    mov  eax, FS_CREF_CLASS_CHANGED
+    jne  .typed                          ; a read fault classifies UNKNOWN, never the recorded class
+    cmp  dword [rbx + fs_copy_carry.class], SA_CLASS_SENSITIVE
+    jne  .class_ok
+    cmp  dword [rbx + fs_copy_carry.intent], SA_INTENT_SPECIAL
+    jne  .denied                         ; SENSITIVE only under a carried SPECIAL
+.class_ok:
+    call .medium                         ; the classification I/O changed nothing
+    test eax, eax
+    jnz  .typed
+    lea  rdi, [rel fd_scratch_ctx]
+    call fpw_gate
+    test rax, rax
+    jnz  .denied
+    lea  rdi, [rel fd_scratch_ctx]
+    call fd_data_write_gate
+    test rax, rax
+    jnz  .denied
+    mov  rdi, [rel fd_scratch_ctx + FD_DEV]
+    mov  rsi, [rel fd_scratch_ctx + FD_PART_LBA]
+    mov  rdx, [rel fd_scratch_ctx + FD_PART_SECTORS]
+    mov  ecx, [rbx + fs_copy_carry.intent]
+    lea  r8, [rel str_fd_scratch_carried]
+    ; rc-sec 105840 D-c: the shared job_grant body runs storage_access_require, which records a
+    ; request grant for exactly this range (sa_grant_record). That grant admits no write alone:
+    ; every BEGIN write still runs storage_access_job_require (this exact retained window) and
+    ; then storage_access_write_admitted (with the live-Try refusal), and fd_scratch_copy's
+    ; storage_access_job_step_end drops the grant right after the BEGIN step.
+    call storage_access_job_grant_carried   ; tag > 0 / -1, under the CARRIED intent
+    test rax, rax
+    jle  .denied
+    jmp  .out
+.medium:                                 ; RBX = the spent copy -> EAX 0 / FS_CREF_*
+    cmp  byte [rel fd_scratch_armed], 1
+    jne  .m_arm
+    mov  rax, [rel fd_scratch_arm_epoch]
+    test rax, rax
+    jz   .m_arm
+    cmp  rax, [rbx + fs_copy_carry.owned_token]
+    jne  .m_arm
+    call fd_scratch_metadata             ; fd_scratch_current + GPT header, entries, BPB
+    test rax, rax
+    mov  eax, FS_CREF_MOUNT_CHANGED
+    jnz  .m_out
+    mov  rdi, rbx
+    jmp  fd_scratch_carry_check          ; route, geometry, generation, arm, age
+.m_arm:
+    mov  eax, FS_CREF_ARM_CHANGED
+.m_out:
+    ret
+.mount:
+    mov  eax, FS_CREF_MOUNT_CHANGED
+.typed:
+    mov  [rel vfs_copy_refusal], eax
+.denied:
+    mov  dword [rel fat32_disk_last_error], FD_ERR_NOT_EXACT
+    mov  rax, -1
+.out:
+    add  rsp, fs_copy_carry_size + 8
+    pop  r13
+    pop  rbx
+    ret
+%else
+    mov  qword [rdi + fs_copy_job.carry], 0
+    mov  dword [rel fat32_disk_last_error], FD_ERR_NOT_EXACT
+    mov  rax, -1                         ; C2: a public build never begins a carried copy
+    ret
+%endif
 
 fd_scratch_copy_close:
     mov rdi, [rel fd_scratch_job_tag]
@@ -15839,7 +17234,7 @@ fd_scratch_current:
     pop rbx
     ret
 
-; Compare the complete validated primary GPT/header/table and accepted BPB.
+; Compare the complete admitted MBR or GPT/header/table and accepted BPB.
 ; Native reads go straight through blk_read; no recursion through read custody.
 ; No identity refresh is possible. 1..32 sectors, each at most one sector/IO.
 fd_scratch_metadata:
@@ -15851,6 +17246,10 @@ fd_scratch_metadata:
     jnz .out
     mov rdi, [rel fd_scratch_ctx + FD_DEV]
     mov esi, 1
+    cmp dword [rel fd_scratch_mbr_slot],0
+    je .header
+    xor esi,esi
+.header:
     mov edx, 1
     lea rcx, [rel fd_scratch_check]
     call blk_read
@@ -15862,6 +17261,8 @@ fd_scratch_metadata:
     call memcmp
     test rax, rax
     jnz .fail
+    cmp dword [rel fd_scratch_mbr_slot],0
+    jne .boot
     xor ebx, ebx
 .table:
     mov rdi, [rel fd_scratch_ctx + FD_DEV]
@@ -15884,6 +17285,7 @@ fd_scratch_metadata:
     inc ebx
     cmp ebx, [rel fd_scratch_table_sectors]
     jb .table
+.boot:
     mov rdi, [rel fd_scratch_ctx + FD_DEV]
     mov rsi, [rel fd_scratch_ctx + FD_PART_LBA]
     mov edx, 1
@@ -15913,8 +17315,12 @@ fd_scratch_metadata:
 ; bound copy callback may present its retained exact-partition job window; each
 ; physical effect still repeats admission and current-medium/metadata checks.
 ; Peter decision 10 (LEDGER 85949, 87106): an unowned FAT32 volume is writable in a public 0.1
-; build only on removable media. Adopted volumes use the owned routes, never this mount.
+; build only on removable media. Own partition A1 (Peter 107863, SEC 90335): a fixed FAT32 is
+; writable only while fd_scratch_adopted_check binds and live-checks it, on every call, as an
+; adopted volume that is not the DATA role; a local owner then gets SPECIAL for that exact
+; partition only, never the device (sa_intent_for stays removable-only).
 fd_scratch_request:
+    mov byte [rel fd_scratch_adopted], 0
 %ifdef PAOS_PUBLIC_BUILD
 %if PAOS_PUBLIC_BUILD != 0
     mov rax,[rel fd_scratch_ctx + FD_DEV]
@@ -15926,15 +17332,53 @@ fd_scratch_request:
     cmp byte [rax + blk_info.removable],0
     jne .removable
     test dword [rax + blk_info.flags],BLKF_REMOVABLE
-    jz .fail
+    jnz .removable
+    cmp byte [rel fd_scratch_job_step], 0
+    jne .fixed_check
+    call fd_scratch_owner               ; own partition A4 (SEC-A1-3): ownership before the two probes
+    test rax, rax
+    jnz .out
+.fixed_check:
+    call fd_scratch_adopted_check
+    test rax,rax
+    jnz .fail
+    mov byte [rel fd_scratch_adopted], 1
 .removable:
 %endif
 %endif
     cmp byte [rel fd_scratch_job_step], 1
     je .job
+    cmp byte [rel fd_scratch_job_step], 2
+    je .carried_begin
     call fd_scratch_owner
     test rax, rax
     jnz .out
+    call storage_access_request_intent
+    cmp  eax, SA_INTENT_SPECIAL
+    je   .signed
+    mov  rdi, [rel fd_scratch_ctx + FD_DEV]
+    call storage_access_intent_for_dev
+    cmp  eax, SA_INTENT_SPECIAL
+    je   .signed                        ; a local grant reaches removable alone
+    call storage_access_request_local   ; A1: else only a local owner on an adopted fixed FAT32
+    cmp  eax, 1
+    jne  .fail
+    cmp  byte [rel fd_scratch_adopted], 1
+    je   .adopted
+    call fd_scratch_adopted_check       ; a lab build has not checked yet
+    test rax, rax
+    jnz  .fail
+.adopted:
+    mov rdi, [rel fd_scratch_ctx + FD_DEV]
+    mov rsi, [rel fd_scratch_ctx + FD_PART_LBA]
+    mov rdx, [rel fd_scratch_ctx + FD_PART_SECTORS]
+    mov ecx, SA_INTENT_SPECIAL          ; the exact partition: never the table or the device
+    lea r8, [rel str_fd_scratch_gate]
+    call storage_access_require
+    test rax, rax
+    jnz .out
+    jmp .admitted
+.signed:
     mov rdi, [rel fd_scratch_ctx + FD_DEV]
     mov rsi, [rel fd_scratch_ctx + FD_PART_LBA]
     mov rdx, [rel fd_scratch_ctx + FD_PART_SECTORS]
@@ -15943,6 +17387,16 @@ fd_scratch_request:
     test rax, rax
     jnz .out
     jmp .admitted
+.carried_begin:
+    ; Step 2, the carried BEGIN only (rc-sec 105868): no live request and no running job yet,
+    ; so neither fd_scratch_owner nor .job's fd_cp_ctx/FD_TX_BUSY binding (set later by this BEGIN)
+    ; can hold. Its own window, an idle engine, the exact retained range and write_admitted can.
+    mov rcx, [rel fd_scratch_job_tag]
+    test rcx, rcx
+    jz .fail
+    cmp dword [rel fd_cp_phase], FD_CP_IDLE
+    jne .fail                           ; fail closed: a moved phase is no BEGIN
+    jmp .window
 .job:
     lea rax, [rel fd_scratch_ctx]
     cmp [rel fd_cp_ctx], rax
@@ -15952,6 +17406,8 @@ fd_scratch_request:
     mov rcx, [rel fd_scratch_job_tag]
     test rcx, rcx
     jz .fail
+.window:
+    lea rax, [rel fd_scratch_ctx]
     mov rdi, [rax + FD_DEV]
     mov rsi, [rax + FD_PART_LBA]
     mov rdx, [rax + FD_PART_SECTORS]
@@ -15967,6 +17423,70 @@ fd_scratch_request:
     ret
 .fail:
     mov rax, -1
+    ret
+
+; fd_scratch_adopted_check -> RAX 0 / -1. Own partition A1 (SEC 90335): the scratch context's
+; exact partition is, now, an adopted FAT32 that is not the DATA role, probed through the mount
+; that holds the context: the scratch mount, or before its first registration the selected
+; mount it was copied from.
+fd_scratch_adopted_check:
+    mov eax, [rel fd_scratch_handle]
+    lea rsi, [rel fd_scratch_ctx]
+    test eax, eax
+    jnz .registered
+    mov eax, [rel vfs_disk_handle]
+    inc eax
+    jz .no                              ; no selected mount
+    lea rsi, [rel fd_selected_ctx]
+.registered:
+    dec eax
+    mov edi, eax
+    lea rdx, [rel fd_scratch_ctx]       ; the extent a grant would cover
+    jmp fd_adopted_extent
+.no:
+    mov rax, -1
+    ret
+
+; fd_adopted_extent(EDI=mount handle, RSI=the FAT context that mount must hold, RDX=the context
+; whose exact extent is checked) -> RAX 0 / -1. vol_owner_bind_mount runs a full live probe
+; through the mount; vol_owner_live_check_files probes again and checks containment, epoch,
+; sequence, media generation and that the entry is not the DATA role. Nothing is cached.
+fd_adopted_extent:
+    push rbx
+    push r12
+    push r13
+    mov r12d, edi
+    mov rbx, rsi
+    mov r13, rdx
+    mov rdi, [r13 + FD_DEV]
+    call guest_volume_native_allowed    ; own partition A4 (SEC-A1-1): a guest volume job fences this device
+    test rax, rax
+    jnz .no
+    mov edi, r12d
+    call vfs_mount_ptr
+    test rax, rax
+    jz .no
+    cmp [rax + fsmount.priv], rbx
+    jne .no                             ; only a FAT context this module owns
+    mov edi, r12d
+    call vol_owner_bind_mount
+    test rax, rax
+    jz .no
+    mov rcx, rax
+    mov rdi, [r13 + FD_DEV]
+    mov rsi, [r13 + FD_PART_LBA]
+    mov rdx, [r13 + FD_PART_SECTORS]
+    call vol_owner_live_check_files
+    test eax, eax
+    jnz .no
+    xor eax, eax
+    jmp .out
+.no:
+    mov rax, -1
+.out:
+    pop r13
+    pop r12
+    pop rbx
     ret
 
 ; This helper is inert for every existing context; callers retain their old
@@ -16004,6 +17524,8 @@ fd_scratch_write_gate:
     jne .fail
     cmp byte [rel fd_scratch_job_step], 1
     je .metadata
+    cmp byte [rel fd_scratch_job_step], 2   ; the carried BEGIN (rc-sec 105868): its carry replaced the owner
+    je .metadata
     call fd_scratch_owner
     test rax, rax
     jnz .out
@@ -16033,6 +17555,18 @@ fd_scratch_write_gate:
     ret
 
 str_fd_scratch_name: db 'fat-scratch',0
+fat32_disk_local_moved: db 0
+fd_select_press: db 0
+align 8, db 0
+fd_local_start: dq 0
+fd_local_sectors: dq 0
+align 8, db 0
+fd_local_disk: times 16 db 0
+fd_local_part: times 16 db 0
+fd_local_sector: times 512 db 0
+align 8, db 0
+fd_local_mbr_tuple: times 48 db 0
+fd_local_mbr_recheck: times 48 db 0
 str_fd_scratch_select: db 'select',0
 str_fd_scratch_identity: db 'identity',0
 str_fd_scratch_metadata: db 'metadata',0
@@ -16041,6 +17575,7 @@ str_fd_scratch_mount_register: db 'mount_register',0
 str_fd_scratch_revalidate: db 'revalidate',0
 str_fd_scratch_publish_request: db 'publish_request',0
 str_fd_scratch_gate: db 'fs.fat32.owner_scratch',0
+str_fd_scratch_carried: db 'fs.fat32.owner_scratch.carried',0
 %macro WDATA_BSS_fs_fat32_owner_scratch 0
 alignb 8
 fd_scratch_ctx: resb FD_CTX_SIZE
@@ -16051,10 +17586,20 @@ fd_scratch_generation: resq 1
 fd_scratch_max: resq 1
 fd_scratch_stage: resq 1
 fd_scratch_job_tag: resq 1
+fd_scratch_arm_epoch: resq 1         ; C5: the one writer is fat32_disk_scratch_arm's publish
+fd_scratch_carry_seq: resq 1         ; C6: a carry id, never 0, never reissued
+fd_scratch_carry_spent: resq 1       ; C9: take-once floor of the scratch kind
 fd_scratch_job_step: resb 1
 alignb 8
 fd_scratch_handle: resd 1
+fd_scratch_adopted: resb 1               ; A1: set by this call's public adopted check only
 fd_scratch_table_sectors: resd 1
+fd_scratch_mbr_slot: resd 1
+alignb 8
+fd_mbr_request_dev: resq 1
+fd_mbr_zero_guid: resb 16
+fd_mbr_tuple: resb 48
+fd_mbr_recheck: resb 48
 fd_scratch_armed: resb 1
 alignb 8
 fd_selected_gpt_saved: resb 512
@@ -16087,3 +17632,5 @@ fat32_disk_format_ops:
 %include "fs/data_config_provider.asm"
 
 %include "fs/fat32_probe_window.asm"
+
+%include "fs/update_esp.asm"

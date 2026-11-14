@@ -86,7 +86,7 @@ NTBP_SIZE        equ 28
 ; cdc_ncm_selftest — probe + bind + register, after ax88179 and cdc_ecm.
 ; ============================================================================
 cdc_ncm_selftest:
-    NATIVE_DRIVER_REFUSE 6, 0
+    NATIVE_DRIVER_REFUSE 10, 0
     push rbx
     push r12
     push r13
@@ -695,7 +695,7 @@ cdc_ncm_hexval:                        ; EAX = char -> EAX = 0..15, SF set when 
     ret
 
 cdc_ncm_create:
-    NATIVE_DRIVER_REFUSE 6
+    NATIVE_DRIVER_REFUSE 10
     lea  rdi, [rel cdc_ncm_ops]
     lea  rax, [rel cdc_ncm_nop]
     mov  [rdi + netdev_ops.init], rax

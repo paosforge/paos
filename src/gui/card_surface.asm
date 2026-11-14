@@ -640,6 +640,10 @@ cs_build:
     inc  byte [rel wgt_paint_suspended]
     mov  edi, [rel cs_ids + CS_W_WHO*4]
     lea  rsi, [rel cs_str_who]
+    cmp  byte [rel card_rule], CARD_RULE_NETCFG_DHCP
+    jne  .who
+    lea  rsi, [rel cs_str_network]
+.who:
     call wgt_set_text
     lea  rsi, [rel cs_str_unknown]
     mov  rax, [rel card_verb_id]
@@ -698,7 +702,8 @@ cs_build:
     pop  rbx
     ret
 
-cs_str_who:     db "The AI asks you to run:", 0
+cs_str_who:     db "Claude wants to run a command.", 0
+cs_str_network: db "Claude wants a network address.", 0
 cs_str_unknown: db "?", 0
 cs_str_note:    db "Tab to Confirm, Enter runs it", 0
 

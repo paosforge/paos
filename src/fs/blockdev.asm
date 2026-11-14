@@ -1466,6 +1466,10 @@ blk_geometry_range_selftest:
     lea  rdi, [rel str_blk_geom_fail]
     call serial_string
 .out:
+    ; No test device outlives the KAT, pass or fail: a readable 4Kn peer left registered
+    ; makes every exact-GUID guest-source scan fail closed (G1b rc-sec b1). Not found = no-op.
+    lea  rdi, [rel ramblk_4kn_dev]
+    call blk_deregister
     add  rsp, 8
     pop  r15
     pop  r14

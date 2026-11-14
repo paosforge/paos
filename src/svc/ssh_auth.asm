@@ -1,6 +1,6 @@
 ;; MODULE svc/ssh_auth
 ;; LAYER 5
-;; EXPORTS cmd_verb_sshkhreplace, cmd_verb_sshkhtrust, cmd_verb_authpwkey, ssh_userauth_packet, ssh_keystore_init, ssh_keystore_find, ssh_keystore_commit_stage, ssh_auth_command_caps, ssh_auth_selftest, ssh_auth_audit_exec, ssh_key_fingerprint, ssh_txt_reset, ssh_txt_put_str, ssh_txt_put_dec, ssh_txt_put_hex16, ssh_txt_put_bytes, cmd_verb_sshkeyadd, cmd_verb_sshkeydel, cmd_verb_sshkhclear, cmd_verb_sshkeylist, cmd_verb_sshstat, ssh_auth_ok_count, ssh_auth_fail_count, ssh_exec_count, ssh_exec_refused, cmd_verb_sshrecord, ssh_keys_nvram_writes, cmd_verb_sshcliprofile
+;; EXPORTS cmd_verb_sshprofilefault, cmd_verb_sshkhreplace, cmd_verb_sshkhtrust, cmd_verb_authpwkey, ssh_userauth_packet, ssh_keystore_init, ssh_keystore_find, ssh_keystore_commit_stage, ssh_auth_command_caps, ssh_auth_selftest, ssh_auth_audit_exec, ssh_key_fingerprint, ssh_txt_reset, ssh_txt_put_str, ssh_txt_put_dec, ssh_txt_put_hex16, ssh_txt_put_bytes, cmd_verb_sshkeyadd, cmd_verb_sshkeydel, cmd_verb_sshkhclear, cmd_verb_sshkeylist, cmd_verb_sshstat, ssh_auth_ok_count, ssh_auth_fail_count, ssh_exec_count, ssh_exec_refused, cmd_verb_sshrecord, ssh_keys_nvram_writes, cmd_verb_sshcliprofile
 ;; IMPORTS svc/ssh, sec/principal, sec/session, svc/command, svc/command_auth, svc/command_audit, core/lib/mem, core/lib/sha256, core/lib/ed25519, core/lib/fmt, boot/header, boot/boot_v2_handoff, boot/serial, fs/storage_access, boot/nvram_access, svc/ssh_client
 ;; CAPS
 ;; OWNER saga:ssh_server
@@ -76,6 +76,8 @@ SSHK_CAPS_ALL     equ -1
 ; Small bounded text builder shared by the SSH verbs / audit lines.
 ; ---------------------------------------------------------------------------
 ; ssh_txt_reset(RDI=buffer, ESI=capacity incl. NUL)
+%include "svc/ssh_profile_fault_command.inc"
+
 ssh_txt_reset:
     mov  [rel ssh_txt_cur], rdi
     lea  rax, [rdi + rsi - 1]
@@ -2573,7 +2575,7 @@ str_sshkhtrust_usage: db "ERR SSHKHTRUST usage=<IPv4>:<port> <64lowerhexSHA256>"
 str_sshkhtrust_unavailable: db "ERR SSHKHTRUST trust_unavailable (no pin changed; owner must repair damaged or uncertain store)",0
 str_sshkhtrust_full: db "ERR SSHKHTRUST table_full (no pin evicted)",0
 str_sshkhtrust_conflict: db "ERR SSHKHTRUST conflict (existing pin retained; deliberate owner SSHKHCLEAR forgets ALL pins and requires reenrollment)",0
-str_sshkhclear_ok:       db "SSHKHCLEAR ok known_hosts=cleared",0
+str_sshkhclear_ok:       db "SSHKHCLEAR ok known_hosts=cleared (all server pins removed; client identity retained; independently verify each server fingerprint and reprovision with SSHKHTRUST before reconnecting)",0
 str_sshkhclear_need_auth1: db "ERR SSHKHCLEAR refused=owner_signed_auth1_required",0
 str_sshkhclear_failed:   db "ERR SSHKHCLEAR no_mutation_issued (trust unchanged)",0
 str_sshkhclear_uncertain: db "ERR SSHKHCLEAR commit_uncertain (new host trust refused; owner may clear again)",0

@@ -1,7 +1,7 @@
 ;; MODULE dev/snd/hda_loopback_native
 ;; LAYER 3
-;; EXPORTS hda_loopback_native_open, hda_loopback_native_tick, hda_loopback_native_busy, hln_loop, hln_bdf, hln_epoch, hln_phase, hln_error, hln_serial, hda_loopback_native_cancel, hda_loopback_native_release
-;; IMPORTS boot/native_driver_gate, dev/snd/hda_loopback, dev/snd/hda_runtime, bus/pci, boot/paging, core/time, core/dma, core/cadence
+;; EXPORTS hda_loopback_native_open, hda_loopback_native_tick, hda_loopback_native_busy, hln_loop, hln_bdf, hln_epoch, hln_phase, hln_error, hln_serial, hda_loopback_native_cancel, hda_loopback_native_release, hda_loopback_native_terminal
+;; IMPORTS boot/native_driver_gate, dev/snd/hda_loopback, dev/snd/hda_runtime, dev/snd/hda_transport, dev/snd/hda_session, dev/snd/hda_route_program, dev/snd/hda_output, dev/snd/hda_pcm, dev/snd/hda_input, dev/snd/hda_backend, bus/pci, boot/paging, core/time, core/dma, core/cadence
 ;; CAPS mmio dma
 ;; OWNER rc-codex-av
 %include "boot/native_driver_gate.inc"
@@ -26,7 +26,21 @@ hda_loopback_native_busy:
  mov rax,[rel hln_mmio]
  ret
 hda_loopback_native_open:             ; EDI=packed BDF, RSI=epoch
-    NATIVE_DRIVER_REFUSE 7
+ cmp dword [rel hln_terminal_latched],0
+ jne .terminal_refused
+ ; Same original class7 policy, with genuine SysV CALL alignment and CF intact.
+%ifdef PAOS_NATIVE_DRIVER_POLICY_LINKED
+ push rdi
+ push rsi
+ sub rsp,8
+ mov edi,7
+ mov rsi,-1
+ call native_driver_gate
+ lea rsp,[rsp+8]
+ pop rsi
+ pop rdi
+ jc .terminal_refused
+%endif
  push rbx
  push rbp
  push r12
@@ -198,8 +212,13 @@ hda_loopback_native_open:             ; EDI=packed BDF, RSI=epoch
  pop rbp
  pop rbx
  ret
+.terminal_refused:
+ mov rax,-1
+ ret
 
 hda_loopback_native_cancel:       ; RSI=exact epoch
+ cmp dword [rel hln_terminal_latched],0
+ jne .bad
  cmp rsi,[rel hln_epoch]
  jne .bad
  cmp dword [rel hln_phase],1
@@ -216,6 +235,8 @@ hda_loopback_native_cancel:       ; RSI=exact epoch
  mov rax,-1
  ret
 hda_loopback_native_release:
+ cmp dword [rel hln_terminal_latched],0
+ jne .bad
  cmp rsi,[rel hln_epoch]
  jne .bad
  cmp dword [rel hln_phase],4
@@ -278,6 +299,8 @@ hln_clock:                       ; graph callback: microseconds/known clock
  ret
 
 hda_loopback_native_tick:
+ cmp dword [rel hln_terminal_latched],0
+ jne .terminal_out
  push rbx
  mov eax,[rel hln_phase]
  cmp eax,1
@@ -361,6 +384,8 @@ hda_loopback_native_tick:
  call hln_unschedule              ; uncertainty keeps all memory/controller claim
 .out:
  pop rbx
+ ret
+.terminal_out:
  ret
 hln_unschedule:
  sub rsp,8
@@ -835,6 +860,8 @@ hln_setup:
  mov [rel hln_loop+hda_loopback.recording],rax
  ret
 
+%include "dev/snd/hda_terminal.inc"
+
 align 8
 hln_cadence_name: db "hda-owner-loopback",0
 align 8
@@ -847,6 +874,7 @@ hln_serial: dq 0
 hln_epoch: dq 0
 hln_phase: dd 0
 hln_error: dd 0
+hln_terminal_latched: dd 0         ; one-way terminal fence; no clear/rearm path
 hln_cancel: dd 0
 hln_bdf: dd 0
 hln_pci_id: dd 0

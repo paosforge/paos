@@ -1,8 +1,8 @@
 ;; MODULE gui/form_loader
 %include "core/abi/build_profile.inc"
 ;; LAYER 6
-;; EXPORTS form_loader_declare, form_loader_selftest, form_verb_unlocked, form_load_internal, form_load_index, form_load_blob, form_load_app_blob, form_load_app_staged_blob, form_lint_blob, form_ephemeral_close, form_ephemeral_reap, form_ephemeral_busy, form_error_string, form_table_ptr, form_launcher_flags, form_out_reset, form_out_put_str, form_out_put_dec, form_out_buf, form_out_ready, form_out_cur, form_active_slot, form_card_loading, form_summon_gate, form_widget_tree_text_ptr, form_wintree_append_state, form_netmon_tick, form_cadence_live_init, form_netmon_bind, form_netmon_unbind, form_netmon_members_fn, form_netmon_address_fn
-;; IMPORTS gui/widget_tabstrip, sec/platform_key_health, gui/form_events, fs/fat32_disk, fs/ext4_copy, core/unicode_edit, gui/widget, gui/widget_containers, gui/widget_progress, gui/widget_chart, gui/window, gui/window_mgmt, gui/wintree, gui/taskbar, gui/liveness_panel, svc/command, boot/pmod_loader, svc/command_udp, svc/boot_ab, dev/net/e1000e, boot/header, boot/gop, core/cadence, core/time, core/lib/fmt, core/lib/str, gui/widget_image, gui/img/img_core, gui/img/img_cache, fs/vfs, fs/ntfs_disk, svc/command_fs, gui/lock_screen, sec/session, sec/principal, sec/cpu_security_report
+;; EXPORTS form_load_app_member_blob, form_app_member_current, form_app_members_busy, form_app_members_close, form_lab_provider_matches, form_lab_guard_matches, form_lab_toggle_matches, form_guest_policy_observe, form_sysprops_policy_page, form_loader_declare, form_loader_selftest, form_verb_unlocked, form_load_internal, form_load_index, form_load_blob, form_load_app_blob, form_load_app_staged_blob, form_lint_blob, form_ephemeral_close, form_ephemeral_reap, form_ephemeral_busy, form_error_string, form_table_ptr, form_launcher_flags, form_out_reset, form_out_put_str, form_out_put_dec, form_out_buf, form_out_ready, form_out_cur, form_active_slot, form_card_loading, form_summon_gate, form_widget_tree_text_ptr, form_sysprops_diagnostics, form_wintree_append_state, form_netmon_tick, form_cadence_live_init, form_netmon_bind, form_netmon_unbind, form_netmon_members_fn, form_netmon_address_fn, form_netmon_refresh_tick, form_netmon_refresh_done, form_netmon_refresh_ms, form_netmon_refresh_window, form_netmon_refresh_generation, form_wifi_guard_matches
+;; IMPORTS fs/format_job, fs/fs_format, gui/format_confirm, fs/vol_owner, gui/adopt_confirm, gui/app_launcher, gui/settings_updates, gui/wm_pointer, hv/guest_request, hv/vmx, gui/input_route, svc/cpu_policy_report, boot/smbios, core/smp, core/memmap, svc/clipboard, gui/widget_tabstrip, sec/platform_key_health, gui/form_events, fs/fat32_disk, fs/exfat_disk, fs/ext4_disk, fs/ext4_copy, core/unicode_edit, gui/widget, gui/widget_containers, gui/widget_progress, gui/widget_chart, gui/window, gui/window_mgmt, gui/wintree, gui/taskbar, gui/liveness_panel, svc/command, boot/pmod_loader, svc/command_udp, svc/boot_ab, dev/net/e1000e, boot/header, boot/gop, core/cadence, core/time, core/lib/fmt, core/lib/str, gui/widget_image, gui/img/img_core, gui/img/img_cache, fs/vfs, fs/ntfs_disk, svc/command_fs, gui/lock_screen, sec/session, sec/principal, sec/cpu_security_report
 ;; CAPS
 ;; OWNER saga:gui_foundation_ladder
 
@@ -13,6 +13,9 @@
 %include "gui/form_explorer_observe.inc"
 
 FORM_PARSE_MAX equ 1536
+; Only the exact compiled Apps blob uses these backing capacities.
+FORM_PARSE_STORAGE equ 4096
+FORM_NODE_STORAGE equ 48
 FORM_OUT_MAX   equ 1472
 FORM_INFO_CHUNK equ 1280
 FORM_TITLE_MAX equ 40
@@ -20,6 +23,14 @@ FORM_NODE_MAX  equ 32
 FORM_NODE_ID_MAX equ 32
 FORM_SPACING   equ 8
 FORM_SYSPROPS_SNAPSHOT_MS equ 1000
+
+FORM_BIND_ABOUT_DEVICE equ 15
+FORM_BIND_ABOUT_OS equ 16
+FORM_BIND_GUEST_POLICY equ 17
+
+%include "gui/form_about.inc"
+%include "gui/form_guest_policy.inc"
+%include "gui/form_guest_policy_controls.inc"
 
 FORM_BIND_NONE      equ 0
 FORM_BIND_SYSPROPS  equ 1
@@ -35,6 +46,7 @@ FORM_BIND_NET_MEMBERS    equ 10       ; netmon.members: keep-owned member rows (
 FORM_BIND_FS_DRIVES equ 12
 FORM_BIND_FS_DETAILS equ 13
 FORM_BIND_FS_CONTEXT equ 14
+FORM_BIND_FS_FORMAT equ 18
 FORM_BIND_NET_ADDRESS    equ 11       ; netmon.address: effective selected address/route rows
 
 FORM_ERR_NONE       equ 0
@@ -77,9 +89,17 @@ FORM_TEXT_INDEX equ 25             ; T5-15 Text Viewer (gui/text_view); File Exp
 FORM_APPS_INDEX equ 26
 FORM_NETMON_INDEX equ 4
 FORM_WALLPAPERS_INDEX equ 27
-FORM_COUNT    equ 28
-FORM_SLOT_COUNT equ (FORM_COUNT + 1)
+FORM_GUEST_POLICY_INDEX equ 28
+FORM_LAB_TOGGLE_INDEX equ 29
+FORM_LAB_GUARD_INDEX equ 30
+FORM_LAB_PROVIDER_INDEX equ 31
+FORM_UPDATES_INDEX equ 32
+FORM_LAB_EDITOR_INDEX equ 33
+FORM_COUNT    equ 34
+FORM_APP_MEMBERS equ 4                 ; checked package form limit
+FORM_SLOT_COUNT equ (FORM_COUNT + 1 + FORM_APP_MEMBERS)
 FORM_EPHEMERAL_INDEX equ FORM_COUNT
+FORM_APP_INDEX equ (FORM_COUNT + 1)
 FORM_NAME     equ 0
 FORM_BLOB_PTR equ 8
 FORM_LEN      equ 16
@@ -89,18 +109,24 @@ FORM_PINNED     equ 2
 
 form_blob_demo_a: incbin "gui/forms/demo_a.frm"
 form_blob_demo_a_end: db 0
+form_name_lab_provider: db 'lab_provider',0
+form_blob_lab_provider: incbin "gui/forms/lab_provider.frm"
+form_blob_lab_provider_end: db 0
+form_name_lab_guard: db "lab_guard",0
+form_blob_lab_guard: incbin "gui/forms/lab_guard.frm"
+form_blob_lab_guard_end: db 0
+form_name_lab_editor: db "lab_editor",0
+form_blob_lab_editor: incbin "gui/forms/lab_editor.frm"
+form_blob_lab_editor_end: db 0
+form_name_lab_toggle: db "lab_toggle",0
+form_blob_lab_toggle: incbin "gui/forms/lab_toggle.frm"
+form_blob_lab_toggle_end: db 0
+
 form_blob_demo_b: incbin "gui/forms/demo_b.frm"
 form_blob_demo_b_end: db 0
 form_blob_demo_c: incbin "gui/forms/demo_c.frm"
 form_blob_demo_c_end: db 0
 form_blob_sysprops: incbin "gui/forms/sysprops.frm"
-; The shared worktree owns sysprops.frm this iteration.  Keep the consumer
-; declarative by extending its embedded data blob at the loader seam without
-; mutating those owner bytes.
-db "widget type=toggle id=night_mode x=24 y=372 w=200 h=24 text=night_mode role=switch value=0 min=0 max=1 step=1",10
-db "widget type=slider id=pointer_speed x=24 y=404 w=452 h=24 text=pointer_speed role=slider value=5 min=0 max=10 step=1",10
-db "widget type=numeric id=text_scale x=24 y=436 w=200 h=26 text=text_scale role=spinbutton value=5 min=0 max=10 step=1",10
-db "widget type=separator id=settings_divider x=24 y=476 w=452 h=2 text=settings_divider role=separator",10
 form_blob_sysprops_end: db 0
 form_blob_imgdemo: incbin "gui/forms/imgdemo.frm"
 form_blob_imgdemo_end: db 0
@@ -155,9 +181,15 @@ form_blob_terminal:
     db "window title=Terminal w=360 h=120 x=180 y=120 resizable=0 min_w=360 min_h=120 chrome=standard restore=never",10
     db "widget type=label id=route x=16 y=56 w=320 h=24 text=Opens_a_Terminal_window role=label",10
 form_blob_terminal_end: db 0
+form_name_updates: db "settings_updates",0
+form_blob_updates: incbin "gui/forms/settings_updates.frm"
+form_blob_updates_end: db 0
 form_name_settings: db "settings",0
 form_blob_settings: incbin "gui/forms/settings.frm"
 form_blob_settings_end: db 0
+form_name_guest_policy: db "guest_policy",0
+form_blob_guest_policy: incbin "gui/forms/guest_policy.frm"
+form_blob_guest_policy_end: db 0
 form_name_wallpapers: db "wallpapers",0
 form_blob_wallpapers: incbin "gui/forms/wallpapers.frm"
 form_blob_wallpapers_end: db 0
@@ -202,7 +234,7 @@ form_blob_windows_end: db 0
 form_name_card: db "card",0
 form_blob_card:
     db "form card spec=v1",10
-    db "window title=Owner_action_card w=600 h=380 x=660 y=300 resizable=0 min_w=600 min_h=380 chrome=standard restore=never",10
+    db "window title=Allow_this? w=600 h=380 x=660 y=300 resizable=0 min_w=600 min_h=380 chrome=standard restore=never",10
     db "widget type=label id=card_who x=20 y=44 w=560 h=24 text=card role=label",10
     db "widget type=label id=card_verb x=20 y=72 w=560 h=24 text=card role=label",10
     db "widget type=label id=card_arg0 x=20 y=104 w=560 h=24 text=card role=label",10
@@ -235,7 +267,44 @@ form_launcher_flags:
 
     db FORM_LAUNCHABLE                ; 27 Wallpapers, native stock picker
 
+    db FORM_LAUNCHABLE                ; 28 Guest command status
+    db 0                              ; 29 disposable lab toggle, no launcher/restore
+    db 0                              ; 30 disposable lab guard
+    db 0                              ; 31 disposable public provider fixture
+
+    db FORM_LAUNCHABLE                ; 32 Settings Updates
+
 forms_table_init:
+    lea rax, [rel form_name_updates]
+    mov [rel forms_table+FORM_UPDATES_INDEX*FORM_ENT_SZ+FORM_NAME], rax
+    lea rax, [rel form_blob_updates]
+    mov [rel forms_table+FORM_UPDATES_INDEX*FORM_ENT_SZ+FORM_BLOB_PTR], rax
+    mov qword [rel forms_table+FORM_UPDATES_INDEX*FORM_ENT_SZ+FORM_LEN], form_blob_updates_end-form_blob_updates
+    lea rax,[rel form_name_lab_provider]
+    mov [rel forms_table+FORM_LAB_PROVIDER_INDEX*FORM_ENT_SZ+FORM_NAME],rax
+    lea rax,[rel form_blob_lab_provider]
+    mov [rel forms_table+FORM_LAB_PROVIDER_INDEX*FORM_ENT_SZ+FORM_BLOB_PTR],rax
+    mov qword [rel forms_table+FORM_LAB_PROVIDER_INDEX*FORM_ENT_SZ+FORM_LEN],form_blob_lab_provider_end-form_blob_lab_provider
+    lea rax,[rel form_name_lab_editor]
+    mov [rel forms_table+FORM_LAB_EDITOR_INDEX*FORM_ENT_SZ+FORM_NAME],rax
+    lea rax,[rel form_blob_lab_editor]
+    mov [rel forms_table+FORM_LAB_EDITOR_INDEX*FORM_ENT_SZ+FORM_BLOB_PTR],rax
+    mov qword [rel forms_table+FORM_LAB_EDITOR_INDEX*FORM_ENT_SZ+FORM_LEN],form_blob_lab_editor_end-form_blob_lab_editor
+    lea rax, [rel form_name_lab_toggle]
+    mov [rel forms_table + FORM_LAB_TOGGLE_INDEX*FORM_ENT_SZ + FORM_NAME], rax
+    lea rax, [rel form_blob_lab_toggle]
+    mov [rel forms_table + FORM_LAB_TOGGLE_INDEX*FORM_ENT_SZ + FORM_BLOB_PTR], rax
+    mov qword [rel forms_table + FORM_LAB_TOGGLE_INDEX*FORM_ENT_SZ + FORM_LEN], form_blob_lab_toggle_end-form_blob_lab_toggle
+    lea rax,[rel form_name_lab_guard]
+    mov [rel forms_table+FORM_LAB_GUARD_INDEX*FORM_ENT_SZ+FORM_NAME],rax
+    lea rax,[rel form_blob_lab_guard]
+    mov [rel forms_table+FORM_LAB_GUARD_INDEX*FORM_ENT_SZ+FORM_BLOB_PTR],rax
+    mov qword [rel forms_table+FORM_LAB_GUARD_INDEX*FORM_ENT_SZ+FORM_LEN],form_blob_lab_guard_end-form_blob_lab_guard
+    lea rax, [rel form_name_guest_policy]
+    mov [rel forms_table + FORM_GUEST_POLICY_INDEX*FORM_ENT_SZ + FORM_NAME], rax
+    lea rax, [rel form_blob_guest_policy]
+    mov [rel forms_table + FORM_GUEST_POLICY_INDEX*FORM_ENT_SZ + FORM_BLOB_PTR], rax
+    mov qword [rel forms_table + FORM_GUEST_POLICY_INDEX*FORM_ENT_SZ + FORM_LEN], form_blob_guest_policy_end-form_blob_guest_policy
     lea rax, [rel form_name_text]
     mov [rel forms_table + FORM_TEXT_INDEX*FORM_ENT_SZ + FORM_NAME], rax
     lea rax, [rel form_blob_text]
@@ -410,6 +479,13 @@ form_loader_declare:
     xor  r8, r8
     xor  r9, r9
     call command_register_verb
+    lea  rdi, [rel str_verb_explorerscan]
+    lea  rsi, [rel form_cmd_verb_explorerscan]
+    xor  edx, edx
+    mov  ecx, ARGT_TEXT
+    xor  r8, r8
+    xor  r9, r9
+    call command_register_verb
     mov  edi, [rel wgt_listview_type]   ; RCQ-21: the Explorer's file list takes its presses
     lea  rsi, [rel form_explorer_capture] ; (every other listview declines: unchanged)
     call wgt_type_bind_capture
@@ -420,6 +496,7 @@ form_loader_declare:
     mov  dword [rel form_fs_cwd_len], 1
     mov  qword [rel form_sysprops_snapshot_ms], 0
     mov  qword [rel form_fsroot_snapshot_ms], 0
+    call form_exp_instance_init
     mov  ecx, FORM_SLOT_COUNT
     lea  rdi, [rel form_active_slot]
 .slots:
@@ -549,12 +626,23 @@ form_lookup:
     pop  rbx
     ret
 
-; Shared bounded blob seam.  Baked rows and runtime staging both arrive here;
-; the parser never needs to know where a declaration was stored.
-; RDI=blob pointer, RSI=exact byte length.
+; Shared bounded blob seam. RDI=blob pointer, RSI=exact byte length.
+; The Apps built-in needs more scratch than public v1 declarations. Only its
+; native address AND compiled length select that fixed bound; a copied blob,
+; matching name, or guest member retains the public byte/node limits.
 form_copy_blob_ptr:
+    mov  dword [rel form_node_limit], FORM_NODE_MAX
+    mov  edx, FORM_PARSE_MAX - 1
+    lea  rax, [rel form_blob_apps]
+    cmp  rdi, rax
+    jne  .bounded
+    cmp  rsi, form_blob_apps_end - form_blob_apps
+    jne  .bounded
+    mov  edx, FORM_PARSE_STORAGE - 1
+    mov  dword [rel form_node_limit], FORM_NODE_STORAGE
+.bounded:
     mov  rcx, rsi
-    cmp  rcx, FORM_PARSE_MAX - 1
+    cmp  rcx, rdx
     ja   .bad
     test rcx, rcx
     jz   .bad
@@ -1207,7 +1295,25 @@ form_parse_widget:
     jnz  .bad
     jmp  .next
 .bind:
-    mov  rdi, rax
+    push rax
+    mov rdi, rax
+    lea rsi, [rel val_bind_about_device]
+    call strcmp
+    pop rdi
+    test eax, eax
+    jz .bind_about_device
+    push rdi
+    lea rsi, [rel val_bind_about_os]
+    call strcmp
+    pop rdi
+    test eax, eax
+    jz .bind_about_os
+    push rdi
+    lea rsi, [rel val_bind_guest_policy]
+    call strcmp
+    pop rdi
+    test eax,eax
+    jz .bind_guest_policy
     lea  rsi, [rel val_bind_sysprops]
     call strcmp
     test rax, rax
@@ -1281,8 +1387,19 @@ form_parse_widget:
     lea  rsi, [rel val_bind_fscontext]
     call strcmp
     test rax, rax
-    jnz  .bind_summon
+    jnz  .bind_fsformat
     mov  dword [rel form_w_bind], FORM_BIND_FS_CONTEXT
+    jmp  .next
+.bind_fsformat:
+    mov  rdi, rbx
+    lea  rsi, [rel key_bind]
+    call form_key_value
+    mov  rdi, rax
+    lea  rsi, [rel val_bind_fsformat]
+    call strcmp
+    test rax, rax
+    jnz  .bind_summon
+    mov  dword [rel form_w_bind], FORM_BIND_FS_FORMAT
     jmp  .next
 .bind_summon:
     mov  rdi, rbx
@@ -1339,6 +1456,15 @@ form_parse_widget:
 .bind_summon_recents:
     mov  dword [rel form_w_bind], FORM_BIND_SUMMON_RECENTS
     jmp  .next
+.bind_about_device:
+    mov dword [rel form_w_bind], FORM_BIND_ABOUT_DEVICE
+    jmp .next
+.bind_about_os:
+    mov dword [rel form_w_bind], FORM_BIND_ABOUT_OS
+    jmp .next
+.bind_guest_policy:
+    mov dword [rel form_w_bind], FORM_BIND_GUEST_POLICY
+    jmp .next
 .bind_sysprops:
     mov  dword [rel form_w_bind], FORM_BIND_SYSPROPS
     jmp  .next
@@ -1406,7 +1532,25 @@ form_parse_widget:
     cmp  byte [rax], 0
     je   .bad
     mov  rdi, rax
+    ; widgets-01 A4: images/<seg>.<ext> names only the publishing app's own
+    ; bundle rows (launcher-scoped; zero outside its lint/load), never a
+    ; built-in; every other name is only a built-in. No fallback either way.
+    lea  rsi, [rel str_form_app_images]
+    xor  ecx, ecx
+.src_prefix:
+    mov  dl, [rsi + rcx]
+    test dl, dl
+    jz   .src_app                    ; whole 'images/' matched
+    cmp  dl, [rdi + rcx]             ; stops at the token NUL: no over-read
+    jne  .src_builtin
+    inc  ecx
+    jmp  .src_prefix
+.src_app:
+    call app_launcher_image_find
+    jmp  .src_found
+.src_builtin:
     call img_asset_find
+.src_found:
     test rax, rax
     jz   .unknown_asset
     mov  [rel form_w_src], rax
@@ -1428,7 +1572,31 @@ form_parse_widget:
     lea  rsi, [rel str_wimg_fit_scale]
     call strcmp
     test rax, rax
+    jz   .fit_scale
+    mov  rdi, r15
+    lea  rsi, [rel str_wimg_fit_contain]
+    call strcmp
+    test rax, rax
+    jz   .fit_contain
+    mov  rdi, r15
+    lea  rsi, [rel str_wimg_fit_cover]
+    call strcmp
+    test rax, rax
+    jz   .fit_cover
+    mov  rdi, r15
+    lea  rsi, [rel str_wimg_fit_tile]
+    call strcmp
+    test rax, rax
     jnz  .bad
+    mov  dword [rel form_w_fit], WIMG_FIT_TILE
+    jmp  .fit_ok
+.fit_cover:
+    mov  dword [rel form_w_fit], WIMG_FIT_COVER
+    jmp  .fit_ok
+.fit_contain:
+    mov  dword [rel form_w_fit], WIMG_FIT_CONTAIN
+    jmp  .fit_ok
+.fit_scale:
     mov  dword [rel form_w_fit], WIMG_FIT_SCALE
     jmp  .fit_ok
 .fit_center:
@@ -1942,7 +2110,7 @@ form_lint_track_id:
     test eax, eax
     jnz  .bad
     mov  ebx, [rel form_lint_seen_count]
-    cmp  ebx, FORM_NODE_MAX
+    cmp  ebx, [rel form_node_limit]
     jae  .bad
     mov  eax, ebx
     imul rax, rax, FORM_NODE_ID_MAX
@@ -1973,7 +2141,7 @@ form_layout_plan:
     push r12
     push r13
     mov  eax, [rel form_lint_seen_count]
-    cmp  eax, FORM_NODE_MAX
+    cmp  eax, [rel form_node_limit]
     jae  .bad
     mov  r12d, eax
     shl  r12d, 5
@@ -2500,10 +2668,6 @@ form_load_index:
     mov  r12d, edi
     mov  r13, rsi
     mov  r14d, edx
-    cmp  r12d, FORM_EXPLORER_INDEX
-    jne  .copy_lifetime_ready
-    call form_explorer_cancel_reset
-.copy_lifetime_ready:
     mov  edi, r12d                    ; lifetime cleanup cannot change form identity
     call form_focus_request_gate
     mov  [rel form_last_index], edi
@@ -2530,6 +2694,20 @@ form_load_index:
     mov  edx, 7
     jmp  .out
 .ordinary_form:
+    cmp r12d, FORM_LAB_TOGGLE_INDEX
+    je .lab_profile_check
+    cmp r12d, FORM_LAB_GUARD_INDEX
+    je .lab_profile_check
+    cmp r12d, FORM_LAB_PROVIDER_INDEX
+    jne .lab_checked
+.lab_profile_check:
+%ifndef PAOS_PUBLICITY_LAB_PROFILE
+%define PAOS_PUBLICITY_LAB_PROFILE 0
+%endif
+%if !PAOS_PUBLICITY_LAB_PROFILE
+    jmp .no_slot
+%endif
+.lab_checked:
     ; The resident authentication form belongs to the boot/session boundary.
     ; Generic FORMLOAD must not allocate a second copy while it is hidden.
     cmp  r12d, FORM_LOCK_INDEX
@@ -2565,6 +2743,10 @@ form_load_index:
     mov  edx, FORM_TITLE_MAX
     call form_copy_token
     mov  [rel form_load_title_ptr], r15
+    ; Explorer opens a real independent copy. Other forms keep their singleton
+    ; contract, especially the resident lock and owner-action card.
+    cmp  r12d, FORM_EXPLORER_INDEX
+    je   .explorer_copy
     ; Idempotent if the tracked slot remains live/minimized.
     lea  rbx, [rel form_active_slot]
     mov  eax, [rbx + r12*4]
@@ -2597,6 +2779,13 @@ form_load_index:
     mov  dword [rel form_prior_active_slot], -1
     jmp  .allocate
 .existing:
+    ; Disposable lab form never relaunches/reuses a live singleton.
+    cmp  r12d, FORM_LAB_TOGGLE_INDEX
+    je   .no_slot
+    cmp  r12d, FORM_LAB_GUARD_INDEX
+    je   .no_slot
+    cmp  r12d, FORM_LAB_PROVIDER_INDEX
+    je   .no_slot
     mov  [rel form_result_slot], eax
     lea  rdx, [rel wm_title]
     mov  [rdx + rax*8], r15
@@ -2640,6 +2829,12 @@ form_load_index:
     jne  .new_window                   ; app never adopts an OWNER restore shell
     cmp  byte [rel form_card_loading], 1
     je   .new_window                    ; J2b: the card never adopts a window it did not open
+    cmp  r12d, FORM_LAB_TOGGLE_INDEX
+    je   .new_window                    ; fresh lab form cannot adopt a restored shell
+    cmp  r12d, FORM_LAB_PROVIDER_INDEX
+    je   .new_window
+    cmp  r12d, FORM_LAB_GUARD_INDEX
+    je   .new_window                    ; disposable native C5 fixture
     cmp  r12d, FORM_RECOVERY_INDEX
     je   .new_window                    ; an automatic notice cannot consume a restored app shell
     call form_find_adoptable_shell
@@ -2649,6 +2844,13 @@ form_load_index:
     mov  [rel form_result_slot], eax
     mov  byte [rel form_adopted_shell], 1
     jmp  .materialize
+.explorer_copy:
+    ; A2: explicit open may load the sealed registry once. Painting only reads
+    ; its owner-private cached catalog; no firmware or disk scan from paint.
+    call vol_owner_read_prepare
+    mov  eax, [rel form_active_slot + FORM_EXPLORER_INDEX*4]
+    mov  [rel form_prior_active_slot], eax
+    jmp  .allocate
 .new_window:
     call wmx_find_free_slot
     cmp  eax, -1
@@ -2690,7 +2892,8 @@ form_load_index:
     mov  ecx, [rel form_win_w]
     mov  r8d, [rel form_win_h]
     movzx r9d, byte [rel form_win_restore]
-    call wmx_open_window
+    mov  r10, [rel form_load_title_ptr]  ; stable per-form identity, not title text
+    call wmx_open_app_window
     cmp  eax, -1
     je   .no_slot
     mov  [rel form_current_win], eax
@@ -2765,6 +2968,14 @@ form_load_index:
     mov  dword [rel wgt_alloc_next], -1
     test eax, eax
     jnz  .materialize_fail
+    ; Materialization draws are suspended. Publish the instance only after all
+    ; widgets exist, before any ordinary paint/callback can select them. A
+    ; refused restored shell keeps its original title and retry eligibility.
+    cmp  r12d, FORM_EXPLORER_INDEX
+    jne  .instance_ready
+    mov  edi, [rel form_current_win]
+    call form_exp_instance_begin
+.instance_ready:
     ; Publish form ownership only after every widget is materialized.  A
     ; restored shell remains byte-for-byte window state until this commit.
     lea  rbx, [rel form_active_slot]
@@ -2776,6 +2987,30 @@ form_load_index:
     mov  rcx, [rel form_load_title_ptr]
     mov  [rdx + rax*8], rcx
 .materialized:
+    cmp r12d,FORM_LAB_TOGGLE_INDEX
+    jne .lab_birth_ready
+    call form_lab_toggle_bound
+.lab_birth_ready:
+    cmp r12d,FORM_LAB_GUARD_INDEX
+    jne .guard_birth_ready
+    call form_lab_guard_bound
+.guard_birth_ready:
+    cmp r12d,FORM_WIFI_INDEX
+    jne .wifi_guard_birth_ready
+    call form_wifi_guard_bound
+.wifi_guard_birth_ready:
+    cmp r12d,FORM_LAB_PROVIDER_INDEX
+    jne .provider_birth_ready
+    call form_lab_provider_bound
+.provider_birth_ready:
+    cmp r12d, 3
+    jne .about_ready
+    call form_about_loaded
+.about_ready:
+    cmp r12d,FORM_GUEST_POLICY_INDEX
+    jne .guest_policy_ready
+    call gp_owner_loaded
+.guest_policy_ready:
     mov  eax, [rel form_plan_widgets]
     mov  [rel form_result_widgets], eax
     cmp  byte [rel form_adopted_shell], 1
@@ -2858,6 +3093,18 @@ form_load_index:
     mov  eax, 1
     jmp  .out
 .result:
+    cmp r12d, FORM_RECOVERY_INDEX
+    jne .updates_page
+    push rax
+    call settings_updates_discovery_loaded
+    pop rax
+.updates_page:
+    cmp r12d, FORM_UPDATES_INDEX
+    jne .updates_ready
+    push rax
+    call settings_updates_loaded
+    pop rax
+.updates_ready:
     mov  ecx, [rel form_result_slot]
     mov  edx, [rel form_result_widgets]
 .out:
@@ -2995,6 +3242,304 @@ form_load_app_blob_entry:
     pop  r12
     pop  rbx
     pop  r15
+    ret
+
+; Native checked-package member entry. This does not accept a guest path or
+; grant authority. The launcher owns the immutable storage until all four
+; members have closed. RDI blob, RSI bytes, RDX stable name, RCX enforced app
+; principal, R8D member0..3, R9D staged0/1. Returns normal EAX/ECX/EDX loader ABI.
+; Each member has its own table/title identity, separate from FORMLOAD scratch.
+form_load_app_member_blob:
+    push rbx
+    push rbp
+    push r12
+    push r13
+    push r14
+    push r15
+    sub rsp,24
+    mov rbx,rdi
+    mov r12,rsi
+    mov r13,rdx
+    mov r14,rcx
+    mov ebp,r8d
+    mov r15d,r9d
+    cmp byte [rel cmd_in_dispatch],0
+    jne .bad
+    cmp qword [rel form_app_owner],0
+    jne .bad
+    cmp ebp,FORM_APP_MEMBERS
+    jae .bad
+    cmp r15d,1
+    ja .bad
+    cmp r14,PRIN_HOUSEHOLD
+    jbe .bad
+    cmp r14,WM_OWNER_CHROME
+    je .bad
+    test rbx,rbx
+    jz .bad
+    test r13,r13
+    jz .bad
+    cmp byte [r13],0
+    je .bad
+    test r12,r12
+    jz .bad
+    cmp r12,FORM_PARSE_MAX-1
+    ja .bad
+    call session_shell_require_unlocked
+    test eax,eax
+    jnz .bad
+    ; Live member storage cannot be changed, including an equal name in a
+    ; different buffer. Full raw generation prevents packed-id wrap aliases.
+    mov edi,ebp
+    call form_app_member_current
+    test rax,rax
+    jz .check_storage
+    cmp rdx,r14
+    jne .bad
+    lea edi,[rbp+FORM_APP_INDEX]
+    call form_table_ptr
+    cmp [rax+FORM_NAME],r13
+    jne .bad
+    cmp [rax+FORM_BLOB_PTR],rbx
+    jne .bad
+    cmp [rax+FORM_LEN],r12
+    jne .bad
+    ; A lock-hidden member remains storage-live but cannot be re-opened.
+    lea rax,[rel form_active_slot]
+    mov eax,[rax+rbp*4+FORM_APP_INDEX*4]
+    lea rdx,[rel wm_state]
+    cmp dword [rdx+rax*4],LOCK_HIDDEN
+    je .bad
+    jmp .new
+.check_storage:
+    mov edi,ebp
+    call form_app_member_storage_busy
+    test eax,eax
+    jnz .bad
+    ; A stale tracked slot must never be adopted by the generic loader.
+    lea rax,[rel form_active_slot]
+    mov dword [rax+rbp*4+FORM_APP_INDEX*4],-1
+.new:
+    lea edi,[rbp+FORM_APP_INDEX]
+    call form_table_ptr
+    mov [rax+FORM_NAME],r13
+    mov [rax+FORM_BLOB_PTR],rbx
+    mov [rax+FORM_LEN],r12
+    mov [rel form_app_owner],r14
+    mov [rel form_app_staged],r15b
+    lea edi,[rbp+FORM_APP_INDEX]
+    xor esi,esi
+    xor edx,edx
+    call form_load_index
+    mov byte [rel form_app_staged],0
+    mov qword [rel form_app_owner],0
+    test eax,eax
+    jnz .failed
+    mov [rsp],ecx
+    mov [rsp+8],edx
+    mov edi,ecx
+    call wmx_window_id
+    test eax,eax
+    jz .id_failed
+    lea rdx,[rel form_app_member_ids]
+    mov [rdx+rbp*4],eax
+    mov ecx,[rsp]
+    lea rdx,[rel wm_gen]
+    mov eax,[rdx+rcx*4]
+    lea rdx,[rel form_app_member_gens]
+    mov [rdx+rbp*4],eax
+    lea rdx,[rel form_app_member_owners]
+    mov [rdx+rbp*8],r14
+    lea rdx,[rel wm_restore_class]
+    mov byte [rdx+rcx],WM_RESTORE_NEVER
+    mov edx,[rsp+8]
+    xor eax,eax
+    jmp .out
+.id_failed:
+    ; The new WM lifetime must have a nonzero public id. Never leave a live
+    ; window borrowing declaration storage when that publication fails.
+    mov edi,[rsp]
+    mov [rsp+16],rbx             ; retain the aligned outgoing call site
+    call wmx_close_slot
+    mov rbx,[rsp+16]
+.failed:
+    ; A failed lint/allocation cannot leave borrowed declaration pointers.
+    ; A prior live member is retained on failure, as with the stock loader.
+    mov edi,ebp
+    call form_app_member_current
+    test rax,rax
+    jnz .bad
+    lea edi,[rbp+FORM_APP_INDEX]
+    call form_table_ptr
+    mov qword [rax+FORM_NAME],0
+    mov qword [rax+FORM_BLOB_PTR],0
+    mov qword [rax+FORM_LEN],0
+    lea rax,[rel form_active_slot]
+    mov dword [rax+rbp*4+FORM_APP_INDEX*4],-1
+.bad:
+    mov eax,1
+.out:
+    add rsp,24
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbp
+    pop rbx
+    ret
+
+; Read-only identity of a native package member. EDI0..3 -> RAX packed id,
+; ECX full raw generation, RDX enforced owner, or all zero. No reaping, focus,
+; reset, allocation or authority change. Lock-hidden is live storage too.
+form_app_member_current:
+    push rbx
+    push r12
+    mov ebx,edi
+    cmp ebx,FORM_APP_MEMBERS
+    jae .bad
+    lea rax,[rel form_app_member_ids]
+    mov r12d,[rax+rbx*4]
+    test r12d,r12d
+    jz .bad
+    movzx edi,r12b
+    cmp edi,WM_MAX
+    jae .bad
+    lea rax,[rel wm_gen]
+    mov ecx,[rax+rdi*4]
+    mov eax,ecx
+    shl eax,8
+    or eax,edi
+    cmp eax,r12d
+    jne .bad
+    lea rax,[rel form_app_member_gens]
+    cmp ecx,[rax+rbx*4]
+    jne .bad
+    lea rax,[rel wm_owner]
+    mov rdx,[rax+rdi*8]
+    lea rax,[rel form_app_member_owners]
+    cmp rdx,[rax+rbx*8]
+    jne .bad
+    test rdx,rdx
+    jz .bad
+    lea rax,[rel wm_state]
+    mov eax,[rax+rdi*4]
+    cmp eax,WM_VISIBLE
+    je .live
+    cmp eax,WM_MIN
+    je .live
+    cmp eax,LOCK_HIDDEN
+    jne .bad
+.live:
+    ; Even a same-owner window must retain this exact native form identity.
+    lea rax,[rel wm_title]
+    mov rax,[rax+rdi*8]
+    lea rsi,[rel form_titles]
+    imul edi,ebx,FORM_TITLE_MAX
+    add rsi,rdi
+    add rsi,FORM_APP_INDEX*FORM_TITLE_MAX
+    cmp rax,rsi
+    jne .bad
+    lea rax,[rel form_active_slot]
+    mov edi,[rax+rbx*4+FORM_APP_INDEX*4]
+    movzx eax,r12b
+    cmp edi,eax
+    jne .bad
+    mov eax,r12d
+    jmp .out
+.bad:
+    xor eax,eax
+    xor ecx,ecx
+    xor edx,edx
+.out:
+    pop r12
+    pop rbx
+    ret
+
+; Storage lifetime is deliberately stricter than authority. If any live WM
+; slot still borrows this member's stable title, keep its declarations pinned,
+; even when owner/generation changed and current() correctly returns no grant.
+; EDI member index, EAX1 busy /0 free. No mutation or authority is returned.
+form_app_member_storage_busy:
+    cmp edi,FORM_APP_MEMBERS
+    jae .busy
+    imul eax,edi,FORM_TITLE_MAX
+    lea r8,[rel form_titles+FORM_APP_INDEX*FORM_TITLE_MAX]
+    add r8,rax
+    xor ecx,ecx
+    lea r9,[rel wm_title]
+    lea r10,[rel wm_state]
+.scan:
+    cmp [r9+rcx*8],r8
+    jne .next
+    mov eax,[r10+rcx*4]
+    cmp eax,WM_VISIBLE
+    je .busy
+    cmp eax,WM_MIN
+    je .busy
+    cmp eax,LOCK_HIDDEN
+    je .busy
+.next:
+    inc ecx
+    cmp ecx,WM_MAX
+    jb .scan
+    xor eax,eax
+    ret
+.busy:
+    mov eax,1
+    ret
+
+; Native lifecycle helpers, never a guest verb. Clear may release the package
+; storage only when *all* members are gone. Close only exact current identities
+; for the enforced principal; foreign/reused slots remain untouched and busy.
+form_app_members_busy:
+    push rbx
+    xor ebx,ebx
+.loop:
+    mov edi,ebx
+    call form_app_member_storage_busy
+    test eax,eax
+    jnz .out
+    inc ebx
+    cmp ebx,FORM_APP_MEMBERS
+    jb .loop
+.out:
+    pop rbx
+    ret
+
+; RDI enforced app principal. Returns1 if any storage remains busy, otherwise0.
+form_app_members_close:
+    push rbx
+    push r12
+    mov r12,rdi
+    cmp byte [rel cmd_in_dispatch],0
+    jne .busy
+    cmp r12,PRIN_HOUSEHOLD
+    jbe .busy
+    cmp r12,WM_OWNER_CHROME
+    je .busy
+    xor ebx,ebx
+.loop:
+    mov edi,ebx
+    call form_app_member_current
+    test eax,eax
+    jz .next
+    cmp rdx,r12
+    jne .next
+    movzx edi,al
+    push rbx
+    call wmx_close_slot
+    pop rbx
+.next:
+    inc ebx
+    cmp ebx,FORM_APP_MEMBERS
+    jb .loop
+    pop r12
+    pop rbx
+    jmp form_app_members_busy
+.busy:
+    pop r12
+    pop rbx
+    mov eax,1
     ret
 
 ; Runtime form entry. RDI=blob, RSI=len, RDX=stable name, ECX=focus request.
@@ -3629,8 +4174,8 @@ form_build_sysprops:
 .source:
     call form_live_put_str
     lea  rdi, [rel form_cpu_security_buf]
-    mov  esi, 384
-    mov  edx, 1                        ; compact shared native snapshot
+    mov  esi, 768
+    xor  edx, edx                      ; full named controls and retained BSP facts
     call cpu_security_report_text
     lea  rdi, [rel form_cpu_security_unavailable]
     test rax, rax
@@ -3723,12 +4268,99 @@ form_build_netaddress:
     lea  rax, [rel form_optional_empty]
     ret
 
+; Read-only WIDGETGET diagnostics on the current chrome About facts list.
+; This is the full bounded source of the stock Advanced/Next details pages,
+; not a visual/physical observation or a second CPU sampler. No UI mutation.
+form_sysprops_policy_page:           ; EDI=current facts widget, ESI=page0..63
+    push rbx
+    mov ebx,esi
+    call form_sysprops_current
+    test rax,rax
+    jz .out
+    lea rdi,[rel form_cpu_policy_page_buf]
+    mov esi,1024
+    mov edx,ebx
+    call cpu_policy_report_page
+    test rax,rax
+    js .missing
+    lea rax,[rel form_cpu_policy_page_buf]
+    jmp .out
+.missing:
+    xor eax,eax
+.out:
+    pop rbx
+    ret
+
+form_sysprops_current:
+    push rbx
+    cmp edi, WGT_MAX
+    jae .missing
+    cmp byte [rel session_locked], SESSION_LOCKED
+    je .missing
+    call wgt_slot_ptr
+    cmp dword [rax + WGI_BIND], FORM_BIND_SYSPROPS
+    jne .missing
+    mov ebx, [rax + WGI_WIN]
+    cmp ebx, WM_MAX
+    jae .missing
+    cmp ebx, [rel form_active_slot + 3*4]
+    jne .missing
+    lea rcx, [rel wm_state]
+    cmp dword [rcx + rbx*4], WM_VISIBLE
+    jne .missing
+    lea rcx, [rel wm_owner]
+    cmp qword [rcx + rbx*8], WM_OWNER_CHROME
+    jne .missing
+    lea rcx, [rel wm_title]
+    lea rdx, [rel form_titles + 3*FORM_TITLE_MAX]
+    cmp [rcx + rbx*8], rdx
+    jne .missing
+    mov eax,1
+    jmp .out
+.missing:
+    xor eax, eax
+.out:
+    pop rbx
+    ret
+
+; Same guard for diagnostics and cached policy; page reads never refresh the
+; live calling-CPU formatter, even if pagination takes longer than its cache.
+form_sysprops_diagnostics:
+    push rbx
+    call form_sysprops_current
+    test rax,rax
+    jz .out
+    call form_build_sysprops
+.out:
+    pop rbx
+    ret
+
 form_widget_tree_text_ptr:
     push rbx
     push r12
+    mov  eax, [rel form_exp_instance_current]
+    push rax                         ; a nested paint must not change its caller
     mov  r12d, edi
     call wgt_slot_ptr
+    ; Only the form's text presenters interpret WGI_BIND as a text binding.
+    ; Console grids use the same field for backend 1/2, which otherwise aliases
+    ; sysprops/netmon and makes WINTREE/snapshot report unrelated system text.
+    cmp  dword [rax + WGI_TYPE], WGT_TYPE_LABEL
+    je   .text_binding
+    mov  ecx, [rel wgt_listview_type]
+    inc  ecx
+    cmp  [rax + WGI_TYPE], ecx
+    je   .text_binding
+    xor  eax, eax
+    jmp  .out
+.text_binding:
     mov  ebx, [rax + WGI_BIND]
+    cmp ebx, FORM_BIND_GUEST_POLICY
+    je .guest_policy
+    cmp ebx, FORM_BIND_ABOUT_DEVICE
+    je .about_device
+    cmp ebx, FORM_BIND_ABOUT_OS
+    je .about_os
     cmp  ebx, FORM_BIND_SYSPROPS
     je   .sysprops
     cmp  ebx, FORM_BIND_NETMON
@@ -3753,7 +4385,24 @@ form_widget_tree_text_ptr:
     je   .summon
     xor  eax, eax
     jmp  .out
+.guest_policy:
+    mov edi,r12d
+    call form_guest_policy_text
+    jmp .out
+.about_device:
+    call form_about_device
+    jmp .out
+.about_os:
+    call form_about_os
+    jmp .out
 .sysprops:
+    mov ecx, [rel form_active_slot + 3*4]
+    cmp [rax + WGI_WIN], ecx
+    jne .sysprops_full
+    mov edi, r12d
+    call form_about_advanced
+    jmp .out
+.sysprops_full:
     call form_build_sysprops
     jmp  .out
 .netmon:
@@ -3761,21 +4410,44 @@ form_widget_tree_text_ptr:
     jmp  .out
 .netmembers:
     call form_build_netmembers
-    jmp  .out
+    jmp  .netmon_rendered
 .netaddress:
     call form_build_netaddress
-    jmp  .out
+.netmon_rendered:
+    test rax,rax
+    jz .out
+    push rax                         ; retain the actual renderer's text pointer
+    mov edi,r12d
+    call form_netmon_refresh_draw     ; only records while the cadence is painting
+    pop rax
+    jmp .out
 .fsdrives:
+    mov  edi, r12d
+    call form_exp_instance_select_widget
+    test eax, eax
+    jz   .out
     call form_build_fsdrives
     jmp  .out
 .fsdetails:
+    mov  edi, r12d
+    call form_exp_instance_select_widget
+    test eax, eax
+    jz   .out
     call form_build_fsdetails
     jmp  .out
 .fsroot:
+    mov  edi, r12d
+    call form_exp_instance_select_widget
+    test eax, eax
+    jz   .out
     mov  edi, r12d                      ; the file list: its height is the page
     call form_build_fsroot
     jmp  .out
 .fsstatus:
+    mov  edi, r12d
+    call form_exp_instance_select_widget
+    test eax, eax
+    jz   .out
     call form_build_fsstatus
     push rax
     mov  edi, r12d
@@ -3786,6 +4458,11 @@ form_widget_tree_text_ptr:
     mov  edi, r12d
     call naming_picker_text_for_list
 .out:
+    call form_exp_instance_text
+    mov  rbx, rax                     ; bank-owned result survives restoring caller
+    pop  rdi
+    call form_exp_instance_select_slot
+    mov  rax, rbx
     pop  r12
     pop  rbx
     ret
@@ -4289,9 +4966,12 @@ form_fsroot_render:
 form_fsstatus_render:                 ; mount, files, dir (the path), write, note
     ; The existing four visible volume rows also carry the current copy. No
     ; percentage guesses or new UI geometry: the native record owns its phase.
+    cmp  byte [rel form_exp_rename_notice], 0
+    jne  .ordinary
     call form_explorer_copy_status
     test eax, eax
     jnz  .out
+.ordinary:
     lea  rax, [rel form_fsstatus_buf]
     mov  [rel form_fsroot_cur], rax
     mov  byte [rax], 0
@@ -4322,6 +5002,14 @@ form_fsstatus_render:                 ; mount, files, dir (the path), write, not
     call form_fsroot_put_name
     lea  rdi, [rel str_fsstatus_write]
     call form_fsroot_put_str
+    mov  edi, [rel vfs_disk_handle]
+    call fat32_disk_owned_read_state  ; cached read-only view, never probes media
+    lea  rdi, [rel str_fsstatus_owned_dirty]
+    cmp  eax, 1
+    je   .w_put
+    lea  rdi, [rel str_fsstatus_owned_ro]
+    test eax, eax
+    jz   .w_put
     call ntfs_disk_write_state        ; 1 armed / 0 readonly / -1 not an NTFS mount
     lea  rdi, [rel str_fsstatus_armed]
     cmp  eax, 1
@@ -4341,12 +5029,56 @@ form_fsstatus_render:                 ; mount, files, dir (the path), write, not
 .out:
     ret
 
+ ; Native format progress shares the existing fs.status buffer/renderer only.
+; It never borrows an Explorer copy id or invokes its cancellation route.
+form_explorer_format_status:
+    lea rdi,[rel form_format_progress]
+    mov esi,32
+    call format_job_snapshot
+    cmp eax,32
+    jne .none
+    lea rax,[rel form_fsstatus_buf]
+    mov [rel form_fsroot_cur],rax
+    mov byte [rax],0
+    lea rax,[rel form_fsstatus_buf+FORM_FSSTATUS_BUF-1]
+    mov [rel form_fsroot_end],rax
+    lea rdi,[rel str_exp_format_phase]
+    call form_fsroot_put_str
+    mov eax,[rel form_format_progress]
+    dec eax
+    cmp eax,7
+    ja .none
+    imul eax,24
+    lea rdi,[rel str_exp_format_states]
+    add rdi,rax
+    call form_fsroot_put_str
+    lea rdi,[rel str_exp_format_step]
+    call form_fsroot_put_str
+    mov rdi,[rel form_format_progress+8]
+    call form_fsroot_put_dec
+    lea rdi,[rel str_exp_copy_of]
+    call form_fsroot_put_str
+    mov rdi,[rel form_format_progress+16]
+    call form_fsroot_put_dec
+    mov eax,1
+    ret
+.none:
+    xor eax,eax
+    ret
+
 ; Native copy observer for fs.status. RAX=1 rendered, 0 ordinary volume rows.
 ; Observe this Explorer's accepted job by exact id; before its first copy use
 ; the native latest job. A refused start leaves the previous record intact. Read it afresh for every render,
 ; including WINTREE. No backend step, cancel, flush, or disk read here. The BSP
 ; GUI owns this bounded render; these helpers neither yield nor perform I/O.
 form_explorer_copy_status:
+    call form_explorer_format_status
+    test eax,eax
+    jnz .format_done
+    jmp form_explorer_copy_status_legacy
+.format_done:
+    ret
+form_explorer_copy_status_legacy:
     push rbx
     call session_shell_local_authority
     cmp  rax, PRIN_OWNER
@@ -4435,6 +5167,16 @@ form_explorer_copy_status:
     sub  eax, 2
     cmp  eax, 3
     ja   .request_done
+    cmp  eax, 3                      ; refusal detail also beside an older job
+    jne  .request_generic
+    cmp  qword [rel form_exp_note], 0
+    je   .request_generic
+    lea  rdi, [rel str_fsstatus_note]
+    call form_fsroot_put_str
+    mov  rdi, [rel form_exp_note]
+    call form_fsroot_put_str
+    jmp  .request_done
+.request_generic:
     imul eax, 32
     lea  rdi, [rel str_exp_paste_notices]
     add  rdi, rax
@@ -4812,7 +5554,15 @@ form_explorer_cancel_reset:
     call form_exp_observe_reset
     mov  byte [rel form_exp_file_kind], 0
     mov  byte [rel form_exp_file_ready], 0
+    mov  byte [rel form_exp_file_move], 0
+    mov  qword [rel form_exp_file_generation], 0
     mov  byte [rel form_exp_paste_pending], 0
+    mov  byte [rel form_exp_delete_pending], 0
+    mov  byte [rel form_exp_rename_pending], 0
+    mov  byte [rel form_exp_rename_edit], 0
+    mov  byte [rel form_exp_rename_notice], 0
+    mov  byte [rel form_exp_rename_new], 0
+    mov  byte [rel form_exp_latch], 0
     mov  qword [rel form_exp_owned_job], 0
     mov  byte [rel form_exp_owned_queued], 0
     mov  byte [rel form_exp_paste_notice], 0
@@ -5175,10 +5925,19 @@ form_explorer_file_copy:
     push rbx
     push r12
     mov  ebx, edi
+    cmp  byte [rel form_exp_rename_pending], 0
+    jne  .out
+    cmp  byte [rel form_exp_rename_edit], 0
+    jne  .out
+    mov  byte [rel form_exp_rename_notice], 0
+    mov  byte [rel form_exp_rename_new], 0
     call form_exp_observe_reset
     mov  byte [rel form_exp_file_ready], 0
     cmp  byte [rel form_exp_paste_pending], 0
     jne  .out
+    cmp  byte [rel form_exp_delete_pending], 0
+    jne  .out
+    mov  byte [rel form_exp_file_move], 0
     lea  r12, [rel form_exp_file_stamp]
     call session_shell_local_authority
     mov  [r12 + 8], rax
@@ -5253,14 +6012,115 @@ form_explorer_file_copy:
     pop  rbx
     ret
 
+; Cut is a local regular-file intent, not a write or a persistent grant.
+; Reuse the exact guarded source snapshot. A namespace write before Paste
+; invalidates it, including a mount selection away and back. Never convert an
+; already pending Move into a copy when another key arrives.
+form_explorer_file_cut:
+    cmp  byte [rel form_exp_paste_pending], 0
+    jne  .out
+    cmp  byte [rel input_key_origin], KO_HUMAN
+    jne  .out
+    sub  rsp, 8
+    call form_explorer_file_copy
+    add  rsp, 8
+    test eax, eax
+    jz   .out
+    cmp  byte [rel form_exp_file_kind], 0
+    jne  .unsupported
+    mov  rax, [rel vfs_write_generation]
+    mov  [rel form_exp_file_generation], rax
+    mov  byte [rel form_exp_file_move], 1
+    lea  rax, [rel str_exp_move_ready]
+    mov  [rel form_exp_note], rax
+    mov  eax, 1
+    ret
+.unsupported:
+    mov  byte [rel form_exp_file_ready], 0
+    call form_exp_observe_reset
+    lea  rax, [rel str_exp_move_unsupported]
+    mov  [rel form_exp_note], rax
+.out:
+    xor  eax, eax
+    ret
+
+; T5-15.4 HUMAN latch (SEC 89584, V-C6). A paste is dispatched later, from idle, so
+; the gesture's origin is taken here. Any non-HUMAN key or pointer event, raise or
+; lock since then, or the short deadline, ends it. It spends on its one read.
+FORM_EXP_LATCH_US equ 2000000
+
+form_exp_latch_gesture:
+    mov  byte [rel form_exp_latch], 0
+    cmp  byte [rel input_key_origin], KO_HUMAN
+    jne  .out
+    mov  eax, [rel input_other_origin_seq]
+    mov  [rel form_exp_latch_keys], eax
+    mov  eax, [rel sp_ptr_inj_seq]
+    mov  [rel form_exp_latch_ptrs], eax
+    mov  eax, [rel wm_zcounter]
+    mov  [rel form_exp_latch_z], eax
+    mov  rax, [rel session_authority_epoch]
+    mov  [rel form_exp_latch_epoch], rax
+    call time_monotonic_now_us
+    add  rax, FORM_EXP_LATCH_US
+    mov  [rel form_exp_latch_end], rax
+    mov  byte [rel form_exp_latch], 1
+.out:
+    ret
+
+; RDI=request, RSI=verb id. Sets the one-shot only on a live latch.
+form_exp_latch_spend:
+    cmp  byte [rel form_exp_latch], 1
+    mov  byte [rel form_exp_latch], 0
+    jne  .out
+    mov  eax, [rel input_other_origin_seq]
+    cmp  eax, [rel form_exp_latch_keys]
+    jne  .out
+    mov  eax, [rel sp_ptr_inj_seq]
+    cmp  eax, [rel form_exp_latch_ptrs]
+    jne  .out
+    mov  eax, [rel wm_zcounter]
+    cmp  eax, [rel form_exp_latch_z]
+    jne  .out
+    mov  rax, [rel session_authority_epoch]
+    cmp  rax, [rel form_exp_latch_epoch]
+    jne  .out
+    push rdi
+    push rsi
+    sub  rsp, 8
+    call time_monotonic_now_us
+    add  rsp, 8
+    pop  rsi
+    pop  rdi
+    cmp  rax, [rel form_exp_latch_end]
+    jae  .out
+    call command_local_human_set
+    mov  eax, 1
+    ret
+.out:
+    xor  eax, eax
+    ret
+
 form_explorer_file_paste:
     push r12
+    cmp  byte [rel form_exp_rename_pending], 0
+    jne  .out
+    cmp  byte [rel form_exp_rename_edit], 0
+    jne  .out
+    cmp  byte [rel form_exp_delete_pending], 0
+    jne  .out
     lea  r12, [rel form_exp_file_stamp]
     cmp  edi, [r12 + 64]
     jne  .out
     cmp  byte [rel form_exp_file_ready], 1
     jne  .out
     mov  byte [rel form_exp_file_ready], 0 ; spend even if custody/path is lost
+    cmp  byte [rel form_exp_file_move], 1
+    jne  .source_current
+    mov  rax, [rel vfs_write_generation]
+    cmp  rax, [rel form_exp_file_generation]
+    jne  .unsupported
+.source_current:
     call form_exp_file_guard
     test eax, eax
     jz   .unsupported
@@ -5277,6 +6137,12 @@ form_explorer_file_paste:
     call form_exp_paste_guard
     test eax, eax
     jz   .unsupported
+    cmp  byte [rel form_exp_file_move], 1
+    jne  .same_mount_checked
+    mov  rax, [rel form_exp_file_stamp + 40]
+    cmp  rax, [r12 + 40]
+    jne  .unsupported                ; no asynchronous cross-volume deletion grant
+.same_mount_checked:
     lea  rdi, [rel form_exp_file_dst]
     lea  rsi, [rel form_fs_cwd]
     lea  rdx, [rel form_exp_file_name]
@@ -5297,9 +6163,16 @@ form_explorer_file_paste:
     mov  edx, 16
     call fmt_hex
     mov  byte [rel form_exp_paste_pending], 1
+    call form_exp_latch_gesture
     mov  byte [rel form_exp_paste_notice], 2
     lea  rax, [rel str_exp_paste_pending]
     mov  [rel form_exp_note], rax
+    cmp  byte [rel form_exp_file_move], 1
+    jne  .pending_ready
+    mov  byte [rel form_exp_paste_notice], 5
+    lea  rax, [rel str_exp_move_pending]
+    mov  [rel form_exp_note], rax
+.pending_ready:
     mov  eax, 1
     jmp  .done
 .unsupported:
@@ -5311,6 +6184,53 @@ form_explorer_file_paste:
     pop  r12
     ret
 
+; RDI/RSI paths -> EAX=0 only for a no-op on this guarded mount.
+; exFAT folds ASCII a-z in exf_t_path; other backends keep bytewise identity.
+; R12 is the destination stamp already validated by form_exp_paste_guard.
+form_exp_move_same_path:
+    push rdi
+    push rsi
+    mov  rax, [r12 + 24]
+    mov  rdi, [rax + fs_ops.name]
+    test rdi, rdi
+    jz   .bytewise
+    lea  rsi, [rel str_exp_move_exfat_backend]
+    call strcmp
+    test eax, eax
+    jnz  .bytewise
+    pop  rsi
+    pop  rdi
+.fold:
+    movzx eax, byte [rdi]
+    movzx ecx, byte [rsi]
+    cmp  al, 'a'
+    jb   .source_folded
+    cmp  al, 'z'
+    ja   .source_folded
+    sub  eax, 32
+.source_folded:
+    cmp  cl, 'a'
+    jb   .dest_folded
+    cmp  cl, 'z'
+    ja   .dest_folded
+    sub  ecx, 32
+.dest_folded:
+    cmp  eax, ecx
+    jne  .different
+    test eax, eax
+    jz   .done
+    inc  rdi
+    inc  rsi
+    jmp  .fold
+.different:
+    sub  eax, ecx
+.done:
+    ret
+.bytewise:
+    pop  rsi
+    pop  rdi
+    jmp  strcmp
+
 ; Idle-only one-shot dispatch through the unchanged registry/owner admission.
 form_explorer_paste_tick:
     cmp  byte [rel form_exp_paste_pending], 1
@@ -5321,6 +6241,11 @@ form_explorer_paste_tick:
     push r12
     lea  r12, [rel form_exp_dest_stamp]
     lea  rax, [rel str_exp_paste_not_sent]
+    cmp  byte [rel form_exp_file_move], 1
+    jne  .initial_note
+    mov  byte [rel form_exp_paste_notice], 5
+    lea  rax, [rel str_exp_move_not_sent]
+.initial_note:
     mov  [rel form_exp_note], rax
     call form_exp_paste_guard
     test eax, eax
@@ -5336,6 +6261,20 @@ form_explorer_paste_tick:
     mov  ecx, FORM_FS_CWD_MAX
     repe cmpsb
     jne  .out                         ; navigation after paste invalidates it
+    cmp  byte [rel form_exp_file_move], 1
+    jne  .move_checked
+    mov  rax, [rel form_exp_file_stamp + 40]
+    cmp  rax, [r12 + 40]
+    jne  .out
+    mov  rax, [rel vfs_write_generation]
+    cmp  rax, [rel form_exp_file_generation]
+    jne  .out
+    lea  rdi, [rel form_exp_file_src]
+    lea  rsi, [rel form_exp_file_dst]
+    call form_exp_move_same_path
+    test eax, eax
+    jz   .out                         ; a no-op rename is not a completed Move
+.move_checked:
     lea  rdi, [rel form_exp_paste_arg]
     mov  rax, [rel form_exp_file_stamp + 40]
     cmp  rax, [r12 + 40]
@@ -5363,6 +6302,8 @@ form_explorer_paste_tick:
     inc  rdi
     lea  rsi, [rel form_exp_paste_nonce]
     call .append
+    cmp  byte [rel form_exp_file_move], 1
+    je   .argument_done
     lea  rsi, [rel str_exp_paste_mode]
     call .append                     ; files: <= 223 bytes including NUL
     cmp  byte [rel form_exp_file_kind], FORM_EXP_DIR
@@ -5372,6 +6313,10 @@ form_explorer_paste_tick:
 .argument_done:
     mov  byte [rdi], 0
     lea  rdi, [rel str_exp_paste_verb]
+    cmp  byte [rel form_exp_file_move], 1
+    jne  .verb_ready
+    lea  rdi, [rel str_exp_rename_verb]
+.verb_ready:
     call command_lookup
     cmp  eax, -1
     je   .out
@@ -5388,11 +6333,42 @@ form_explorer_paste_tick:
     mov  rax, [r12 + 8]
     mov  [rel form_exp_paste_req + REQ_PRINCIPAL], rax
     mov  byte [rel fs_out_ready], 0
+    mov  byte [rel fat32_disk_local_moved], 0
+    mov  rax, [rel form_exp_file_stamp + 40]
+    mov  [rel form_exp_latch_source], rax
+    mov  rax, [r12 + 40]
+    mov  [rel form_exp_latch_dest], rax
+    lea  rdi, [rel form_exp_paste_req]
+    mov  rsi, rbx
+    call form_exp_latch_spend
+    test eax, eax
+    jz   .out                         ; no stale/non-HUMAN dispatch
     lea  rdi, [rel form_exp_paste_req]
     lea  rsi, [rel form_exp_paste_rsp]
     call command_dispatch
+    cmp  byte [rel fat32_disk_local_moved], 1
+    jne  .stamps_current
+    ; The local arm moved FAT from fat-ro0 to fat-scratch: the same volume, a new mount.
+    push rax
+    push r12
+    mov  byte [rel fat32_disk_local_moved], 0
+    call form_exp_file_mount
+    mov  rax, [rel form_exp_file_stamp + 40]
+    cmp  rax, [rel form_exp_latch_dest]
+    jne  .source_kept
+    lea  r12, [rel form_exp_file_stamp]
+    call form_exp_file_mount
+.source_kept:
+    pop  r12
+    pop  rax
+.stamps_current:
     mov  byte [rel form_exp_paste_notice], 4
     lea  rcx, [rel str_exp_paste_unconfirmed]
+    cmp  byte [rel form_exp_file_move], 1
+    jne  .reply_note
+    mov  byte [rel form_exp_paste_notice], 5
+    lea  rcx, [rel str_exp_move_unconfirmed]
+.reply_note:
     mov  [rel form_exp_note], rcx
     test rax, rax
     jnz  .out
@@ -5401,6 +6377,8 @@ form_explorer_paste_tick:
     jz   .out
     cmp  byte [rel fs_out_ready], 1
     jne  .out
+    cmp  byte [rel form_exp_file_move], 1
+    je   .move_reply
     ; A fresh explicit native refusal is known, unlike a missing/malformed reply.
     lea  rsi, [rel fs_out_buf]
     lea  rdi, [rel str_exp_paste_error]
@@ -5408,7 +6386,27 @@ form_explorer_paste_tick:
     repe cmpsb
     jne  .accepted_reply
     mov  byte [rel form_exp_paste_notice], 5
+    ; The existing fresh native refusal is authoritative. Exact closed tails
+    ; explain known causes; unknown/policy/malformed tails remain generic.
+    mov  rbx, rsi
+    lea  r8, [rel str_exp_paste_reasons]
+.refusal_reason:
+    mov  rdi, rbx
+    lea  rax, [rel str_exp_paste_reasons]
+    mov  rsi, [r8]
+    add  rsi, rax                     ; table entries are signed image deltas
+    call strcmp                       ; preserves r8 and rbx; compares NUL too
+    test eax, eax
+    jz   .refusal_known
+    add  r8, 16
+    cmp  qword [r8], 0
+    jne  .refusal_reason
     lea  rax, [rel str_exp_paste_refused]
+    jmp  .refusal_note
+.refusal_known:
+    lea  rax, [rel str_exp_paste_reasons]
+    add  rax, [r8 + 8]
+.refusal_note:
     mov  [rel form_exp_note], rax
     jmp  .out
 .accepted_reply:
@@ -5482,6 +6480,35 @@ form_explorer_paste_tick:
     lea  rax, [rel str_exp_paste_accepted]
     mov  [rel form_exp_note], rax
     mov  qword [rel form_fsroot_snapshot_ms], 0
+    jmp  .out
+.move_reply:
+    lea  rsi, [rel fs_out_buf]
+    lea  rdi, [rel str_exp_rename_error]
+    mov  ecx, 10
+    repe cmpsb
+    jne  .move_success
+    lea  rax, [rel str_exp_move_refused]
+    mov  [rel form_exp_note], rax
+    jmp  .out
+.move_success:
+    lea  rsi, [rel fs_out_buf]
+    lea  rdi, [rel str_exp_rename_prefix]
+    mov  ecx, 12
+    repe cmpsb
+    jne  .out
+    lea  rdi, [rel form_exp_paste_nonce]
+    mov  ecx, 16
+    repe cmpsb
+    jne  .out
+    cmp  dword [rsi], 0x004b4f20       ; exact " OK" and NUL
+    jne  .out
+    mov  edi, 6
+    call form_exp_observe_capture
+    mov  byte [rel form_exp_paste_notice], 5
+    lea  rax, [rel str_exp_move_done]
+    mov  [rel form_exp_note], rax
+    mov  qword [rel form_fsroot_snapshot_ms], 0
+    jmp  .out
 .out:
     pop  r12
     pop  rbx
@@ -5494,6 +6521,845 @@ form_explorer_paste_tick:
     stosb
     jmp  .append
 .appended:
+    ret
+
+; Actual Delete on the focused files list. Only complete regular-file rows are
+; supported here; folders keep their existing separate RMDIR semantics. The
+; deferred command uses the unchanged registry/volume policy and HUMAN latch.
+; It never changes the copy clipboard or runs a mutation on the input stack.
+form_explorer_file_delete:
+    push rbx
+    push r12
+    mov  ebx, edi
+    cmp  byte [rel form_exp_rename_pending], 0
+    jne  .out
+    cmp  byte [rel form_exp_rename_edit], 0
+    jne  .out
+    cmp  byte [rel form_exp_delete_pending], 0
+    jne  .out
+    cmp  byte [rel form_exp_paste_pending], 0
+    jne  .out
+    call form_exp_observe_reset
+    lea  rax, [rel str_exp_delete_not_sent]
+    mov  [rel form_exp_note], rax
+    cmp  byte [rel input_key_origin], KO_HUMAN
+    jne  .out
+    lea  r12, [rel form_exp_delete_stamp]
+    call session_shell_local_authority
+    mov  [r12 + 8], rax
+    mov  [r12 + 16], rdx
+    cmp  rax, PRIN_OWNER
+    jne  .out
+    mov  [r12 + 64], rbx
+    mov  edi, ebx
+    call wgt_slot_ptr
+    mov  eax, [rax + WGI_WIN]
+    mov  [r12 + 48], rax
+    mov  rax, [rel session_key_handle]
+    mov  [r12 + 56], rax
+    call form_exp_file_mount
+    test eax, eax
+    jz   .out
+    call form_exp_file_guard
+    test eax, eax
+    jz   .out
+    mov  rax, [r12 + 40]
+    cmp  rax, [rel form_exp_listing_mount]
+    jne  .out
+    mov  rax, [r12 + 24]
+    cmp  rax, [rel form_exp_listing_ops]
+    jne  .out
+    mov  rax, [r12 + 32]
+    cmp  rax, [rel form_exp_listing_priv]
+    jne  .out
+    call form_fsroot_refresh
+    mov  eax, [rel form_exp_cursor]
+    cmp  eax, [rel form_exp_count]
+    jae  .out
+    cmp  eax, FORM_FSROOT_CAP
+    jae  .out
+    lea  rdx, [rel form_exp_flags]
+    test byte [rdx + rax], FORM_EXP_DIR | FORM_EXP_CLIPPED
+    jnz  .out
+    imul eax, FORM_EXP_NAME
+    lea  rdx, [rel form_exp_names]
+    add  rdx, rax
+    ; Reuse the exact bounded path formatter without changing clipboard kind.
+    movzx eax, byte [rel form_exp_file_kind]
+    push rax
+    mov  byte [rel form_exp_file_kind], 0
+    lea  rdi, [rel form_exp_delete_path]
+    lea  rsi, [rel form_fs_cwd]
+    call form_exp_file_path
+    pop  rcx
+    mov  [rel form_exp_file_kind], cl
+    test eax, eax
+    jz   .out
+    lea  rsi, [rel form_exp_delete_path]
+.path:
+    lodsb
+    cmp  al, ':'                     ; never reinterpret a name as a volume label
+    je   .out
+    test al, al
+    jnz  .path
+    lea  rsi, [rel form_fs_cwd]
+    lea  rdi, [rel form_exp_delete_cwd]
+    mov  ecx, FORM_FS_CWD_MAX
+    rep  movsb
+    mov  rax, [rel vfs_write_generation]
+    mov  [rel form_exp_delete_generation], rax
+    cmp  qword [rel form_exp_paste_seq], -1
+    je   .out                        ; shared boot-wide sequence cannot wrap
+    inc  qword [rel form_exp_paste_seq]
+    mov  rdi, [rel form_exp_paste_seq]
+    lea  rsi, [rel form_exp_delete_nonce]
+    mov  edx, 16
+    call fmt_hex
+    call form_exp_latch_gesture
+    mov  byte [rel form_exp_delete_pending], 1
+    lea  rax, [rel str_exp_delete_pending]
+    mov  [rel form_exp_note], rax
+    mov  eax, 1
+    jmp  .done
+.out:
+    xor  eax, eax
+.done:
+    pop  r12
+    pop  rbx
+    ret
+
+; F2 edits a complete filename; Ctrl+Shift+N starts New folder, Ctrl+N New file
+; in the same shared status editor. Enter prepares one idle typed mutation; Escape/Tab
+; cancel. No filesystem mutation runs on input.
+form_explorer_rename_guard:             ; R12=original captured stamp
+    call form_exp_file_guard
+    test eax, eax
+    jz   .bad
+    mov  edi, [rel vfs_disk_handle]
+    cmp  rdi, [r12 + 40]
+    jne  .bad
+    mov  rax, [rel vfs_write_generation]
+    cmp  rax, [rel form_exp_rename_generation]
+    jne  .bad
+    mov  eax, [rel input_other_origin_seq]
+    cmp  eax, [rel form_exp_rename_keys]
+    jne  .bad
+    mov  eax, [rel sp_ptr_inj_seq]
+    cmp  eax, [rel form_exp_rename_ptrs]
+    jne  .bad
+    mov  eax, [rel wm_zcounter]
+    cmp  eax, [rel form_exp_rename_z]
+    jne  .bad
+    lea  rsi, [rel form_fs_cwd]
+    lea  rdi, [rel form_exp_rename_cwd]
+    mov  ecx, FORM_FS_CWD_MAX
+    repe cmpsb
+    jne  .bad
+    cmp  byte [rel form_exp_rename_new], 0
+    jne  .ok                         ; New pins the parent, no selected row needed
+    mov  eax, [rel form_exp_cursor]
+    cmp  eax, [rel form_exp_rename_cursor]
+    jne  .bad
+    cmp  eax, [rel form_exp_count]
+    jae  .bad
+    cmp  eax, FORM_FSROOT_CAP
+    jae  .bad
+    lea  rdx, [rel form_exp_flags]
+    test byte [rdx + rax], FORM_EXP_DIR | FORM_EXP_CLIPPED
+    jnz  .bad
+    imul eax, FORM_EXP_NAME
+    lea  rsi, [rel form_exp_names]
+    add  rsi, rax
+    lea  rdi, [rel form_exp_rename_original]
+    mov  ecx, FORM_FS_CWD_MAX
+.name:
+    lodsb
+    scasb
+    jne  .bad
+    test al, al
+    jz   .ok
+    loop .name
+    jmp  .bad
+.ok:
+    mov  eax, 1
+    ret
+.bad:
+    xor  eax, eax
+    ret
+
+form_explorer_rename_abort:
+    mov  byte [rel form_exp_rename_edit], 0
+    mov  byte [rel form_exp_rename_pending], 0
+    mov  byte [rel form_exp_latch], 0
+    lea  rax, [rel str_exp_rename_not_sent]
+    lea  rdx, [rel str_exp_new_not_sent]
+    cmp  byte [rel form_exp_rename_new], 1
+    cmove rax, rdx
+    lea  rdx, [rel str_exp_newfile_not_sent]
+    cmp  byte [rel form_exp_rename_new], 2
+    cmove rax, rdx
+    mov  [rel form_exp_note], rax
+    ret
+
+form_explorer_rename_prompt:
+    lea  rdi, [rel form_exp_rename_prompt]
+    lea  rsi, [rel str_exp_rename_prompt]
+    mov  ecx, 8                       ; "Rename: "
+    cmp  byte [rel form_exp_rename_new], 1
+    jne  .file_label
+    lea  rsi, [rel str_exp_new_prompt]
+    mov  ecx, 12                      ; "New folder: "
+    jmp  .label
+.file_label:
+    cmp  byte [rel form_exp_rename_new], 2
+    jne  .label
+    lea  rsi, [rel str_exp_newfile_prompt]
+    mov  ecx, 10                      ; "New file: "
+.label:
+    rep  movsb
+    lea  rsi, [rel form_exp_rename_name]
+    mov  ecx, [rel form_exp_rename_len]
+    rep  movsb
+    lea  rsi, [rel str_exp_rename_hint]
+    mov  ecx, 13                      ; " [Enter/Esc]" and NUL
+    rep  movsb
+    lea  rax, [rel form_exp_rename_prompt]
+    mov  [rel form_exp_note], rax
+    ret
+
+form_explorer_rename_key:               ; EAX=actual files widget key
+    push rbx
+    push r12
+    mov  ebx, eax
+    lea  r12, [rel form_exp_rename_stamp]
+    cmp  byte [rel input_key_origin], KO_HUMAN
+    jne  .cancel
+    call form_explorer_rename_guard
+    test eax, eax
+    jz   .cancel
+    cmp  ebx, GUI_KEY_ESC
+    je   .cancel
+    cmp  ebx, GUI_KEY_TAB
+    je   .cancel
+    cmp  ebx, GUI_KEY_ENTER
+    je   .enter
+    cmp  ebx, 1                       ; Ctrl+A selects the entire basename
+    je   .all
+    cmp  ebx, GUI_KEY_BACKSPACE
+    je   .backspace
+    ; Conservative native basename entry. Paths, drive labels, spaces,
+    ; controls and Unicode payloads cannot become command tokens.
+    cmp  ebx, '0'
+    jb   .punct
+    cmp  ebx, '9'
+    jbe  .char
+    cmp  ebx, 'A'
+    jb   .punct
+    cmp  ebx, 'Z'
+    jbe  .char
+    cmp  ebx, 'a'
+    jb   .punct
+    cmp  ebx, 'z'
+    jbe  .char
+.punct:
+    cmp  ebx, '.'
+    je   .char
+    cmp  ebx, '_'
+    je   .char
+    cmp  ebx, '-'
+    jne  .unsupported_key
+.char:
+    cmp  byte [rel form_exp_rename_notice], 2
+    je   .done                       ; invalid input stays inert until cleared
+    cmp  byte [rel form_exp_rename_select_all], 1
+    jne  .append
+    mov  dword [rel form_exp_rename_len], 0
+    mov  byte [rel form_exp_rename_select_all], 0
+.append:
+    mov  ecx, [rel form_exp_rename_len]
+    cmp  ecx, FORM_FS_CWD_MAX - 2
+    jae  .unsupported_key
+    lea  rdx, [rel form_exp_rename_name]
+    mov  [rdx + rcx], bl
+    inc  ecx
+    mov  byte [rdx + rcx], 0
+    mov  [rel form_exp_rename_len], ecx
+    jmp  .prompt
+.all:
+    mov  byte [rel form_exp_rename_select_all], 1
+    jmp  .done
+.backspace:
+    xor  ecx, ecx
+    cmp  byte [rel form_exp_rename_notice], 2
+    je   .erase                      ; clear a rejected entry instead of altering it
+    cmp  byte [rel form_exp_rename_select_all], 1
+    je   .erase
+    mov  ecx, [rel form_exp_rename_len]
+    test ecx, ecx
+    jz   .done
+    dec  ecx
+.erase:
+    mov  byte [rel form_exp_rename_notice], 1
+    mov  byte [rel form_exp_rename_select_all], 0
+    mov  [rel form_exp_rename_len], ecx
+    lea  rdx, [rel form_exp_rename_name]
+    mov  byte [rdx + rcx], 0
+.prompt:
+    call form_explorer_rename_prompt
+    jmp  .done
+.unsupported_key:
+    cmp  byte [rel form_exp_rename_new], 2
+    jne  .done                       ; retain prior Rename/New folder entry behavior
+    mov  byte [rel form_exp_rename_notice], 2
+    lea  rax, [rel str_exp_newfile_invalid]
+    mov  [rel form_exp_note], rax
+    jmp  .done
+.invalid_name:
+    call form_explorer_rename_abort
+    lea  rax, [rel str_exp_newfile_invalid]
+    mov  [rel form_exp_note], rax
+    jmp  .done
+.enter:
+    cmp  byte [rel form_exp_rename_notice], 2
+    je   .bad_name
+    mov  ecx, [rel form_exp_rename_len]
+    test ecx, ecx
+    jz   .bad_name
+    lea  rdx, [rel form_exp_rename_name]
+    cmp  byte [rdx + rcx - 1], '.'     ; includes . and .., FAT ambiguous tail
+    je   .bad_name
+    movzx eax, byte [rel form_exp_file_kind]
+    push rax
+    mov  byte [rel form_exp_file_kind], 0
+    lea  rdi, [rel form_exp_rename_dst]
+    lea  rsi, [rel form_exp_rename_cwd]
+    call form_exp_file_path
+    pop  rcx
+    mov  [rel form_exp_file_kind], cl
+    test eax, eax
+    jz   .bad_name
+    lea  rsi, [rel form_exp_rename_dst]
+.safe_path:
+    lodsb
+    cmp  al, 58                     ; colon never becomes a mount selector
+    je   .bad_name
+    test al, al
+    jnz  .safe_path
+    cmp  qword [rel form_exp_paste_seq], -1
+    je   .bad_name
+    inc  qword [rel form_exp_paste_seq]
+    mov  rdi, [rel form_exp_paste_seq]
+    lea  rsi, [rel form_exp_rename_nonce]
+    mov  edx, 16
+    call fmt_hex
+    call form_exp_latch_gesture
+    mov  byte [rel form_exp_rename_edit], 0
+    mov  byte [rel form_exp_rename_pending], 1
+    lea  rax, [rel str_exp_rename_pending]
+    lea  rdx, [rel str_exp_new_pending]
+    cmp  byte [rel form_exp_rename_new], 1
+    cmove rax, rdx
+    lea  rdx, [rel str_exp_newfile_pending]
+    cmp  byte [rel form_exp_rename_new], 2
+    cmove rax, rdx
+    mov  [rel form_exp_note], rax
+    jmp  .done
+.bad_name:
+    cmp  byte [rel form_exp_rename_new], 2
+    je   .invalid_name
+.cancel:
+    call form_explorer_rename_abort
+.done:
+    mov  eax, 1
+    pop  r12
+    pop  rbx
+    ret
+
+form_explorer_newfile_begin:
+    mov  eax, 2
+    jmp  form_explorer_name_begin
+
+form_explorer_new_begin:
+    mov  eax, 1
+    jmp  form_explorer_name_begin
+
+form_explorer_rename_begin:
+    xor  eax, eax
+form_explorer_name_begin:
+    push rbx
+    push r12
+    mov  ebx, edi
+    cmp  byte [rel form_exp_rename_pending], 0
+    jne  .out
+    cmp  byte [rel form_exp_paste_pending], 0
+    jne  .out
+    cmp  byte [rel form_exp_delete_pending], 0
+    jne  .out
+    cmp  byte [rel form_exp_rename_edit], 0
+    jne  .out
+    mov  [rel form_exp_rename_new], al
+    call form_exp_observe_reset
+    lea  rax, [rel str_exp_rename_not_sent]
+    lea  rdx, [rel str_exp_new_not_sent]
+    cmp  byte [rel form_exp_rename_new], 1
+    cmove rax, rdx
+    lea  rdx, [rel str_exp_newfile_not_sent]
+    cmp  byte [rel form_exp_rename_new], 2
+    cmove rax, rdx
+    mov  [rel form_exp_note], rax
+    cmp  byte [rel input_key_origin], KO_HUMAN
+    jne  .out
+    lea  r12, [rel form_exp_rename_stamp]
+    call session_shell_local_authority
+    mov  [r12 + 8], rax
+    mov  [r12 + 16], rdx
+    cmp  rax, PRIN_OWNER
+    jne  .out
+    mov  [r12 + 64], rbx
+    mov  edi, ebx
+    call wgt_slot_ptr
+    mov  eax, [rax + WGI_WIN]
+    mov  [r12 + 48], rax
+    mov  rax, [rel session_key_handle]
+    mov  [r12 + 56], rax
+    call form_exp_file_mount
+    test eax, eax
+    jz   .out
+    call form_exp_file_guard
+    test eax, eax
+    jz   .out
+    mov  rax, [r12 + 40]
+    cmp  rax, [rel form_exp_listing_mount]
+    jne  .out
+    mov  rax, [r12 + 24]
+    cmp  rax, [rel form_exp_listing_ops]
+    jne  .out
+    mov  rax, [r12 + 32]
+    cmp  rax, [rel form_exp_listing_priv]
+    jne  .out
+    cmp  byte [rel form_exp_rename_new], 0
+    jne  .new_parent
+    call form_fsroot_refresh
+    mov  eax, [rel form_exp_cursor]
+    cmp  eax, [rel form_exp_count]
+    jae  .out
+    cmp  eax, FORM_FSROOT_CAP
+    jae  .out
+    lea  rdx, [rel form_exp_flags]
+    test byte [rdx + rax], FORM_EXP_DIR | FORM_EXP_CLIPPED
+    jnz  .out
+    mov  [rel form_exp_rename_cursor], eax
+    imul eax, FORM_EXP_NAME
+    lea  rdx, [rel form_exp_names]
+    add  rdx, rax
+    ; Reuse the exact bounded path formatter without changing clipboard kind.
+    movzx eax, byte [rel form_exp_file_kind]
+    push rax
+    mov  byte [rel form_exp_file_kind], 0
+    lea  rdi, [rel form_exp_rename_path]
+    lea  rsi, [rel form_fs_cwd]
+    call form_exp_file_path
+    pop  rcx
+    mov  [rel form_exp_file_kind], cl
+    test eax, eax
+    jz   .out
+    lea  rsi, [rel form_exp_rename_path]
+.path:
+    lodsb
+    cmp  al, ':'                     ; never reinterpret a name as a volume label
+    je   .out
+    test al, al
+    jnz  .path
+.new_parent:
+    lea  rsi, [rel form_fs_cwd]
+    lea  rdi, [rel form_exp_rename_cwd]
+    mov  ecx, FORM_FS_CWD_MAX
+    rep  movsb
+    mov  rax, [rel vfs_write_generation]
+    mov  [rel form_exp_rename_generation], rax
+    mov  eax, [rel input_other_origin_seq]
+    mov  [rel form_exp_rename_keys], eax
+    mov  eax, [rel sp_ptr_inj_seq]
+    mov  [rel form_exp_rename_ptrs], eax
+    mov  eax, [rel wm_zcounter]
+    mov  [rel form_exp_rename_z], eax
+    cmp  byte [rel form_exp_rename_new], 0
+    je   .existing_name
+    mov  byte [rel form_exp_rename_name], 0
+    xor  ecx, ecx
+    jmp  .named
+.existing_name:
+    ; The complete path has already bounded the original basename.
+    lea  rsi, [rel form_exp_rename_path]
+    mov  rdx, rsi
+.find_name:
+    lodsb
+    cmp  al, '/'
+    jne  .name_next
+    mov  rdx, rsi
+.name_next:
+    test al, al
+    jnz  .find_name
+    mov  rsi, rdx
+    lea  rdi, [rel form_exp_rename_name]
+    xor  ecx, ecx
+.name:
+    lodsb
+    stosb
+    test al, al
+    jz   .named
+    inc  ecx
+    jmp  .name
+.named:
+    mov  [rel form_exp_rename_len], ecx
+    lea  rsi, [rel form_exp_rename_name]
+    lea  rdi, [rel form_exp_rename_original]
+    inc  ecx
+    rep  movsb
+    mov  byte [rel form_exp_rename_select_all], 1
+    mov  byte [rel form_exp_rename_edit], 1
+    mov  byte [rel form_exp_rename_notice], 1
+    call form_explorer_rename_prompt
+    mov  eax, 1
+    jmp  .done
+.out:
+    xor  eax, eax
+.done:
+    pop  r12
+    pop  rbx
+    ret
+
+form_explorer_rename_tick:
+    cmp  byte [rel form_exp_rename_edit], 1
+    jne  .pending
+    push r12
+    lea  r12, [rel form_exp_rename_stamp]
+    call form_explorer_rename_guard
+    test eax, eax
+    jnz  .editing
+    call form_explorer_rename_abort
+.editing:
+    pop  r12
+    ret
+.pending:
+    cmp  byte [rel form_exp_rename_pending], 1
+    jne  .ret
+    mov  byte [rel form_exp_rename_pending], 0 ; spend before every possible exit
+    push rbx
+    push r12
+    lea  r12, [rel form_exp_rename_stamp]
+    lea  rax, [rel str_exp_rename_not_sent]
+    lea  rdx, [rel str_exp_new_not_sent]
+    cmp  byte [rel form_exp_rename_new], 1
+    cmove rax, rdx
+    lea  rdx, [rel str_exp_newfile_not_sent]
+    cmp  byte [rel form_exp_rename_new], 2
+    cmove rax, rdx
+    mov  [rel form_exp_note], rax
+    call form_explorer_rename_guard
+    test eax, eax
+    jz   .out
+    lea  rdi, [rel form_exp_rename_arg]
+    cmp  byte [rel form_exp_rename_new], 0
+    jne  .new_destination
+    lea  rsi, [rel form_exp_rename_path]
+.path:
+    lodsb
+    test al, al
+    jz   .destination
+    stosb
+    jmp  .path
+.destination:
+    mov  al, ' '
+    stosb
+.new_destination:
+    lea  rsi, [rel form_exp_rename_dst]
+.dst:
+    lodsb
+    test al, al
+    jz   .nonce
+    stosb
+    jmp  .dst
+.nonce:
+    cmp  byte [rel form_exp_rename_new], 2
+    jne  .nonce_space
+    mov  ax, 0x2d20                  ; explicit empty DATA token, FSNEW only
+    stosw
+.nonce_space:
+    mov  al, ' '
+    stosb
+    lea  rsi, [rel form_exp_rename_nonce]
+    mov  ecx, 17
+    rep  movsb                       ; at most 177 bytes including NUL
+    lea  rdi, [rel str_exp_rename_verb]
+    lea  rdx, [rel str_exp_new_verb]
+    cmp  byte [rel form_exp_rename_new], 1
+    cmove rdi, rdx
+    lea  rdx, [rel str_exp_newfile_verb]
+    cmp  byte [rel form_exp_rename_new], 2
+    cmove rdi, rdx
+    call command_lookup
+    cmp  eax, -1
+    je   .out
+    mov  ebx, eax
+    lea  rdi, [rel form_exp_rename_req]
+    xor  eax, eax
+    mov  ecx, REQ_SZ / 8
+    rep  stosq
+    mov  [rel form_exp_rename_req + REQ_VERB], rbx
+    mov  qword [rel form_exp_rename_req + REQ_CAP], -1
+    lea  rax, [rel form_exp_rename_arg]
+    mov  [rel form_exp_rename_req + REQ_ARG], rax
+    mov  qword [rel form_exp_rename_req + REQ_SOURCE], CMD_SOURCE_CONSOLE
+    mov  rax, [r12 + 8]
+    mov  [rel form_exp_rename_req + REQ_PRINCIPAL], rax
+    mov  byte [rel fs_out_ready], 0
+    mov  byte [rel fat32_disk_local_moved], 0
+    mov  rax, [r12 + 40]
+    mov  [rel form_exp_latch_source], rax
+    mov  [rel form_exp_latch_dest], rax
+    lea  rdi, [rel form_exp_rename_req]
+    mov  rsi, rbx
+    call form_exp_latch_spend
+    test eax, eax
+    jz   .out                        ; stale/non-HUMAN gesture is never sent
+    lea  rax, [rel str_exp_rename_unconfirmed]
+    lea  rdx, [rel str_exp_new_unconfirmed]
+    cmp  byte [rel form_exp_rename_new], 1
+    cmove rax, rdx
+    lea  rdx, [rel str_exp_newfile_unconfirmed]
+    cmp  byte [rel form_exp_rename_new], 2
+    cmove rax, rdx
+    mov  [rel form_exp_note], rax
+    lea  rdi, [rel form_exp_rename_req]
+    lea  rsi, [rel form_exp_rename_rsp]
+    call command_dispatch
+    test rax, rax
+    jnz  .out
+    cmp  byte [rel fat32_disk_local_moved], 1
+    jne  .current
+    mov  byte [rel fat32_disk_local_moved], 0
+    call form_exp_file_mount          ; same admitted removable volume, new view
+    test eax, eax
+    jz   .out
+.current:
+    call form_exp_file_guard
+    test eax, eax
+    jz   .out
+    cmp  byte [rel fs_out_ready], 1
+    jne  .out
+    lea  rsi, [rel fs_out_buf]
+    lea  rdi, [rel str_exp_rename_error]
+    mov  ecx, 10
+    cmp  byte [rel form_exp_rename_new], 1
+    jne  .file_error_prefix
+    lea  rdi, [rel str_exp_new_error]
+    mov  ecx, 12
+    jmp  .error_prefix
+.file_error_prefix:
+    cmp  byte [rel form_exp_rename_new], 2
+    jne  .error_prefix
+    lea  rdi, [rel str_exp_newfile_error]
+    mov  ecx, 10
+.error_prefix:
+    repe cmpsb
+    jne  .success
+    lea  rax, [rel str_exp_rename_refused]
+    lea  rdx, [rel str_exp_new_refused]
+    cmp  byte [rel form_exp_rename_new], 1
+    cmove rax, rdx
+    lea  rdx, [rel str_exp_newfile_refused]
+    cmp  byte [rel form_exp_rename_new], 2
+    cmove rax, rdx
+    cmp  byte [rel form_exp_rename_new], 2
+    jne  .refusal_note
+    ; Only exact declared backend reasons receive a more specific visible hint.
+    cmp  dword [rsi], 'exis'
+    jne  .name_error
+    cmp  word [rsi + 4], 0x7374     ; "ts"
+    jne  .name_error
+    cmp  byte [rsi + 6], 0
+    jne  .name_error
+    lea  rax, [rel str_exp_newfile_exists]
+    jmp  .refusal_note
+.name_error:
+    lea  rdi, [rel str_exp_newfile_name_error]
+    mov  ecx, 5                      ; all native name_* refusals are unsupported
+    repe cmpsb
+    jne  .refusal_note
+    lea  rax, [rel str_exp_newfile_invalid]
+.refusal_note:
+    mov  [rel form_exp_note], rax
+    jmp  .out
+.success:
+    lea  rsi, [rel fs_out_buf]
+    lea  rdi, [rel str_exp_rename_prefix]
+    mov  ecx, 12
+    cmp  byte [rel form_exp_rename_new], 1
+    jne  .file_success_prefix
+    lea  rdi, [rel str_exp_new_prefix]
+    mov  ecx, 14
+    jmp  .success_prefix
+.file_success_prefix:
+    cmp  byte [rel form_exp_rename_new], 2
+    jne  .success_prefix
+    lea  rdi, [rel str_exp_newfile_prefix]
+    mov  ecx, 12
+.success_prefix:
+    repe cmpsb
+    jne  .out
+    lea  rdi, [rel form_exp_rename_nonce]
+    mov  ecx, 16
+    repe cmpsb
+    jne  .out
+    cmp  byte [rel form_exp_rename_new], 2
+    jne  .ordinary_ok
+    lea  rdi, [rel str_exp_newfile_ok]
+    mov  ecx, 11                     ; exact " OK SIZE=0" and NUL
+    repe cmpsb
+    jne  .out
+    jmp  .confirmed
+.ordinary_ok:
+    cmp  dword [rsi], 0x004b4f20      ; exact native " OK" and NUL, no tail
+    jne  .out
+.confirmed:
+    call form_exp_observe_rename
+    cmp  byte [rel form_exp_rename_new], 0
+    je   .observed
+    lea  rsi, [rel form_exp_rename_cwd]
+    lea  rdi, [rel form_exp_observation + EXP_OBS_SRC_PATH]
+    mov  ecx, FORM_FS_CWD_MAX
+    call form_exp_observe_copy_z
+    mov  qword [rel form_exp_observation + EXP_OBS_PHASE], 5
+.observed:
+    lea  rax, [rel str_exp_rename_done]
+    lea  rdx, [rel str_exp_new_done]
+    cmp  byte [rel form_exp_rename_new], 1
+    cmove rax, rdx
+    lea  rdx, [rel str_exp_newfile_done]
+    cmp  byte [rel form_exp_rename_new], 2
+    cmove rax, rdx
+    mov  [rel form_exp_note], rax
+    mov  qword [rel form_fsroot_snapshot_ms], 0
+.out:
+    mov  byte [rel form_exp_latch], 0
+    pop  r12
+    pop  rbx
+.ret:
+    ret
+
+
+form_explorer_delete_tick:
+    cmp  byte [rel form_exp_delete_pending], 1
+    jne  .ret
+    mov  byte [rel form_exp_delete_pending], 0 ; spend before every possible exit
+    push rbx
+    push r12
+    lea  r12, [rel form_exp_delete_stamp]
+    lea  rax, [rel str_exp_delete_not_sent]
+    mov  [rel form_exp_note], rax
+    call form_exp_file_guard
+    test eax, eax
+    jz   .out
+    mov  edi, [rel vfs_disk_handle]
+    cmp  rdi, [r12 + 40]
+    jne  .out
+    mov  rax, [rel vfs_write_generation]
+    cmp  rax, [rel form_exp_delete_generation]
+    jne  .out
+    lea  rsi, [rel form_fs_cwd]
+    lea  rdi, [rel form_exp_delete_cwd]
+    mov  ecx, FORM_FS_CWD_MAX
+    repe cmpsb
+    jne  .out
+    lea  rsi, [rel form_exp_delete_path]
+    lea  rdi, [rel form_exp_delete_arg]
+.path:
+    lodsb
+    test al, al
+    jz   .nonce
+    stosb
+    jmp  .path
+.nonce:
+    mov  al, ' '
+    stosb
+    lea  rsi, [rel form_exp_delete_nonce]
+    mov  ecx, 17
+    rep  movsb                       ; at most 97 bytes including NUL
+    lea  rdi, [rel str_exp_delete_verb]
+    call command_lookup
+    cmp  eax, -1
+    je   .out
+    mov  ebx, eax
+    lea  rdi, [rel form_exp_delete_req]
+    xor  eax, eax
+    mov  ecx, REQ_SZ / 8
+    rep  stosq
+    mov  [rel form_exp_delete_req + REQ_VERB], rbx
+    mov  qword [rel form_exp_delete_req + REQ_CAP], -1
+    lea  rax, [rel form_exp_delete_arg]
+    mov  [rel form_exp_delete_req + REQ_ARG], rax
+    mov  qword [rel form_exp_delete_req + REQ_SOURCE], CMD_SOURCE_CONSOLE
+    mov  rax, [r12 + 8]
+    mov  [rel form_exp_delete_req + REQ_PRINCIPAL], rax
+    mov  byte [rel fs_out_ready], 0
+    mov  byte [rel fat32_disk_local_moved], 0
+    mov  rax, [r12 + 40]
+    mov  [rel form_exp_latch_source], rax
+    mov  [rel form_exp_latch_dest], rax
+    lea  rdi, [rel form_exp_delete_req]
+    mov  rsi, rbx
+    call form_exp_latch_spend
+    test eax, eax
+    jz   .out                        ; stale/non-HUMAN gesture is never sent
+    lea  rax, [rel str_exp_delete_unconfirmed]
+    mov  [rel form_exp_note], rax
+    lea  rdi, [rel form_exp_delete_req]
+    lea  rsi, [rel form_exp_delete_rsp]
+    call command_dispatch
+    test rax, rax
+    jnz  .out
+    cmp  byte [rel fat32_disk_local_moved], 1
+    jne  .current
+    mov  byte [rel fat32_disk_local_moved], 0
+    call form_exp_file_mount          ; same admitted removable volume, new view
+    test eax, eax
+    jz   .out
+.current:
+    call form_exp_file_guard
+    test eax, eax
+    jz   .out
+    cmp  byte [rel fs_out_ready], 1
+    jne  .out
+    lea  rsi, [rel fs_out_buf]
+    lea  rdi, [rel str_exp_delete_error]
+    mov  ecx, 10
+    repe cmpsb
+    jne  .success
+    lea  rax, [rel str_exp_delete_refused]
+    mov  [rel form_exp_note], rax
+    jmp  .out
+.success:
+    lea  rsi, [rel fs_out_buf]
+    lea  rdi, [rel str_exp_delete_prefix]
+    mov  ecx, 12
+    repe cmpsb
+    jne  .out
+    lea  rdi, [rel form_exp_delete_nonce]
+    mov  ecx, 16
+    repe cmpsb
+    jne  .out
+    cmp  dword [rsi], 0x004b4f20      ; exact native " OK" and NUL, no tail
+    jne  .out
+    call form_exp_observe_delete
+    lea  rax, [rel str_exp_delete_done]
+    mov  [rel form_exp_note], rax
+    mov  qword [rel form_fsroot_snapshot_ms], 0
+.out:
+    mov  byte [rel form_exp_latch], 0
+    pop  r12
+    pop  rbx
+.ret:
     ret
 
 ; Shared progress and cancel paint use this same original job. A replaced or
@@ -5985,22 +7851,72 @@ form_explorer_key_filter:
     inc  ecx
     cmp  [rax + WGI_TYPE], ecx
     jne  .other
+    mov  edi, [rsp + 8]
+    call form_exp_instance_select_widget
+    test eax, eax
+    jz   .other
     mov  eax, [rsp]
+    cmp  byte [rel form_exp_rename_edit], 1
+    je   .rename_key
+    cmp  eax, 14                      ; Ctrl+Shift+N folder, Ctrl+N empty file
+    je   .new_folder
+    cmp  eax, GUI_KEY_F1 + 1           ; actual F2
+    je   .rename
+    cmp  eax, 24                      ; native Ctrl+X, regular-file Move intent
+    je   .cut
     cmp  eax, 3                       ; native Ctrl+C
     je   .copy
     cmp  eax, 22                      ; native Ctrl+V
     je   .paste
+    cmp  eax, GUI_KEY_DELETE
+    je   .delete
     cmp  eax, GUI_KEY_ESC
     jne  .navigation
     mov  edi, [rsp + 8]
     call form_explorer_cancel_request
+    jmp  .handled
+.cut:
+    mov  edi, [rsp + 8]
+    call form_explorer_file_cut
     jmp  .handled
 .copy:
     mov  edi, [rsp + 8]
     call form_explorer_file_copy
     jmp  .handled
 .paste:
+    mov  edi, [rsp + 8]
     call form_explorer_file_paste
+    jmp  .handled
+.rename_key:
+    call form_explorer_rename_key
+    jmp  .handled
+.new_folder:
+    mov  al, [rel input_kbd_mods]
+    and  al, 7
+    cmp  al, 2                       ; Ctrl, no Shift/Alt
+    je   .new_file
+    cmp  al, 3                       ; Shift+Ctrl, no Alt
+    jne  .other
+    call input_modifiers_are_human
+    test eax, eax
+    jz   .other
+    mov  edi, [rsp + 8]
+    call form_explorer_new_begin
+    jmp  .handled
+.new_file:
+    call input_modifiers_are_human
+    test eax, eax
+    jz   .other
+    mov  edi, [rsp + 8]
+    call form_explorer_newfile_begin
+    jmp  .handled
+.rename:
+    mov  edi, [rsp + 8]
+    call form_explorer_rename_begin
+    jmp  .handled
+.delete:
+    mov  edi, [rsp + 8]
+    call form_explorer_file_delete
     jmp  .handled
 .navigation:
     call form_explorer_key
@@ -6049,6 +7965,11 @@ form_explorer_hook_keys:
 ; Drag and release are ignored. Presses against a row map older than the
 ; listing (relisted since the paint) only repaint.
 form_explorer_capture:
+    push rax
+    call form_exp_instance_select_widget
+    test eax, eax
+    pop  rax
+    jz   .miss
     push rdi
     push rsi
     push rdx
@@ -6161,6 +8082,9 @@ form_explorer_capture:
 .inert:
     mov  r15d, FORM_EXP_NONE          ; paging/note rows never pair into an open
 .consumed:
+    ; File-viewer opening may have composed another Explorer in the meantime.
+    mov  edi, r12d
+    call form_exp_instance_select_widget
     mov  [rel form_exp_last_press], r15d
     call boot_ms_now
     mov  [rel form_exp_last_press_ms], rax
@@ -6187,6 +8111,9 @@ form_cmd_verb_fscd:
     push rbx
     push r12
     mov  r12, rsi
+    call form_exp_instance_select_command
+    test eax, eax
+    jz   .bad
     mov  rbx, [rdi + REQ_ARG]
     test rbx, rbx
     jz   .bad
@@ -6239,13 +8166,19 @@ form_cmd_verb_fscd:
     ret
 
 %include "gui/form_explorer_controls.inc"
+%include "gui/form_explorer_rescan.inc"
 
 %include "gui/form_explorer_observe_cache.inc"
+%include "gui/form_explorer_instances.inc"
 
 form_wintree_append_state:
     push rbx
     push r12
     mov  r12d, edi
+    call gp_ui_tree_state
+    mov edi,r12d
+    call gp_owner_tree_state
+    mov edi,r12d
     call wgt_slot_ptr
     mov  rbx, rax
     cmp  dword [rbx + WGI_LAYER], 1
@@ -6442,9 +8375,7 @@ form_netmon_tick:
     push rbx
     push r12
     push r13
-    call form_exp_context_tick         ; consume native menu generation once
-    call form_explorer_paste_tick      ; deferred native start, before status repaint
-    call form_explorer_cancel_tick     ; deferred action, before status repaint
+    call form_exp_instances_tick       ; consume each live instance's actions once
     call form_ephemeral_reap
     test eax, eax
     jz   .lifetime_synced
@@ -6474,6 +8405,7 @@ form_netmon_tick:
     xor  esi, esi
     call pmod_netmon_query
 %endif
+    call form_netmon_refresh_begin
     xor  ebx, ebx
 .loop:
     cmp  ebx, [rel wgt_count]
@@ -6485,6 +8417,8 @@ form_netmon_tick:
     ; explorer listviews (fs.root / fs.status) repaint on this same audit edge,
     ; so an FSSEL that moves the FS-verb mount becomes visible within one
     ; cadence.  The rows come from the 1 s snapshot: no disk read per repaint.
+    cmp ecx, FORM_BIND_GUEST_POLICY ; same focused cadence; renderer resamples current native state
+    je .fs_draw
     cmp  ecx, FORM_BIND_FS_DRIVES
     je   .fs_draw
     cmp  ecx, FORM_BIND_FS_DETAILS
@@ -6562,9 +8496,78 @@ form_netmon_tick:
     inc  ebx
     jmp  .loop
 .done:
+    call form_netmon_refresh_end
     pop  r13
     pop  r12
     pop  rbx
+    ret
+
+; Passive provenance for the existing cadence input and completed focused redraw.
+; Neither the getter nor an owner command advances it. Only both actual native
+; Monitor listviews in one window lifetime complete a refresh observation.
+form_netmon_refresh_begin:
+    mov dword [rel form_netmon_refresh_active],1
+    mov dword [rel form_netmon_refresh_mask],0
+    cmp qword [rel form_netmon_refresh_tick],-1
+    je .out
+    inc qword [rel form_netmon_refresh_tick]
+.out:
+    ret
+
+form_netmon_refresh_draw:
+    cmp dword [rel form_netmon_refresh_active],1
+    jne .out
+    call wgt_slot_ptr
+    mov ecx,[rax+WGI_BIND]
+    mov edx,1
+    cmp ecx,FORM_BIND_NET_ADDRESS
+    je .bound
+    mov edx,2
+    cmp ecx,FORM_BIND_NET_MEMBERS
+    jne .out
+.bound:
+    cmp dword [rax+WGI_TYPE],11
+    jne .out
+    mov ecx,[rax+WGI_WIN]
+    cmp ecx,WM_MAX
+    jae .out
+    cmp ecx,[rel form_active_slot+16]
+    jne .out
+    lea rax,[rel wm_gen]
+    mov eax,[rax+rcx*4]
+    test eax,eax
+    jz .out
+    cmp dword [rel form_netmon_refresh_mask],0
+    je .first
+    cmp ecx,[rel form_netmon_refresh_pending_window]
+    jne .refuse
+    cmp eax,[rel form_netmon_refresh_pending_generation]
+    jne .refuse
+.first:
+    mov [rel form_netmon_refresh_pending_window],ecx
+    mov [rel form_netmon_refresh_pending_generation],eax
+    or [rel form_netmon_refresh_mask],edx
+.out:
+    ret
+.refuse:
+    mov dword [rel form_netmon_refresh_mask],-1
+    ret
+
+form_netmon_refresh_end:
+    mov dword [rel form_netmon_refresh_active],0
+    cmp dword [rel form_netmon_refresh_mask],3
+    jne .out
+    cmp qword [rel form_netmon_refresh_tick],-1
+    je .out
+    call boot_ms_now
+    mov [rel form_netmon_refresh_ms],rax
+    mov eax,[rel form_netmon_refresh_pending_window]
+    mov [rel form_netmon_refresh_window],eax
+    mov eax,[rel form_netmon_refresh_pending_generation]
+    mov [rel form_netmon_refresh_generation],eax
+    mov rax,[rel form_netmon_refresh_tick]
+    mov [rel form_netmon_refresh_done],rax
+.out:
     ret
 
 ; Register the GUI customers into the one core table. Periods come from the
@@ -7205,8 +9208,8 @@ form_w_parents_packed: dq 0
 form_w_expanded: dq 0
 form_w_disabled: dq 0
 form_w_list_flags: dd 0
-form_layouts: times (FORM_NODE_MAX * 32) db 0
-form_layout_children: times FORM_NODE_MAX dd 0
+form_layouts: times (FORM_NODE_STORAGE * 32) db 0
+form_layout_children: times FORM_NODE_STORAGE dd 0
 key_grid_rows: db "rows",0
 key_grid_cols: db "cols",0
 key_overlay_layer: db "overlay_layer",0
@@ -7223,6 +9226,9 @@ form_active_slot: times FORM_SLOT_COUNT dd -1
 form_app_owner: dq 0
 form_app_staged: db 0                 ; native scoped latch, never guest input
 form_ephemeral_slot: dd -1
+form_app_member_ids: times FORM_APP_MEMBERS dd 0
+form_app_member_gens: times FORM_APP_MEMBERS dd 0
+form_app_member_owners: times FORM_APP_MEMBERS dq 0
 form_current_win: dd -1
 form_last_index: dd 0
 form_result_slot: dd -1
@@ -7257,19 +9263,42 @@ form_w_bind: dd 0
 align 8
 form_netmon_members_fn: dq 0          ; RCQ-35: gui/netmon_form's netmon_members_text
 form_netmon_address_fn: dq 0          ; gui/netmon_form's combined counter/address rows
+form_netmon_refresh_tick: dq 0
+form_netmon_refresh_done: dq 0
+form_netmon_refresh_ms: dq 0
+form_netmon_refresh_window: dd -1
+form_netmon_refresh_generation: dd 0
+form_netmon_refresh_pending_window: dd -1
+form_netmon_refresh_pending_generation: dd 0
+form_netmon_refresh_mask: dd 0
+form_netmon_refresh_active: dd 0
 form_w_scroll: dd 0
 form_w_fit: dd -1
 form_win_restore: db WM_RESTORE_FRESH
 form_parse_mode: db 0
 form_out_ready: db 0
 align 8
-form_parse_buf: times FORM_PARSE_MAX db 0
+form_node_limit: dd FORM_NODE_MAX
+form_parse_buf: times FORM_PARSE_STORAGE db 0
 form_arg_buf: times 192 db 0
 form_out_buf: times FORM_OUT_MAX db 0
 form_live_buf: times 1024 db 0
 form_sysprops_snapshot_buf: times 1024 db 0
-form_cpu_security_buf: times 384 db 0
+form_cpu_policy_page_buf: times 1024 db 0
+form_cpu_security_buf: times 768 db 0
 form_fsroot_snapshot_ms: dq 0
+; Entire record is in the existing per-window Explorer instance bank.
+form_exp_rescan_record: times 224 db 0
+str_verb_explorerscan: db "EXPLORERSCAN",0
+str_explorerscan_head: db " explorerscan=1 nonce=",0
+str_explorerscan_path: db " path_hex=",0
+str_explorerscan_fields:
+    db " seq=",0," win=",0," generation=",0," owner=",0," epoch=",0
+    db " mount=",0," start_ms=",0," end_ms=",0," scan_before=",0
+    db " scan_after=",0," sectors=",0," rc=",0," count=",0," truncated=",0
+    db " backend=",0," mount_gen=",0," namespace_gen=",0
+align 8
+
 form_fsroot_cur: dq 0
 form_fsroot_end: dq 0
 form_fsroot_rc: dd 0
@@ -7290,6 +9319,10 @@ str_explorerobs_head: db " explorerobs=1 nonce=",0
 str_explorerobs_none: db " phase=none",0
 str_explorerobs_selected: db " phase=selected",0
 str_explorerobs_accepted: db " phase=accepted",0
+str_explorerobs_renamed: db " phase=renamed",0
+str_explorerobs_created: db " phase=created",0
+str_explorerobs_moved: db " phase=moved",0
+str_explorerobs_deleted: db " phase=deleted",0
 str_explorerobs_seq: db " seq=",0
 str_explorerobs_job: db " job=",0
 str_explorerobs_ms: db " ms=",0
@@ -7365,7 +9398,18 @@ form_exp_owned_queued: db 0
 form_exp_paste_notice: db 0
 form_exp_file_ready: db 0
 form_exp_file_kind: db 0               ; captured 0=file, FORM_EXP_DIR=tree
+form_exp_file_move: db 0               ; banked Cut intent, never a filesystem grant
+align 8
+form_exp_file_generation: dq 0         ; namespace generation captured by actual Cut
 form_exp_paste_pending: db 0
+form_exp_latch: db 0
+form_exp_latch_keys: dd 0
+form_exp_latch_ptrs: dd 0
+form_exp_latch_z: dd 0
+form_exp_latch_epoch: dq 0
+form_exp_latch_end: dq 0
+form_exp_latch_source: dq 0
+form_exp_latch_dest: dq 0
 align 8
 form_exp_paste_generation: dq 0
 form_exp_paste_seq: dq 0x4558504c00000000 ; Explorer namespace; monotone, no reset/wrap in this boot
@@ -7377,6 +9421,87 @@ form_exp_file_dst: times FORM_FS_CWD_MAX db 0
 form_exp_paste_cwd: times FORM_FS_CWD_MAX db 0
 form_exp_paste_nonce: times 17 db 0
 form_exp_paste_arg: times 256 db 0
+align 8
+form_exp_delete_stamp: times 12 dq 0
+form_exp_delete_generation: dq 0
+form_exp_delete_req: times REQ_SZ db 0
+form_exp_delete_rsp: times RSP_SZ db 0
+form_exp_delete_path: times FORM_FS_CWD_MAX db 0
+form_exp_delete_cwd: times FORM_FS_CWD_MAX db 0
+form_exp_delete_arg: times 128 db 0
+form_exp_delete_nonce: times 17 db 0
+form_exp_delete_pending: db 0
+align 8
+form_exp_rename_stamp: times 12 dq 0
+form_exp_rename_generation: dq 0
+form_exp_rename_keys: dd 0
+form_exp_rename_ptrs: dd 0
+form_exp_rename_z: dd 0
+form_exp_rename_len: dd 0
+form_exp_rename_cursor: dd 0
+form_exp_rename_req: times REQ_SZ db 0
+form_exp_rename_rsp: times RSP_SZ db 0
+form_exp_rename_path: times FORM_FS_CWD_MAX db 0
+form_exp_rename_dst: times FORM_FS_CWD_MAX db 0
+form_exp_rename_cwd: times FORM_FS_CWD_MAX db 0
+form_exp_rename_name: times FORM_FS_CWD_MAX db 0
+form_exp_rename_original: times FORM_FS_CWD_MAX db 0
+form_exp_rename_prompt: times 112 db 0
+form_exp_rename_arg: times 256 db 0
+form_exp_rename_nonce: times 17 db 0
+form_exp_rename_pending: db 0
+form_exp_rename_edit: db 0
+form_exp_rename_select_all: db 0
+form_exp_rename_notice: db 0
+form_exp_rename_new: db 0              ; banked 0 rename, 1 folder, 2 file; shared editor/storage custody
+str_exp_move_exfat_backend: db "exfat",0
+str_exp_move_ready: db "file selected for move",0
+str_exp_move_unsupported: db "only a regular file can be moved here",0
+str_exp_move_pending: db "move pending",0
+str_exp_move_not_sent: db "move not sent",0
+str_exp_move_unconfirmed: db "move unconfirmed",0
+str_exp_move_refused: db "move refused",0
+str_exp_move_done: db "file moved",0
+str_exp_rename_verb: db "FSREN",0
+str_exp_rename_error: db "FSREN ERR ",0
+str_exp_rename_prefix: db "FSREN NONCE=",0
+str_exp_rename_pending: db "rename pending",0
+str_exp_rename_not_sent: db "rename not sent",0
+str_exp_rename_unconfirmed: db "rename unconfirmed",0
+str_exp_rename_refused: db "rename refused",0
+str_exp_rename_done: db "file renamed",0
+str_exp_rename_prompt: db "Rename: ",0
+str_exp_new_verb: db "FSMKDIR",0
+str_exp_new_error: db "FSMKDIR ERR ",0
+str_exp_new_prefix: db "FSMKDIR NONCE=",0
+str_exp_new_prompt: db "New folder: ",0
+str_exp_new_pending: db "new folder pending",0
+str_exp_new_not_sent: db "new folder not sent",0
+str_exp_new_unconfirmed: db "new folder unconfirmed",0
+str_exp_new_refused: db "new folder refused",0
+str_exp_new_done: db "folder created",0
+str_exp_newfile_verb: db "FSNEW",0
+str_exp_newfile_error: db "FSNEW ERR ",0
+str_exp_newfile_prefix: db "FSNEW NONCE=",0
+str_exp_newfile_ok: db " OK SIZE=0",0
+str_exp_newfile_prompt: db "New file: ",0
+str_exp_newfile_pending: db "new file pending",0
+str_exp_newfile_not_sent: db "new file not sent",0
+str_exp_newfile_unconfirmed: db "new file unconfirmed",0
+str_exp_newfile_refused: db "new file refused",0
+str_exp_newfile_done: db "file created",0
+str_exp_newfile_exists: db "file exists; choose another name",0
+str_exp_newfile_invalid: db "unsupported file name",0
+str_exp_newfile_name_error: db "name_",0
+str_exp_rename_hint: db " [Enter/Esc]",0
+str_exp_delete_verb: db "FSDEL",0
+str_exp_delete_error: db "FSDEL ERR ",0
+str_exp_delete_prefix: db "FSDEL NONCE=",0
+str_exp_delete_pending: db "delete pending",0
+str_exp_delete_not_sent: db "delete not sent",0
+str_exp_delete_unconfirmed: db "delete unconfirmed",0
+str_exp_delete_refused: db "delete refused",0
+str_exp_delete_done: db "file deleted",0
 str_exp_copy_unavailable: db ",bytes=unknown of unknown,phase=unavailable,durable=unknown",0
 str_exp_copy_cancel_hint: db " (Escape cancels)",0
 str_exp_paste_notices:
@@ -7393,6 +9518,26 @@ str_exp_paste_mode: db " MODE=keepboth",0
 str_exp_paste_tree: db " TREE=1",0
 str_exp_paste_error: db "FSCOPY ERR ",0
 str_exp_paste_refused: db "copy request refused",0
+str_exp_paste_missing_reason: db "not_found",0
+str_exp_paste_readonly_reason: db "volume_read_only",0
+str_exp_paste_full_reason: db "disk_full",0
+str_exp_paste_space_reason: db "no_space",0
+str_exp_paste_exists_reason: db "exists",0
+str_exp_paste_mount_reason: db "mount_changed",0
+str_exp_paste_missing_note: db "copy item not found",0
+str_exp_paste_readonly_note: db "copy destination is read-only",0
+str_exp_paste_space_note: db "copy destination has no space",0
+str_exp_paste_exists_note: db "copy destination already exists",0
+str_exp_paste_mount_note: db "copy volume changed",0
+align 8
+str_exp_paste_reasons:
+    dq str_exp_paste_missing_reason - str_exp_paste_reasons, str_exp_paste_missing_note - str_exp_paste_reasons
+    dq str_exp_paste_readonly_reason - str_exp_paste_reasons, str_exp_paste_readonly_note - str_exp_paste_reasons
+    dq str_exp_paste_full_reason - str_exp_paste_reasons, str_exp_paste_space_note - str_exp_paste_reasons
+    dq str_exp_paste_space_reason - str_exp_paste_reasons, str_exp_paste_space_note - str_exp_paste_reasons
+    dq str_exp_paste_exists_reason - str_exp_paste_reasons, str_exp_paste_exists_note - str_exp_paste_reasons
+    dq str_exp_paste_mount_reason - str_exp_paste_reasons, str_exp_paste_mount_note - str_exp_paste_reasons
+    dq 0, 0
 str_exp_paste_prefix: db "FSCOPY NONCE=",0
 str_exp_paste_job: db " OK JOB=",0
 str_exp_file_ready: db "file selected for copy (Ctrl+V)",0
@@ -7420,6 +9565,26 @@ align 8
 form_exp_last_press_ms: dq 0
 form_exp_flags: times FORM_FSROOT_CAP db 0
 form_exp_names: times FORM_FSROOT_CAP * FORM_EXP_NAME db 0
+form_format_progress: times 32 db 0
+str_exp_format_phase: db 'format ',0
+str_exp_format_step: db ' steps=',0
+str_exp_format_states:
+    db 'queued',0
+    times 24-7 db 0
+    db 'formatting',0
+    times 24-11 db 0
+    db 'finishing',0
+    times 24-10 db 0
+    db 'done',0
+    times 24-5 db 0
+    db 'not started',0
+    times 24-12 db 0
+    db 'uncertain',0
+    times 24-10 db 0
+    db 'quarantined',0
+    times 24-12 db 0
+    db 'stopping',0
+    times 24-9 db 0
 str_exp_copy_job: db "copy job=",0
 str_exp_copy_mount: db " mount=",0
 str_exp_copy_bytes: db ",bytes=",0
@@ -7458,9 +9623,25 @@ str_exp_copy_durability:
 form_exp_sort_mode: dd -1
 form_exp_sort_desc: dd 0
 form_exp_drives_count: dd 0
-form_exp_drives: times 16 * 48 db 0
+form_exp_drives: times 24 * 48 db 0
 form_exp_drives_buf: times 512 db 0
 form_exp_details_buf: times 512 db 0
+; Banked with its original native Explorer WM lifetime. Read-only facts only.
+form_exp_format_id: dd -1
+form_exp_format_win: dd -1
+form_exp_format_seq: dd 0
+form_exp_format_gen: dd 0
+form_exp_format_owner: dq 0
+form_exp_format_birth: dq 0
+form_exp_format_epoch: dq 0
+form_exp_format_key: dq 0
+form_exp_format_mount: dq -1
+form_exp_format_ops: dq 0
+form_exp_format_priv: dq 0
+form_exp_format_info: times 80 db 0
+form_exp_format_class: times 80 db 0
+form_exp_format_check: times 80 db 0
+form_exp_format_path: times FORM_FS_CWD_MAX db 0
 form_exp_context_id: dd -1
 form_exp_context_seq: dd 0
 form_exp_context_ref: dd FORM_EXP_NONE
@@ -7485,15 +9666,20 @@ str_exp_sort_size: db "size",0
 str_exp_sort_kind: db "kind",0
 str_exp_sort_asc: db " ascending",0
 str_exp_sort_descending: db " descending",0
+str_exp_owned_drive: db "PaOS files 0",0
+str_fsstatus_owned_ro: db "read-only view",0
+str_fsstatus_owned_dirty: db "read-only: volume needs repair in Windows or Linux",0
+str_exp_ntfs_volume_busy: db "NTFS volume ntfs0 is in use; one NTFS volume at a time.",0
+str_exp_ntfs_storage_busy: db "NTFS selection busy: another storage operation is active.",0
 str_fsstatus_na: db "n/a",0
 form_titles: times (FORM_SLOT_COUNT * FORM_TITLE_MAX) db 0
 ; These are indexed by global widget id, including resident hidden forms.
-; FORM_NODE_MAX remains the independent per-declaration lint bound.
+; form_node_limit is reset by the bounded copy before each declaration.
 form_node_ids: times (WGT_MAX * FORM_NODE_ID_MAX) db 0
 form_node_roles: times (WGT_MAX * FORM_NODE_ID_MAX) db 0
 form_node_labels: times (WGT_MAX * FORM_NODE_ID_MAX) db 0
-form_lint_ids: times (FORM_NODE_MAX * FORM_NODE_ID_MAX) db 0
-form_lint_types: times FORM_NODE_MAX dd 0
+form_lint_ids: times (FORM_NODE_STORAGE * FORM_NODE_ID_MAX) db 0
+form_lint_types: times FORM_NODE_STORAGE dd 0
 form_test_wm_state: times WM_MAX dd 0
 
 str_form_kw: db "form",0
@@ -7525,6 +9711,7 @@ key_max: db "max",0
 key_step: db "step",0
 key_src: db "src",0
 key_fit: db "fit",0
+str_form_app_images: db "images/",0  ; app bundle image namespace (widgets-01 A4)
 key_focus: db "focus",0
 val_standard: db "standard",0
 val_chrome_tabs: db "tabs",0
@@ -7532,11 +9719,15 @@ form_win_chrome: db 0
 val_always: db "always",0
 val_fresh: db "fresh",0
 val_never: db "never",0
+val_bind_about_device: db "sysprops.device",0
+val_bind_guest_policy: db "guest.policy",0
+val_bind_about_os: db "sysprops.os",0
 val_bind_sysprops: db "sysprops.live",0
 form_optional_empty: db 0
 val_bind_fsdrives: db "fs.drives",0
 val_bind_fsdetails: db "fs.details",0
 val_bind_fscontext: db "fs.context",0
+val_bind_fsformat: db "fs.format",0
 val_bind_fsroot: db "fs.root",0
 val_bind_fsstatus: db "fs.status",0
 val_bind_netmembers: db "netmon.members",0
@@ -7625,6 +9816,26 @@ str_cad_id_netmon: db "netmon.refresh",0
 str_cad_live_marker: db "[PAOS64] M6 gui: core cadence registry extended (clock + attention + netmon.refresh entries, §12 vital tuple + class) [gui.cadence.registry]",13,10,0
 str_cad_live_fail: db "[PAOS64] M6 gui: live cadence registry initialization FAILED",13,10,0
 
+align 8
+form_lab_guard_id: dd -1
+form_lab_guard_win: dd -1
+form_lab_guard_gen: dd 0
+form_lab_provider_life: dq 0
+form_lab_provider_id: dd -1
+form_lab_provider_win: dd -1
+form_lab_provider_gen: dd 0
+form_wifi_guard_first: dd -1
+form_wifi_guard_win: dd -1
+form_wifi_guard_gen: dd 0
+align 8
+form_wifi_guard_births: times 7 dq 0
+form_lab_guard_life: dq 0
+form_lab_guard_public_life: dq 0
+form_lab_toggle_life: dq 0
+form_lab_toggle_id: dd -1
+form_lab_toggle_win: dd -1
+form_lab_toggle_gen: dd 0
+
 str_app_imgdemo:      db "app_imgdemo",0
 form_str_app_sysprops: db "app_sysprops",0
 form_str_app_netmon:   db "app_netmon",0
@@ -7637,3 +9848,291 @@ str_form_fail_stage: db "[PAOS64] M6 gui: form_spec v1 loader selftest FAILED st
 str_form_fail_error: db " error=",0
 %endmacro
 WDATA_DEFER WDATA_gui_form_loader_0
+
+; Bind-lifetime provenance of the completed original disposable form. No
+; observers manufacture it, and numeric window/role reuse cannot inherit it.
+form_lab_toggle_bound:
+    mov qword [rel form_lab_toggle_life],0
+    cmp dword [rel form_plan_widgets],1
+    jne .out
+    mov edi,[rel form_widget_first]
+    mov eax,[rel form_widget_end]
+    dec eax
+    cmp eax,edi
+    jne .out
+    mov [rel form_lab_toggle_id],edi
+    call wgt_birth_lifetime
+    test rax,rax
+    jz .out
+    cmp rax,-1
+    je .out
+    mov [rel form_lab_toggle_life],rax
+    mov eax,[rel form_current_win]
+    mov [rel form_lab_toggle_win],eax
+    lea rdx,[rel wm_gen]
+    mov eax,[rdx+rax*4]
+    mov [rel form_lab_toggle_gen],eax
+.out:
+    ret
+
+form_lab_toggle_matches:
+    cmp edi,[rel form_lab_toggle_id]
+    jne .bad
+    call wgt_birth_lifetime
+    test rax,rax
+    jz .bad
+    cmp rax,[rel form_lab_toggle_life]
+    jne .bad
+    mov eax,[rel form_lab_toggle_win]
+    cmp eax,[rel form_active_slot+FORM_LAB_TOGGLE_INDEX*4]
+    jne .bad
+    lea rdx,[rel wm_gen]
+    mov edx,[rdx+rax*4]
+    cmp edx,[rel form_lab_toggle_gen]
+    jne .bad
+    call wgt_slot_ptr
+    mov eax,[rax+WGI_WIN]
+    cmp eax,[rel form_lab_toggle_win]
+    jne .bad
+    mov eax,1
+    ret
+.bad:
+    xor eax,eax
+    ret
+
+; Completed original two-control fixture only. No restored shell/relaunch can
+; mint this provenance. Both widget births and the window generation must live.
+form_lab_guard_bound:
+    mov qword [rel form_lab_guard_life],0
+    cmp dword [rel form_plan_widgets],2
+    jne .out
+    mov edi,[rel form_widget_first]
+    mov eax,edi
+    add eax,2
+    cmp eax,[rel form_widget_end]
+    jne .out
+    mov [rel form_lab_guard_id],edi
+    call wgt_birth_lifetime
+    test rax,rax
+    jz .out
+    cmp rax,-1
+    je .out
+    mov [rel form_lab_guard_life],rax
+    mov edi,[rel form_lab_guard_id]
+    inc edi
+    call wgt_birth_lifetime
+    mov [rel form_lab_guard_public_life],rax
+    mov eax,[rel form_current_win]
+    mov [rel form_lab_guard_win],eax
+    lea rdx,[rel wm_gen]
+    mov eax,[rdx+rax*4]
+    mov [rel form_lab_guard_gen],eax
+    mov edi,[rel form_lab_guard_id]
+    xor esi,esi
+    call wgt_guard_bind
+.out:
+    ret
+
+form_lab_guard_matches:
+    cmp edi,[rel form_lab_guard_id]
+    jne .bad
+    call wgt_birth_lifetime
+    test rax,rax
+    jz .bad
+    cmp rax,-1
+    je .bad
+    cmp rax,[rel form_lab_guard_life]
+    jne .bad
+    mov edi,[rel form_lab_guard_id]
+    inc edi
+    call wgt_birth_lifetime
+    test rax,rax
+    jz .bad
+    cmp rax,-1
+    je .bad
+    cmp rax,[rel form_lab_guard_public_life]
+    jne .bad
+    call wgt_slot_ptr
+    mov eax,[rax+WGI_WIN]
+    cmp eax,[rel form_lab_guard_win]
+    jne .bad
+    mov edi,[rel form_lab_guard_id]
+    call wgt_slot_ptr
+    mov eax,[rax+WGI_WIN]
+    cmp eax,[rel form_lab_guard_win]
+    jne .bad
+    cmp eax,[rel form_active_slot+FORM_LAB_GUARD_INDEX*4]
+    jne .bad
+    lea rdx,[rel wm_gen]
+    mov edx,[rdx+rax*4]
+    cmp edx,[rel form_lab_guard_gen]
+    jne .bad
+    mov eax,1
+    ret
+.bad:
+    xor eax,eax
+    ret
+
+
+; Shipped original Wi-Fi materialization only: never calls Wi-Fi handlers,
+; reads private bytes, connects, fills or grants. All seven births are retained.
+form_wifi_guard_bound:
+    push rbx
+    push r12
+    mov dword [rel form_wifi_guard_first],-1
+    cmp dword [rel form_plan_widgets],7
+    jne .out
+    mov ebx,[rel form_widget_first]
+    mov eax,ebx
+    add eax,7
+    cmp eax,[rel form_widget_end]
+    jne .out
+    cmp eax,WGT_MAX
+    ja .out
+    xor r12d,r12d
+.birth:
+    lea edi,[ebx+r12d]
+    call wgt_birth_lifetime
+    test rax,rax
+    jz .out
+    cmp rax,-1
+    je .out
+    lea rdx,[rel form_wifi_guard_births]
+    mov [rdx+r12*8],rax
+    inc r12d
+    cmp r12d,7
+    jb .birth
+    mov eax,[rel form_current_win]
+    cmp eax,WM_MAX-1
+    jae .out
+    mov [rel form_wifi_guard_win],eax
+    lea rdx,[rel wm_gen]
+    mov eax,[rdx+rax*4]
+    mov [rel form_wifi_guard_gen],eax
+    mov [rel form_wifi_guard_first],ebx
+    lea edi,[ebx+1]                 ; exact declared password widget
+    mov esi,1                      ; provenance discriminator, never authority
+    call wgt_guard_bind
+.out:
+    pop r12
+    pop rbx
+    ret
+
+form_wifi_guard_matches:
+    push rbx
+    push r12
+    mov ebx,[rel form_wifi_guard_first]
+    cmp ebx,WGT_MAX-7
+    ja .bad
+    lea eax,[ebx+1]
+    cmp edi,eax
+    jne .bad
+    mov eax,[rel form_wifi_guard_win]
+    cmp eax,WM_MAX-1
+    jae .bad
+    cmp eax,[rel form_active_slot+FORM_WIFI_INDEX*4]
+    jne .bad
+    lea rdx,[rel wm_gen]
+    mov edx,[rdx+rax*4]
+    test edx,edx
+    jz .bad
+    cmp edx,[rel form_wifi_guard_gen]
+    jne .bad
+    xor r12d,r12d
+.member:
+    lea edi,[ebx+r12d]
+    call wgt_birth_lifetime
+    test rax,rax
+    jz .bad
+    cmp rax,-1
+    je .bad
+    lea rdx,[rel form_wifi_guard_births]
+    cmp rax,[rdx+r12*8]
+    jne .bad
+    lea edi,[ebx+r12d]
+    call wgt_slot_ptr
+    mov eax,[rax+WGI_WIN]
+    cmp eax,[rel form_wifi_guard_win]
+    jne .bad
+    inc r12d
+    cmp r12d,7
+    jb .member
+    mov eax,1
+    jmp .out
+.bad:
+    xor eax,eax
+.out:
+    pop r12
+    pop rbx
+    ret
+
+
+; Independent completed disposable public provider form.
+form_lab_provider_bound:
+    mov qword [rel form_lab_provider_life],0
+    cmp dword [rel form_plan_widgets],1
+    jne .out
+    mov edi,[rel form_widget_first]
+    mov eax,[rel form_widget_end]
+    dec eax
+    cmp eax,edi
+    jne .out
+    mov [rel form_lab_provider_id],edi
+    call wgt_birth_lifetime
+    test rax,rax
+    jz .out
+    cmp rax,-1
+    je .out
+    mov [rel form_lab_provider_life],rax
+    mov eax,[rel form_current_win]
+    mov [rel form_lab_provider_win],eax
+    lea rdx,[rel wm_gen]
+    mov eax,[rdx+rax*4]
+    mov [rel form_lab_provider_gen],eax
+    mov edi,[rel form_lab_provider_id]
+    ; Original materialization of this one stock public fixture. The generic
+    ; loader copies the declared role; restore the canonical native stock role
+    ; only after exact declared text/type checks. No observer writes the row.
+    call wgt_slot_ptr
+    cmp dword [rax+WGI_TYPE],WGT_TYPE_TEXTFIELD
+    jne .out
+    push rax
+    mov rdi,[rax+WGI_ROLE]
+    lea rsi,[rel str_wt_textfield]
+    call strcmp
+    pop rdx
+    test eax,eax
+    jnz .out
+    lea rax,[rel str_wt_textfield]
+    mov [rdx+WGI_ROLE],rax
+    mov edi,[rel form_lab_provider_id]
+    call wgt_provider_bind
+.out:
+    ret
+
+form_lab_provider_matches:
+    cmp edi,[rel form_lab_provider_id]
+    jne .bad
+    call wgt_birth_lifetime
+    test rax,rax
+    jz .bad
+    cmp rax,-1
+    je .bad
+    cmp rax,[rel form_lab_provider_life]
+    jne .bad
+    mov eax,[rel form_lab_provider_win]
+    cmp eax,[rel form_active_slot+FORM_LAB_PROVIDER_INDEX*4]
+    jne .bad
+    lea rdx,[rel wm_gen]
+    mov edx,[rdx+rax*4]
+    cmp edx,[rel form_lab_provider_gen]
+    jne .bad
+    call wgt_slot_ptr
+    mov eax,[rax+WGI_WIN]
+    cmp eax,[rel form_lab_provider_win]
+    jne .bad
+    mov eax,1
+    ret
+.bad:
+    xor eax,eax
+    ret

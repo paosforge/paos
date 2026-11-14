@@ -1,7 +1,7 @@
 ;; MODULE gui/text_view
 ;; LAYER 6
-;; EXPORTS text_view_close_hook, text_view_init, text_view_open, text_view_draw, text_view_hit, text_view_key, text_view_click, text_view_set, text_view_get, text_view_type, tv_ids, tv_slot, tv_live
-;; IMPORTS gui/widget, gui/l10n_paint, gui/form_loader, gui/start_programs, gui/img/img_source, fs/vfs, core/heap, sec/session
+;; EXPORTS tv_unit, tv_paint_unit, text_view_close_hook, text_view_init, text_view_open, text_view_draw, text_view_hit, text_view_key, text_view_click, text_view_set, text_view_get, text_view_type, tv_ids, tv_slot, tv_live
+;; IMPORTS gui/widget, gui/l10n_paint, gui/form_loader, gui/start_programs, gui/img/img_source, gui/window_mgmt, fs/vfs, core/heap, sec/session
 ;; CAPS CAP_GUI
 ;; OWNER rc-live-claude
 ;; CONTEXT: bsp_only
@@ -35,7 +35,10 @@
 ;
 ; KEYS (focus on a button; the view is not a focus stop): Up/Down one row,
 ; PgUp/PgDn one view less a row, Home/End. Enter and Space press the focused button.
-; A key or click only moves the view, so an injected one needs no origin gate.
+; N toggles a view-only line-number gutter (default on .sh/.frm, off otherwise).
+; Five mono digits plus a gap are reserved; wrapped continuations are blank.
+; Lines above99999 use ##### within those five cells. No editing or file write.
+; A key or click only changes the view, so an injected one needs no origin gate.
 ; ============================================================================
 
 TV_CAP          equ 0x100000            ; the read-once cap, 1 MiB
@@ -49,6 +52,7 @@ TV_INSET_X      equ 8
 TV_INSET_Y      equ 4
 TV_MIN_CELLS    equ 8                   ; narrower shows the fill only; the widest unit is a tab of 4
 TV_TAB          equ 4
+TV_NUMBER_CELLS equ 6                   ; five mono digits plus one blank gap
 TV_ST_EMPTY     equ 0                   ; no file yet
 TV_ST_LOADED    equ 1
 TV_ST_UNREADABLE equ 2
@@ -95,10 +99,107 @@ text_view_set:
 text_view_hit:
     jmp  wgt_rect_hittest
 
+; Counts belong to the instance that accepted the open, not a reusable widget
+; or WM slot. Native birth and stamped WM identity are passive observations;
+; they grant no source authority and never read the file or change widget RAM.
+; tv_counts_identity(EDI view id) -> RAX birth, EDX stamped host, or both zero.
+tv_counts_identity:
+    push rbx
+    push r12
+    sub  rsp, 8
+    mov  r12d, edi
+    cmp  byte [rel tv_live], 1
+    jne  .bad
+    cmp  edi, [rel tv_ids + TV_W_VIEW * 4]
+    jne  .bad
+    call wgt_birth_lifetime
+    test rax, rax
+    jz   .bad
+    mov  rbx, rax
+    mov  edi, r12d
+    call wgt_slot_ptr
+    mov  ecx, [rel text_view_type]
+    cmp  ecx, -1
+    je   .bad
+    inc  ecx
+    cmp  [rax + WGI_TYPE], ecx
+    jne  .bad
+    mov  edi, [rel tv_slot]
+    cmp  [rax + WGI_WIN], edi
+    jne  .bad
+    call wmx_window_id
+    test eax, eax
+    jz   .bad
+    mov  edx, eax
+    mov  rax, rbx
+    jmp  .out
+.bad:
+    xor  eax, eax
+    xor  edx, edx
+.out:
+    add  rsp, 8
+    pop  r12
+    pop  rbx
+    ret
+
+; Capture only after an explicit open has loaded the document and located its
+; whole form. A failed capture retains no old counts binding.
+tv_counts_bind:
+    push rbx
+    mov  ebx, edi
+    call tv_counts_identity
+    mov  [rel tv_counts_birth], rax
+    mov  [rel tv_counts_host], edx
+    test rax, rax
+    jz   .bad
+    inc  ebx
+    mov  [rel tv_counts_view], ebx
+    xor  eax, eax
+    jmp  .out
+.bad:
+    mov  dword [rel tv_counts_view], 0
+    mov  eax, 1
+.out:
+    pop  rbx
+    ret
+
+; EDI queried view -> EAX 1 only for the exact captured live instance. Refusal
+; is read-only: even the counts scratch buffer keeps its prior bytes.
+tv_counts_current:
+    push rbx
+    mov  ebx, edi
+    call tv_counts_identity
+    test rax, rax
+    jz   .bad
+    inc  ebx
+    cmp  ebx, [rel tv_counts_view]
+    jne  .bad
+    cmp  rax, [rel tv_counts_birth]
+    jne  .bad
+    cmp  edx, [rel tv_counts_host]
+    jne  .bad
+    mov  eax, 1
+    jmp  .out
+.bad:
+    xor  eax, eax
+.out:
+    pop  rbx
+    ret
+
 ; text_view_get(EDI id, RSI field) -> RAX the counts line for a field the kit
-; knows, 0 otherwise. Counts only: never the file's text or name.
+; knows on the exact opened instance, 0 otherwise. Counts only: never file
+; text/name. Existing source policy and outer WIDGETGET exclusions still apply.
 text_view_get:
     push rbx
+    push r12
+    sub  rsp, 8
+    mov  ebx, edi
+    mov  r12, rsi
+    call tv_counts_current
+    test eax, eax
+    jz   .out
+    mov  edi, ebx
+    mov  rsi, r12
     call wgt_label_get
     test rax, rax
     jz   .out
@@ -142,6 +243,8 @@ text_view_get:
     mov  byte [rdi], 0
     mov  rax, rbx
 .out:
+    add  rsp, 8
+    pop  r12
     pop  rbx
     ret
 
@@ -481,6 +584,15 @@ tv_geom:
     sub  ecx, 2 * TV_INSET_X
     jle  .small
     shr  ecx, 3
+    mov  edx, [rel tv_gx]
+    mov  [rel tv_num_gx], edx
+    cmp  byte [rel tv_numbers], 0
+    je   .text_width
+    cmp  dword [rel tv_state], TV_ST_LOADED
+    jne  .text_width
+    sub  ecx, TV_NUMBER_CELLS
+    add  dword [rel tv_gx], TV_NUMBER_CELLS*8
+.text_width:
     cmp  ecx, TV_MIN_CELLS
     jl   .small
     mov  [rel tv_acells], ecx
@@ -745,6 +857,72 @@ tv_paint_row:
     pop  rbx
     ret
 
+; Logical file-line number at a bounded row offset. One scan per compose,
+; independent of wraps; no row table or allocation and never past tv_len.
+; EDI=offset -> EAX=1+preceding LF count, clobbers RCX,RDX,RSI.
+tv_line_number:
+    mov  esi, [rel tv_len]
+    cmp  edi, esi
+    cmova edi, esi
+    mov  rdx, [rel tv_buf]
+    mov  eax, 1
+    xor  ecx, ecx
+.walk:
+    cmp  ecx, edi
+    jae  .out
+    cmp  byte [rdx+rcx], 10
+    jne  .next
+    inc  eax
+.next:
+    inc  ecx
+    jmp  .walk
+.out:
+    ret
+
+; EAX=logical line, R9D=y. Right-aligned five-cell mono gutter. Existing
+; tv_paint_unit paints printable ASCII only here (digits or overflow '#').
+tv_paint_number:
+    push rbx
+    push r12
+    push r13
+    push r14
+    sub  rsp, 8
+    mov  r14d, r9d
+    lea  r13, [rel tv_number_buf]
+    cmp  eax, 99999
+    ja   .overflow
+    mov  rdi, r13
+    call tv_put_dec
+    sub  rdi, r13
+    mov  r12d, edi
+    jmp  .paint
+.overflow:
+    mov  dword [r13], '####'
+    mov  byte [r13+4], '#'
+    mov  r12d, 5
+.paint:
+    mov  r8d, 5
+    sub  r8d, r12d
+    shl  r8d, 3
+    add  r8d, [rel tv_num_gx]
+.digit:
+    movzx edx, byte [r13]
+    mov  eax, 1
+    mov  r9d, r14d
+    mov  ebx, TV_FG
+    mov  ecx, TV_BG
+    call tv_paint_unit
+    add  r8d, 8
+    inc  r13
+    dec  r12d
+    jnz  .digit
+    add  rsp, 8
+    pop  r14
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+
 ; tv_paint_status(R9D y): "<name>   n of N", and the cut when there is one.
 ; Clobbers caller-saved registers.
 tv_paint_status:
@@ -769,6 +947,12 @@ tv_paint_status:
     lea  rsi, [rel tv_s_cut]
     call tv_put_str
 .terminated:
+    lea  rsi, [rel tv_s_numbers_off]
+    cmp  byte [rel tv_numbers], 0
+    je   .numbers_hint
+    lea  rsi, [rel tv_s_numbers_on]
+.numbers_hint:
+    call tv_put_str
     lea  rax, [rel tv_status]
     sub  rdi, rax
     mov  r12d, edi                      ; its cells: ASCII
@@ -866,6 +1050,12 @@ text_view_draw:
     call tv_clamp
     mov  edi, [rel tv_top]
     call tv_style_to
+    cmp  byte [rel tv_numbers], 0
+    je   .number_ready
+    mov  edi, [rel tv_top]
+    call tv_line_number
+    mov  [rel tv_number_line], eax
+.number_ready:
     mov  r13d, [rel tv_top]             ; row start
     xor  r14d, r14d                     ; rows painted
 .row:
@@ -887,12 +1077,33 @@ text_view_draw:
     mov  esi, [rel tv_acells]
     call tv_next
     mov  r15d, eax
+    cmp  byte [rel tv_numbers], 0
+    je   .content
+    test r13d, r13d
+    jz   .number
+    mov  rax, [rel tv_buf]
+    cmp  byte [rax+r13-1], 10
+    jne  .content                      ; continuation of the same file line
+.number:
+    mov  eax, [rel tv_number_line]
+    mov  r9d, r14d
+    shl  r9d, 4
+    add  r9d, [rel tv_gy]
+    call tv_paint_number
+.content:
     mov  edi, r13d
     mov  esi, r15d
     mov  r9d, r14d
     shl  r9d, 4
     add  r9d, [rel tv_gy]
     call tv_paint_row
+    cmp  byte [rel tv_numbers], 0
+    je   .next_row
+    mov  rax, [rel tv_buf]
+    cmp  byte [rax+r15-1], 10          ; tv_next always advances inside tv_len
+    jne  .next_row
+    inc  dword [rel tv_number_line]
+.next_row:
     mov  r13d, r15d
     inc  r14d
     jmp  .row
@@ -1010,6 +1221,10 @@ text_view_key:
     call tv_authorized
     test eax, eax
     jnz  .no
+    cmp  r12d, 'n'
+    je   .numbers
+    cmp  r12d, 'N'
+    je   .numbers
     cmp  r12d, ' '
     je   .press
     cmp  r12d, GUI_KEY_ENTER
@@ -1044,6 +1259,11 @@ text_view_key:
     mov  edi, eax
     sub  edi, [rel tv_row]
     call tv_down
+    jmp  .changed
+.numbers:
+    xor  byte [rel tv_numbers], 1
+    mov  dword [rel tv_cells], 0        ; reflow from the same visible byte
+    call tv_ready
     jmp  .changed
 .home:
     mov  dword [rel tv_top], 0
@@ -1173,6 +1393,33 @@ tv_type:
     jmp  .row
 .no:
     xor  eax, eax
+    ret
+
+; Accepted text name's final extension only, case-insensitive. Bounded byte
+; reads also permit short names ending immediately at an unmapped guard page.
+; RSI=path, EDX=length -> EAX=1 for .sh/.frm, otherwise0.
+tv_default_numbers:
+    lea  rcx, [rsi+rdx]
+    cmp  edx, 3
+    jb   .off
+    cmp  byte [rcx-3], '.'
+    jne  .frm
+    movzx eax, word [rcx-2]
+    or   eax, 0x2020
+    cmp  eax, 'sh'
+    je   .on
+.frm:
+    cmp  edx, 4
+    jb   .off
+    mov  eax, [rcx-4]
+    or   eax, 0x20202000
+    cmp  eax, '.frm'
+    je   .on
+.off:
+    xor  eax, eax
+    ret
+.on:
+    mov  eax, 1
     ret
 
 ; tv_keep_name(RSI path, EDX bytes): its last component, for the status row.
@@ -1347,6 +1594,9 @@ text_view_close_hook:
 
 ; tv_wipe(): no document in memory. Clobbers RAX, RCX, RDI.
 tv_wipe:
+    mov  qword [rel tv_counts_birth], 0
+    mov  dword [rel tv_counts_view], 0
+    mov  dword [rel tv_counts_host], 0
     mov  dword [rel tv_state], TV_ST_EMPTY
     mov  dword [rel tv_len], 0
     mov  dword [rel tv_name_len], 0
@@ -1354,6 +1604,7 @@ tv_wipe:
     mov  dword [rel tv_total], 0
     mov  byte [rel tv_trunc], 0
     mov  byte [rel tv_md], 0
+    mov  byte [rel tv_numbers], 0
     lea  rdi, [rel tv_name]
     mov  ecx, TV_NAME_MAX
     xor  eax, eax
@@ -1418,6 +1669,10 @@ text_view_open:
     sete byte [rel tv_md]
     mov  rsi, r12
     mov  edx, r13d
+    call tv_default_numbers
+    mov  [rel tv_numbers], al
+    mov  rsi, r12
+    mov  edx, r13d
     call tv_keep_name
     mov  edi, ebx
     mov  rsi, r12
@@ -1426,7 +1681,12 @@ text_view_open:
     call start_programs_open_text
     call sp_text_scan                   ; a window already open keeps its slot: repaint it
     cmp  byte [rel tv_live], 1
-    je   .shown
+    jne  .no_window
+    mov  edi, [rel tv_ids + TV_W_VIEW * 4]
+    call tv_counts_bind
+    test eax, eax
+    jz   .shown
+.no_window:
     call tv_wipe                        ; no window to close, so no close hook
     mov  eax, 2                         ; the caller says so
     jmp  .out
@@ -1446,6 +1706,8 @@ tv_s_cannot:     db "This file could not be read.", 0
 tv_s_memory:     db "There is not enough memory to open this file.", 0
 tv_s_of:         db " of ", 0
 tv_s_cut:        db " (first 1 MiB)", 0
+tv_s_numbers_on: db "  N: lines on",0
+tv_s_numbers_off: db "  N: lines off",0
 tv_s_state:      db "textview state=", 0
 tv_s_empty:      db "empty", 0
 tv_s_loaded:     db "loaded", 0
@@ -1470,6 +1732,9 @@ tv_types:
 %include "core/abi/wdata.inc"
 %macro WDATA_BSS_gui_text_view 0
 alignb 8
+tv_counts_birth: resq 1                 ; full native birth captured at open
+tv_counts_view:  resd 1                 ; widget id+1, zero unbound
+tv_counts_host:  resd 1                 ; original wmx_window_id at open
 tv_slab:         resq 1                 ; the one read-once slab, TV_CAP bytes
 tv_buf:          resq 1                 ; the text in it (past a BOM)
 text_view_type:  resd 1                 ; the registered type index (-1: none)
@@ -1491,11 +1756,15 @@ tv_lmark:        resd 1                 ; a heading marker's bytes
 tv_lbullet:      resd 1                 ; a list marker's offset, -1 none
 tv_name_len:     resd 1
 tv_name:         resb TV_NAME_MAX
-tv_status:       resb 48                ; "n of N (first 1 MiB)"
+tv_status:       resb 48                ; counts, optional cap marker, N line-number hint (<=45 bytes)
 tv_get_buf:      resb 96                ; the counts line
 tv_live:         resb 1                 ; 1 while the whole form is open
 tv_md:           resb 1
 tv_trunc:        resb 1
 tv_fence:        resb 1
+tv_numbers:      resb 1
+tv_num_gx:       resd 1
+tv_number_line:  resd 1
+tv_number_buf:   resb 5
 %endmacro
 WDATA_BSS_DEFER WDATA_BSS_gui_text_view

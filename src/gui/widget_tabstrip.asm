@@ -89,7 +89,7 @@ TS_COL_ICON     equ GUI_TOK_TAB_ICON
 
 MENU_ITEM_H     equ GUI_MENU_ITEM_H
 MENU_PAD        equ GUI_MENU_PAD
-MENU_MAX_ITEMS  equ 6
+MENU_MAX_ITEMS  equ 7
 MENU_BG         equ GUI_TOK_MENU_BG
 MENU_BORDER     equ GUI_TOK_MENU_BORDER
 MENU_TEXT       equ GUI_TOK_MENU_TEXT
@@ -115,7 +115,7 @@ wgt_tabstrip_register:
     lea  rsi, [rel wgt_menu_draw]
     lea  rdx, [rel wgt_menu_hit]
     lea  rcx, [rel wgt_label_set]
-    lea  r8,  [rel wgt_label_get]
+    lea  r8,  [rel wgt_menu_get]            ; value/text from the menu's whole text store
     mov  r9, (104 << 32) | 220
     call wgt_type_register
     mov  [rel wgt_menu_type], eax
@@ -1260,7 +1260,7 @@ wgt_tabstrip_has_tag:
     ret
 
 ; ---------------------------------------------------------------------------
-; menu: paints only while open (WGI_SEL_LO = 1); items from WGI_VAL.
+; menu: paints only while open (WGI_SEL_LO = 1); items from its whole text (wgt_menu_text_ptr).
 wgt_menu_draw:
     push rbx
     push r12
@@ -1292,7 +1292,9 @@ wgt_menu_draw:
     mov  rax, rbx
     call menu_item_count
     mov  r14d, r8d
-    lea  r12, [rbx + WGI_VAL]
+    mov  rax, rbx
+    call wgt_menu_text_ptr                  ; the whole item text (wgt_menu_text), not the 31 B inline copy
+    mov  r12, rax
     xor  r13d, r13d
 .item:
     cmp  r13d, r14d
@@ -1431,7 +1433,9 @@ menu_choose:
     mov  dword [rbx + MENU_HOT], 0
     mov  [rel menu_last_item], ecx
     ; the item's text: skip ECX '|' separators (menu_item_count's walk)
-    lea  rsi, [rbx + WGI_VAL]
+    mov  rax, rbx
+    call wgt_menu_text_ptr                  ; preserves ECX
+    mov  rsi, rax
 .skip:
     test ecx, ecx
     jz   .item
@@ -1505,6 +1509,10 @@ menu_open_at:
     je   .out
     cmp  edi, -2
     jne  .host
+    cmp  dword [rax + WGI_LAYER], 1          ; menu hover uses the overlay paint contract
+    jne  .next
+    test dword [rax + WGI_FLAGS], 1
+    jz   .next
     call wgt_flyout_painted
     jc   .next
     jmp  .out
@@ -1717,12 +1725,15 @@ wgt_menu_key:
     pop  rbx
     ret
 
-; menu_item_count(RAX=menu widget) -> R8D = items in WGI_VAL ('|' separated,
+; menu_item_count(RAX=menu widget) -> R8D = items in its whole text ('|' separated,
 ; at most MENU_MAX_ITEMS), counted exactly as wgt_menu_draw walks them (an item
 ; is cut after TS_TITLE_MAX-1 characters). Clobbers R8, R9, RDX.
 menu_item_count:
     xor  r8d, r8d
-    lea  r9, [rax + WGI_VAL]
+    push rax
+    call wgt_menu_text_ptr                  ; the whole item text; preserves every other register
+    mov  r9, rax
+    pop  rax
 .item:
     cmp  r8d, MENU_MAX_ITEMS
     jae  .out

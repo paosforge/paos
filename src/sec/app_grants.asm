@@ -1,8 +1,8 @@
 ;; MODULE sec/app_grants
 ;; LAYER 5
 ;; PURPOSE Bounded native WAIT policy and frozen one-invocation human approval.
-;; EXPORTS app_grants_configure, app_grants_configure_installed, app_grants_set, app_grants_revoke, app_grants_check, app_grants_ask, app_grants_pending, app_grants_approve, app_grants_consume, app_grants_cancel, app_grants_resume, ag_generation
-;; IMPORTS sec/session, sec/principal, svc/command, core/time
+;; EXPORTS app_grants_observe, app_grants_configure, app_grants_configure_scope, app_grants_configure_installed, app_grants_set, app_grants_revoke, app_grants_revoke_bundle, app_grants_check, app_grants_ask, app_grants_pending, app_grants_approve, app_grants_consume, app_grants_cancel, app_grants_resume, ag_generation
+;; IMPORTS sec/session, sec/principal, svc/command, core/time, core/smp
 ;; OWNER saga:app_grants
 ; Trusted native APIs only: no command/guest policy setter or asserted bundle hash.
 ; Validator proves the WHOLE descriptor from enforced native launcher/VM/window
@@ -45,9 +45,68 @@ AG_P_APPROVED equ 2
 app_grants_configure:
     cmp byte [rel cmd_in_dispatch], 0
     jne ag_bad
+    cmp byte [rel ag_delivering],0
+    jne ag_bad
+    mov qword [rel ag_scope],0
     mov [rel ag_validator], rdi
     mov [rel ag_resume_op], rsi
     jmp app_grants_revoke
+
+; configure_scope(RDI=native policy-key normalizer or0)->1/0.
+; Only composition can register; never a guest setter. Revokes all runtime rows
+; and pending original requests before changing scope. Reconfigure clears it.
+app_grants_configure_scope:
+    cmp byte [rel cmd_in_dispatch],0
+    jne ag_bad
+    cmp byte [rel ag_delivering],0
+    jne ag_bad
+    push rdi
+    call app_grants_revoke
+    pop rdi
+    mov [rel ag_scope],rdi
+    mov eax,1
+    ret
+
+; Original descriptor has already passed ag_validate. A native scope may map
+; only window/rawgen/reset into another fully validated native identity.
+; Op, immutable app identity and ALL invocation operands must remain exact.
+; RDI original -> RAX readonly key160,0 refusal. Never overwrites the original.
+ag_policy_key:
+    push rbx
+    push r12
+    sub rsp,8
+    mov rbx,rdi
+    mov rax,rdi
+    cmp qword [rel ag_scope],0
+    je .out
+    call [rel ag_scope]
+    test rax,rax
+    jz .bad
+    mov r12,rax
+    mov rdi,rax
+    mov rsi,rbx
+    mov ecx,56/8
+    cld
+    repe cmpsq
+    jne .bad
+    lea rdi,[r12+80]
+    lea rsi,[rbx+80]
+    mov ecx,(AG_DESC_SIZE-80)/8
+    repe cmpsq
+    jne .bad
+    mov rdi,r12
+    call [rel ag_validator]
+    cmp eax,1
+    jne .bad
+    mov rax,r12
+    jmp .out
+.bad:
+    xor eax,eax
+.out:
+    add rsp,8
+    pop r12
+    pop rbx
+    ret
 
 ; configure_installed(RDI=native resolver or0), depth0 composition only.
 ; Resolver(desc160)->policy0..2/current generation. ag_validate always runs first;
@@ -91,6 +150,89 @@ app_grants_cancel:
     rep stosq
     pop rcx
     pop rdi
+    ret
+
+; revoke_bundle(RDI native digest32, RSI owner epoch)->1 retired/absent,0 refused.
+; Exact REMOVE helper, after the coordinator's durable REMOVING + VM quiescence.
+; Denial only: does not manufacture approval or authorize a storage effect.
+; Copy before mutation; caller owns mapped native lifetime. Preserve unrelated
+; keys/pending, so global generation is unchanged. Deleted keys cannot resolve;
+; the install caller separately removes the exact remembered policy.
+app_grants_revoke_bundle:
+    push rbx
+    push r12
+    sub rsp,32
+    cld
+    mov rbx,rdi
+    mov r12,rsi
+    call smp_current_logical
+    test eax,eax
+    jnz .bad
+    cmp byte [rel cmd_in_dispatch],0
+    jne .bad
+    cmp byte [rel ag_delivering],0
+    jne .bad
+    test rbx,rbx
+    jz .bad
+    mov rax,rbx
+    add rax,32
+    jc .bad
+    call session_shell_local_authority
+    cmp rax,PRIN_OWNER
+    jne .bad
+    test rdx,rdx
+    jz .bad
+    cmp rdx,-1
+    je .bad
+    cmp rdx,r12
+    jne .bad
+    mov rsi,rbx
+    mov rdi,rsp
+    mov ecx,4
+    rep movsq
+    lea r8,[rel ag_rows]
+    mov r9d,AG_ROWS
+.row:
+    ; AG_D_OWNER is the app principal, not the human session principal.
+    cmp [r8+AG_D_EPOCH],r12
+    jne .next
+    lea rdi,[r8+AG_D_HASH]
+    mov rsi,rsp
+    mov ecx,4
+    repe cmpsq
+    jne .next
+    mov rdi,r8
+    xor eax,eax
+    mov ecx,AG_ROW_SIZE/8
+    rep stosq
+.next:
+    add r8,AG_ROW_SIZE
+    dec r9d
+    jnz .row
+    cmp qword [rel ag_pending_state],AG_P_NONE
+    je .ok
+    cmp [rel ag_snapshot+AG_D_EPOCH],r12
+    jne .ok
+    lea rdi,[rel ag_snapshot+AG_D_HASH]
+    mov rsi,rsp
+    mov ecx,4
+    repe cmpsq
+    jne .ok
+    call app_grants_cancel
+.ok:
+    mov ebx,1
+    jmp .out
+.bad:
+    xor ebx,ebx
+.out:
+    mov rdi,rsp
+    xor eax,eax
+    mov ecx,4
+    rep stosq
+    mov eax,ebx
+    add rsp,32
+    pop r12
+    pop rbx
     ret
 
 ag_bad:
@@ -186,12 +328,14 @@ ag_validate:
 
 ; set(RDI=desc,ESI=DENY/ALLOW/ASK,RDX=ttl_us)->1/0.
 ; Only live keyed local OWNER outside dispatch/injection can change policy.
-; Key is exact first128 bytes, including full identities + typed operation.
+; Key is validated native first128 bytes, optionally scoped only across windows.
+; Every original descriptor still proves its exact requested window first.
 app_grants_set:
     push rbx
     push r12
     push r13
     push r14
+    sub rsp,8
     mov rbx, rdi
     mov r12d, esi
     mov r13, rdx
@@ -210,6 +354,13 @@ app_grants_set:
     call ag_validate
     test eax, eax
     jz .bad
+    mov [rsp],rdx
+    mov rdi,rbx
+    call ag_policy_key
+    mov rdx,[rsp]
+    test rax,rax
+    jz .bad
+    mov rbx,rax
     add r13, rdx
     jc .bad
     ; Reuse exact key, otherwise a vacant/expired slot. No implicit eviction.
@@ -253,6 +404,7 @@ app_grants_set:
 .bad:
     xor eax, eax
 .out:
+    add rsp,8
     pop r14
     pop r13
     pop r12
@@ -260,13 +412,28 @@ app_grants_set:
     ret
 
 ; check(desc)->EAX policy (0 closed), RDX exact current generation or0.
+; Passive extra results R8 source0closed/1runtime/2installed, R9 validated
+; resolution time_us (0 unavailable), R10 runtime expiry_us (0 otherwise).
+; These report this lookup only; they never change policy or imply revocation.
 app_grants_check:
     push rbx
     push r12
+    push r13
+    push r14
+    sub rsp,8
+    xor r13d,r13d
+    mov r14,rdi
     mov rbx, rdi
     call ag_validate
     test eax, eax
     jz .bad
+    mov r13,rdx
+    mov rdi,rbx
+    call ag_policy_key
+    test rax,rax
+    jz .bad
+    mov rbx,rax
+    mov rdx,r13
     lea r12, [rel ag_rows]
     mov r8d, AG_ROWS
 .scan:
@@ -283,21 +450,31 @@ app_grants_check:
     jnz .scan
     cmp qword [rel ag_installed_resolver],0
     je .bad
-    mov rdi,rbx
+    mov rdi,r14                  ; resolver proves the actual requested window
     call [rel ag_installed_resolver]
     cmp eax,AG_ASK
     ja .bad
     cmp rdx,[rel ag_generation]
     jne .bad
+    mov r8d,2
+    xor r10d,r10d
     jmp .out
 .bad:
     xor eax, eax
     xor edx, edx
+    xor r8d,r8d
+    xor r10d,r10d
     jmp .out
 .found:
     mov eax, [r12 + AG_KEY_SIZE]
     mov rdx, [rel ag_generation]
+    mov r8d,1
+    mov r10,[r12 + AG_KEY_SIZE + 8]
 .out:
+    mov r9,r13
+    add rsp,8
+    pop r14
+    pop r13
     pop r12
     pop rbx
     ret
@@ -471,6 +648,7 @@ app_grants_resume:
 %macro WDATA_app_grants 0
 align 8
 ag_validator: dq 0
+ag_scope: dq 0
 ag_installed_resolver: dq 0
 ag_resume_op: dq 0
 ag_generation: dq 1
@@ -488,3 +666,40 @@ ag_rows: resb AG_ROWS*AG_ROW_SIZE
 ag_snapshot: resb AG_DESC_SIZE
 %endmacro
 WDATA_BSS_DEFER WDATA_app_grants_bss
+
+; Native depth-zero diagnostic: digest32 -> exact runtime row count / pending count.
+; Read only; not policy resolution and never an approval or grant setter.
+app_grants_observe:
+    push rbx
+    mov rbx,rdi
+    xor r10d,r10d
+    xor r11d,r11d
+    lea r8,[rel ag_rows]
+    mov r9d,AG_ROWS
+.row:
+    cmp qword [r8+AG_D_INSTANCE],0
+    je .next
+    lea rdi,[r8+AG_D_HASH]
+    mov rsi,rbx
+    mov ecx,4
+    cld
+    repe cmpsq
+    jne .next
+    inc r10d
+.next:
+    add r8,AG_ROW_SIZE
+    dec r9d
+    jnz .row
+    cmp qword [rel ag_pending_state],AG_P_NONE
+    je .out
+    lea rdi,[rel ag_snapshot+AG_D_HASH]
+    mov rsi,rbx
+    mov ecx,4
+    repe cmpsq
+    jne .out
+    inc r11d
+.out:
+    mov rax,r10
+    mov rdx,r11
+    pop rbx
+    ret

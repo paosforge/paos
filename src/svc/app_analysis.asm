@@ -117,11 +117,35 @@ app_analysis_build:
     je .form
     cmp dword [r13],4
     je .data
-    cmp dword [r13],5
-    je .next
+    cmp dword [r13],3
+    je .collateral
+    cmp dword [r13],6
+    je .collateral
+    cmp dword [r13],7
+    je .collateral
 .next:
     inc qword [rel aa_member]
     jmp .member
+.collateral:
+    ; Verified role/path only. Never scan PNG/opaque credits as shell or data.
+    mov qword [rel aa_kind],8
+    mov qword [rel aa_off],0
+    mov rax,[rel aa_size]
+    mov [rel aa_len],rax
+    mov qword [rel aa_fact_line],0
+    mov qword [rel aa_request],0
+    mov qword [rel aa_reason],14
+    lea rsi,[rel aa_icon48]
+    cmp dword [r13],3
+    je .emit_collateral
+    lea rsi,[rel aa_icon96]
+    cmp dword [r13],6
+    je .emit_collateral
+    mov qword [rel aa_reason],15
+    lea rsi,[rel aa_notices]
+.emit_collateral:
+    call aa_emit_z
+    jmp .next
 .script:
     push rbx
     call aa_script
@@ -135,6 +159,10 @@ app_analysis_build:
     jmp .next
 .finish:
     jmp aa_build_finish
+
+aa_icon48: db "icon.png: PNG RGBA8 48x48",0
+aa_icon96: db "icon@2x.png: PNG RGBA8 96x96",0
+aa_notices: db "NOTICES.json: credits metadata; contents not analyzed",0
 
 aa_request_facts:
     push r14

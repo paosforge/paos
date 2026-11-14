@@ -1,7 +1,7 @@
 ;; MODULE gui/widget_console_grid
 ;; LAYER 6
-;; EXPORTS grid_window_b_retire, grid_release_window, console_grid_register, console_grid_draw, console_grid_wheel, console_grid_reclaim, grid_claim_snapshot, console_grid_dump_for_window, console_grid_claim_plain, console_grid_restore_owner, console_grid_headless_configure, console_grid_headless_draw, grid_append, grid_clear, grid_scroll, grid_resize, grid_dump_visible_page, grid_scrollback_depth, grid_ansi_capture_top_row, grid_instance_open, grid_instance_close, grid_instance_feed, grid_instance_accept_input, grid_instance_load_widget, grid_instance_validate, grid_widget_id, grid_type_id, grid_cols, grid_rows, grid_line_count, grid_view_offset, grid_cadence_slot, grid_kat_ok, grid_mode, grid_dock_owner, grid_owner_generation, grid_visible_cells
-;; IMPORTS boot/serial, boot/beacon, boot/gop, core/heap, core/cadence, core/time, gui/widget, gui/window, gui/window_mgmt, gui/form_loader, gui/ansi_interp, gui/cadence_mark, svc/command_cons
+;; EXPORTS console_grid_content_state, grid_window_b_retire, grid_release_window, console_grid_register, console_grid_draw, console_grid_wheel, console_grid_reclaim, grid_claim_snapshot, console_grid_dump_for_window, console_grid_claim_plain, console_grid_restore_owner, console_grid_headless_configure, console_grid_headless_draw, grid_append, grid_clear, grid_scroll, grid_resize, grid_dump_visible_page, grid_scrollback_depth, grid_ansi_capture_top_row, grid_instance_open, grid_instance_close, grid_instance_feed, grid_instance_accept_input, grid_instance_load_widget, grid_instance_validate, grid_widget_id, grid_type_id, grid_cols, grid_rows, grid_line_count, grid_view_offset, grid_cadence_slot, grid_kat_ok, grid_mode, grid_dock_owner, grid_owner_generation, grid_visible_cells
+;; IMPORTS gui/interpreter_feed, hv/context_execution, boot/serial, boot/beacon, boot/gop, core/heap, core/cadence, core/time, gui/widget, gui/window, gui/window_mgmt, gui/form_loader, gui/ansi_interp, gui/cadence_mark, svc/command_cons
 ;; CAPS
 ;; OWNER saga:verb_console
 ; Contract 2150: one allocation-free console cell grid.  Text pixels are drawn
@@ -526,7 +526,9 @@ grid_instance_feed:
     call grid_instance_load_ptr
     mov  rdi, r12
     mov  esi, r13d
-    call ansi_grid_feed
+    call context_ansi_enter
+    call interpreter_ansi_feed
+    call context_ansi_exit
     mov  rax, rbx
     call grid_instance_save_ptr
     inc  dword [rbx + GI_SEQ]
@@ -1682,6 +1684,69 @@ console_grid_set:
     pop  r12
     pop  rbx
     ret
+; EDI=already-admitted console widget id. Append only the existing bound
+; handle and persistent dimensions; EAX=1 when complete, otherwise 0 without
+; a partial suffix. Never allocate, load shared interpreter scratch, invoke a
+; widget callback, or read terminal/session bytes. GUI BSP context, as above.
+console_grid_content_state:
+    push rbx
+    push r12
+    push r13
+    mov  r12d, edi
+    ; Original validate reaches the allocating table helper. An absent table
+    ; must therefore be refused BEFORE that call, even for a plausible handle.
+    cmp  qword [rel grid_instance_table_ptr], 0
+    je   .missing
+    call wgt_slot_ptr
+    mov  rbx, rax
+    mov  edi, [rbx + WGI_RSVD]
+    mov  r13d, edi
+    call grid_instance_validate
+    jc   .missing
+    cmp  [rax + GI_WIDGET], r12d
+    jne  .missing
+    mov  edx, [rbx + WGI_WIN]
+    cmp  [rax + GI_WINDOW], edx
+    jne  .missing
+    mov  rdx, GI_CANARY_LO_VALUE
+    cmp  [rax + GI_CANARY_LO], rdx
+    jne  .missing
+    mov  rdx, GI_CANARY_HI_VALUE
+    cmp  [rax + GI_CANARY_HI], rdx
+    jne  .missing
+    mov  edx, [rax + GI_SCALAR + GIS_COLS]
+    test edx, edx
+    jz   .missing
+    cmp  edx, GRID_MAX_COLS
+    ja   .missing
+    mov  edx, [rax + GI_SCALAR + GIS_ROWS]
+    test edx, edx
+    jz   .missing
+    cmp  edx, GRID_MAX_ROWS
+    ja   .missing
+    mov  r12, rax
+    lea  rdi, [rel str_grid_content_handle]
+    call wgt_out_str
+    mov  edi, r13d
+    call wgt_out_dec
+    lea  rdi, [rel str_grid_content_cols]
+    call wgt_out_str
+    mov  edi, [r12 + GI_SCALAR + GIS_COLS]
+    call wgt_out_dec
+    lea  rdi, [rel str_grid_content_rows]
+    call wgt_out_str
+    mov  edi, [r12 + GI_SCALAR + GIS_ROWS]
+    call wgt_out_dec
+    mov  eax, 1
+    jmp  .out
+.missing:
+    xor  eax, eax
+.out:
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+
 console_grid_get:
     xor  eax, eax
     ret
@@ -2641,6 +2706,9 @@ grid_ansi_bright_palette:
     dd 0x007777FF, 0x00FF77FF, 0x0077FFFF, 0x00FFFFFF
 
 str_wt_console_grid: db "console_grid",0
+str_grid_content_handle: db " grid_handle=",0
+str_grid_content_cols: db " cols=",0
+str_grid_content_rows: db " rows=",0
 str_grid_cadence_id: db "console_grid",0
 str_grid_seed: db "PaOS console grid ready",10,"word boundary wrap uses the shared font engine",10
 .len equ $ - str_grid_seed

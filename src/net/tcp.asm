@@ -1,8 +1,9 @@
 ;; MODULE net/tcp
 %include "core/abi/build_profile.inc"
 ;; LAYER 4
-;; EXPORTS tcp_options_validate, tcp_options_validate_kat, tcp_handshake_selftest, tcp_build_synack_kat, tcp_build_synack_fault_battery, tcp_live_init, tcp_client_bind, tcp_client_unbind, tcp_public_ssh_bind, tcp_client_alias_bind, tcp_client_alias_unbind, tcp_client_ready, tcp_client_open, tcp_client_open_tracked, tcp_client_open_tracked_try, tcp_client_epoch_io, tcp_client_epoch_snapshot, tcp_client_open_routed, tcp_client_io_owned, tcp_client_send, tcp_client_abort, tcp_listener_register, tcp_send, tcp_close, tcp_poll, tcp_diag_snapshot, tcp4_ingress, TCP_SERVER_DATA_REV, TCPD_LISTENERS, TCPD_USED, TCPD_MAX, TCPD_SYN, TCPD_EST, TCPD_CLOSING, TCPD_TIMEWAIT, TCPD_ACCEPTS, TCPD_RX_BYTES, TCPD_TX_BYTES, TCPD_RETRANSMITS, TCPD_REAPED, TCPD_FULL_RSTS, TCPD_RSTS, TCPD_CLOSES, TCPD_LOCK_BUSY, TCPD_LAST_STAGE, TCPD_SIZE, tcp_m_listen, tcp_m_syn_rx, tcp_m_synack_tx, tcp_m_established, tcp_client_epoch_retirement, tcp_client_epoch_reap
+;; EXPORTS tcp_ssh_trace_event, tcp_ssh_trace_control, tcp_ingress_observation_snapshot, tcp_options_validate, tcp_options_validate_kat, tcp_handshake_selftest, tcp_build_synack_kat, tcp_build_synack_fault_battery, tcp_live_init, tcp_client_bind, tcp_client_unbind, tcp_public_ssh_bind, tcp_client_alias_bind, tcp_client_alias_unbind, tcp_client_ready, tcp_client_open, tcp_client_open_tracked, tcp_client_open_tracked_try, tcp_client_epoch_io, tcp_client_epoch_snapshot, tcp_client_cookie_alloc, tcp_client_open_routed, tcp_client_io_owned, tcp_client_send, tcp_client_abort, tcp_listener_register, tcp_send, tcp_close, tcp_poll, tcp_diag_snapshot, tcp4_ingress, TCP_SERVER_DATA_REV, TCPD_LISTENERS, TCPD_USED, TCPD_MAX, TCPD_SYN, TCPD_EST, TCPD_CLOSING, TCPD_TIMEWAIT, TCPD_ACCEPTS, TCPD_RX_BYTES, TCPD_TX_BYTES, TCPD_RETRANSMITS, TCPD_REAPED, TCPD_FULL_RSTS, TCPD_RSTS, TCPD_CLOSES, TCPD_LOCK_BUSY, TCPD_LAST_STAGE, TCPD_SIZE, tcp_m_listen, tcp_m_syn_rx, tcp_m_synack_tx, tcp_m_established, tcp_client_epoch_retirement, tcp_client_epoch_reap
 ;; IMPORTS boot/serial, core/time, core/lib/fmt, core/lib/cksum, core/lib/mem, lib/safe_buffer, core/lock, net/netdev, net/arp_cache, core/heap, net/dns, net/udp, core/csprng, core/lib/hmac_sha256
+;; LOCK: tcp_ingress_observation_lock PROTECTS tcp_ingress_observation_generation, tcp_ingress_observation_state
 ;; CAPS
 ;; OWNER saga:net
 ;; LOCK: tcp_live_lock PROTECTS tcp_public_ssh_callback, tcp_client_alias_ip, tcp_client_alias_ready, tcp_client_public, tcp_live_ip, tcp_live_mac, tcp_listeners, tcp_tcbs, tcp_client_routes, tcp_persist_state, tcp_persist_epoch_next, tcp_rx_ooo, tcp_rx_epoch_next, tcp_isn_secret, tcp_isn_secret_ready, tcp_isn_count, tcp_syn_retirements, tcp_reap_completions
@@ -1582,6 +1583,10 @@ tcp_queue_rx:
     add  [rbx + TCB_RX_LEN], r13d
     add  [rbx + TCB_BYTES_RX], r13
     add  [rel tcp_stat_rx_bytes], r13
+    mov  rdi, rbx
+    mov  esi, 2                         ; native in-order payload received/queued
+    mov  edx, r13d
+    call tcp_ssh_trace_event
 .ok:
     xor  eax, eax
     jmp  .out
@@ -2092,9 +2097,33 @@ tcp_client_open_tracked_try:
     mov  r10d, 2
     jmp  tcp_client_open_common
 
+; Shared routed-owner namespace. RAX=nonzero boot-global cookie /0 unavailable.
+; Clobbers RCX/RDX/flags only. No connection, route or operation authority is
+; created. Never reset by live_init, unbind, free or another caller's cleanup.
+; The final all-ones value may issue once; exhaustion never wraps. At most 16
+; atomic attempts under contention, so no caller spins through another owner.
+tcp_client_cookie_alloc:
+    mov  ecx, 16
+    mov  rax, [rel tcp_client_cookie_next]
+.retry:
+    cmp  rax, -1
+    je   .unavailable
+    lea  rdx, [rax + 1]
+    lock cmpxchg [rel tcp_client_cookie_next], rdx
+    je   .issued
+    dec  ecx
+    jnz  .retry
+.unavailable:
+    xor  eax, eax
+    ret
+.issued:
+    mov  rax, rdx
+    ret
+
 ; Routed, polled active client: the usual tuple arguments, RCX=R8=0, and
 ; R9 -> {next-hop IPv4:u32, source IPv4:u32, nonzero owner cookie:u64}.
-; The caller keeps a nonreused cookie per lookup. No callbacks are installed;
+; Use tcp_client_cookie_alloc and retain that cookie until actual detach.
+; No callbacks are installed;
 ; tcp_client_io_owned polls/queues bytes under the existing TCP table lock.
 ; Returns handle/0, or -1 when the table try-lock is busy (no open attempted).
 tcp_client_open_routed:
@@ -2916,7 +2945,11 @@ tcp_transmit_once:
     lea  rsi, [rel tcp_tx_frame]
     call netdev_tx
     test rax, rax
-    jnz  .fail
+    jnz  .device_refused
+    mov  rdi, rbx
+    mov  esi, 6                         ; driver accepted, not peer ACK/delivery
+    mov  edx, r14d
+    call tcp_ssh_trace_event
     add  [rbx + TCB_SEND_NEXT], r14d     ; data consumes sequence space
     test r12b, TCP_F_SYN
     jz   .no_syn_inc
@@ -2928,6 +2961,11 @@ tcp_transmit_once:
 .ok:
     xor  eax, eax
     jmp  .out
+.device_refused:
+    mov  rdi, rbx
+    mov  esi, 7                         ; actual driver refusal, queue retained
+    mov  edx, r14d
+    call tcp_ssh_trace_event
 .fail:
     mov  rax, -1
 .out:
@@ -2968,6 +3006,10 @@ tcp_send:
     test r14, r14
     jnz  .done
     mov  qword [rel tcp_last_stage], 4   ; flight copied; poll owns hardware TX
+    mov  rdi, rbx
+    mov  esi, 5                         ; only a computed initial ECDH reply
+    mov  edx, r13d
+    call tcp_ssh_trace_event
 .done:
     mov  rax, r14
     jmp  .out
@@ -3821,6 +3863,18 @@ tcp_poll:
     je   .deadline_reap
     jmp  .next
 .client_syn:
+    ; Deadline advances from its prior value, so deadline + remaining retry
+    ; intervals is the original active-open lifetime, even after a late poll.
+    movzx ecx, byte [rbx + TCB_RETRIES]
+    cmp  ecx, TCP_MAX_RETRIES
+    ja   .client_timeout
+    mov  eax, TCP_MAX_RETRIES
+    sub  eax, ecx
+    imul eax, TCP_RTO_MS
+    add  rax, [rbx + TCB_DEADLINE]
+    jc   .client_timeout                ; malformed/wrapped ceiling fails closed
+    cmp  r12, rax
+    jae  .client_timeout
     cmp  r12, [rbx + TCB_DEADLINE]
     jb   .next
     cmp  byte [rbx + TCB_RETRIES], TCP_MAX_RETRIES
@@ -4146,7 +4200,7 @@ tcp_poll:
 .client_syn_account:
     inc  byte [rbx + TCB_RETRIES]       ; failed TX is bounded too
     inc  qword [rel tcp_stat_retransmits]
-    call boot_ms_now
+    mov  rax, [rsp + 40]               ; same guarded deadline validated above
     add  rax, TCP_RTO_MS
     mov  [rbx + TCB_DEADLINE], rax
 .client_syn_unlock:
@@ -4331,6 +4385,9 @@ tcp_diag_snapshot:
     pop  rbx
     ret
 
+%include "net/tcp_ingress_observation.inc"
+%include "net/tcp_ssh_trace.inc"
+
 ; tcp4_ingress(RDI=complete Ethernet frame, RSI=available bytes) -> 0 consumed /
 ; -1 ignored. The shared command_udp RX owner calls this only for IPv4 proto 6.
 tcp4_ingress:
@@ -4339,7 +4396,14 @@ tcp4_ingress:
     push r13
     push r14
     push r15
-    sub  rsp, 40
+    sub  rsp, 56
+    mov [rsp+48], rdi                    ; original frame lifetime is RX-owned
+    push rdi
+    push rsi
+    call tcp_ingress_observation_begin
+    pop rsi
+    pop rdi
+    mov [rsp+40], rax                    ; private observer only, never admission
     mov  dword [rsp + 32], 0             ; queued service work; poll drains later
     mov  dword [rsp + 36], 0             ; accept callback deferred past table lock
     mov  rbx, rdi                         ; frame
@@ -4398,12 +4462,14 @@ tcp4_ingress:
     call tcp_client_source_owned
     test eax, eax
     jz   .reject
+    TCP_INGRESS_OBSERVE_STAGE 2
     ; Destination already captured before the pure ownership check.
     lea  rdi, [rbx + 14]
     mov  esi, r13d
     call net_cksum16
     test ax, ax
     jnz  .reject                         ; invalid IPv4 header checksum
+    TCP_INGRESS_OBSERVE_STAGE 3
     lea  r14, [r12 + r13]                ; TCP header
     movzx eax, byte [r14 + TCP_DATAOFF]
     shr  eax, 4
@@ -4419,6 +4485,11 @@ tcp4_ingress:
     test eax, eax
     jnz  .reject
     mov  [rsp + 28], r8d                 ; candidate; never retained before authentication
+    TCP_INGRESS_OBSERVE_STAGE 4
+    test r11, r11
+    jz .observation_no_candidate
+    mov [r11+48], r8d
+.observation_no_candidate:
     mov  eax, [rsp + 0]
     sub  eax, [rsp + 4]
     mov  [rsp + 24], eax                 ; payload length
@@ -4432,6 +4503,7 @@ tcp4_ingress:
     test ax, ax
     jnz  .reject                         ; host stack must supply a valid checksum
 
+    TCP_INGRESS_OBSERVE_STAGE 5
     ; SEC-S7a: a segment never teaches the ARP cache (a spoofed source IP would
     ; rebind the gateway). Replies resolve the next hop through the cache, and a
     ; miss asks with a solicited who-has (udp4_arp_request); the peer's SYN retry
@@ -4444,6 +4516,7 @@ tcp4_ingress:
     call tcp_client_source_owned
     test eax, eax
     jz   .unlock_ok
+    TCP_INGRESS_OBSERVE_STAGE 6
     movzx eax, byte [r14 + TCP_SRCPORT]
     shl  eax, 8
     mov  al, [r14 + TCP_SRCPORT + 1]
@@ -4463,6 +4536,22 @@ tcp4_ingress:
     mov  eax, [rsp + 12]
     cmp  eax, [r13 + TCB_LOCAL_IP]
     jne  .unlock_ok                      ; alias cannot target the primary tuple
+    TCP_INGRESS_OBSERVE_STAGE 7
+    test r11, r11
+    jz .observation_no_tuple
+    movzx eax, byte [r13+TCB_STATE]
+    mov [r11+28], eax
+    mov [r11+32], eax                    ; state at this admission boundary
+    movzx eax, byte [r13+TCB_TX_FLAGS]
+    mov [r11+36], eax
+    mov eax, [r13+TCB_SEND_NEXT]
+    mov [r11+40], eax
+    mov eax, [r13+TCB_RECV_NEXT]
+    mov [r11+44], eax
+    movzx eax, word [r13+TCB_PEER_MSS]
+    mov [r11+52], eax
+    mov [r11+56], eax
+.observation_no_tuple:
     cmp  byte [r13 + TCB_STATE], TCP_SYN_SENT
     jne  .tuple_ready
     cmp  byte [r13 + TCB_TX_FLAGS], TCP_F_SYN
@@ -4657,6 +4746,14 @@ tcp4_ingress:
     inc  eax
     mov  [r13 + TCB_RECV_NEXT], eax
     mov  byte [r13 + TCB_STATE], TCP_ESTABLISHED
+    TCP_INGRESS_OBSERVE_STAGE 8
+    test r11, r11
+    jz .observation_no_commit
+    movzx eax, byte [r13+TCB_STATE]
+    mov [r11+32], eax                    ; actual qualified SYN_SENT commit
+    movzx eax, word [r13+TCB_PEER_MSS]
+    mov [r11+56], eax
+.observation_no_commit:
     movzx eax, word [r14 + TCP_WINDOW]
     xchg al, ah
     mov  [r13 + TCB_PEER_WINDOW], ax
@@ -4982,7 +5079,13 @@ tcp4_ingress:
 .reject:
     mov  rax, -1
 .out:
-    add  rsp, 40
+    push rax
+    mov rdi, [rsp+48]                    ; record at old rsp+40
+    mov rsi, [rsp+56]                    ; original frame at old rsp+48
+    mov rdx, rax
+    call tcp_ingress_observation_end
+    pop rax
+    add  rsp, 56
     pop  r15
     pop  r14
     pop  r13
@@ -5698,3 +5801,16 @@ alignb 8
 tcp_reap_completions: resb TCP_TCB_N * 48
 %endmacro
 WDATA_BSS_DEFER WDATA_tcp_reap_completions
+
+; Same deferred data region as the existing TCP epoch observers.
+WDATA_BSS_DEFER WDATA_tcp_ingress_observation
+
+; Independent of table/endpoint lifetimes. Only the allocator's locked CAS
+; advances this aligned counter; no init, clear, bind or free resets it.
+%macro WDATA_tcp_client_cookie 0
+alignb 8
+tcp_client_cookie_next: resq 1
+%endmacro
+WDATA_BSS_DEFER WDATA_tcp_client_cookie
+
+WDATA_BSS_DEFER WDATA_tcp_ssh_trace

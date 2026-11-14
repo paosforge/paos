@@ -40,14 +40,35 @@ if [ "$WIFI" -eq 1 ]; then
     . /sbin/paos-wifi-start
     wifi_service < /dev/null > /dev/null 2>&1 &
 else
+# Guest L3 (ROOT109426 (3)): the guest's own IPv4 lives on the bridge under its
+# own address, never PaOS's 02:50:41:4f:53 relay identity, the relay's virtio
+# MAC or the card's burned-in MAC (a native PaOS boot may own that lease).
+# Locally administered 06 plus the card's last five bytes, or 0a when the card's
+# own first byte is already 06, so the two never match; set before any port.
+PHY_MAC=$($B cat "/sys/class/net/$PHY/address")
+case "$PHY_MAC" in
+    [0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]) ;;
+    *) fail guest_mac ;;
+esac
+case "$PHY_MAC" in
+    06:*) GUEST_MAC=0a:${PHY_MAC#??:} ;;
+    *) GUEST_MAC=06:${PHY_MAC#??:} ;;
+esac
 $B brctl addbr paosbr0
+$B ip link set dev paosbr0 address "$GUEST_MAC"
 $B brctl stp paosbr0 off
 $B brctl setfd paosbr0 0
 $B brctl addif paosbr0 "$PHY"
 $B brctl addif paosbr0 "$RELAY"
-$B ip link set dev "$PHY" up
-$B ip link set dev "$RELAY" up
+# Explicit promiscuous ports: bridge auto-promisc left r8169 at AcceptMyPhys on
+# Lenovo metal (fork vtd.asm str_vtd_domain_bridge_post, desktop-root 109466
+# (2)), dropping unicast to PaOS's and the guest's own addresses.
+$B ip link set dev "$PHY" up promisc on
+$B ip link set dev "$RELAY" up promisc on
 $B ip link set dev paosbr0 up
+# One background lease client on the bridge only; it never gates census,
+# readiness or PaOS's own frames, and PaOS never depends on its result.
+$B udhcpc -f -i paosbr0 -s /sbin/paos-driver-dhcp -x hostname:paos-linux < /dev/null > /dev/null 2>&1 &
 fi
 printf '%s\n' "bdf=$BDF" "start=$START" "nonce=$NONCE" "physical_bdf=$PHYSICAL_BDF" "physical_interface=$PHY" "relay=$RELAY" > /run/paos-driver-binding
 # Record facts in the guest, then advertise bounded byte/hash identity on hvc0.
@@ -63,6 +84,8 @@ printf 'PAOS_DDOM_READY v=1 start=%s nonce=%s bdf=%s physical_bdf=%s physical_in
 # Native consumes this exact observation marker; public Internet/Terminal
 # oracles still decide success under the original whole-check deadline.
 printf 'PAOS_ND_READY %s %s\n' "$NONCE" "$START" > /dev/hvc0
+# Private Shut down listener (paos.power port): background, stdio /dev/null, never hvc0.
+/bin/busybox sh /sbin/paos-driver-power "$START" "$NONCE" < /dev/null > /dev/null 2>&1 &
 # The public Terminal uses this exact hvc0 session. No serial/login listener.
 export HOME=/root TERM=vt100 PS1='paos-linux# '
 exec /bin/busybox setsid /bin/busybox cttyhack /bin/busybox sh -i < /dev/hvc0 > /dev/hvc0 2>&1

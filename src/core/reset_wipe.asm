@@ -61,6 +61,12 @@ reset_wipe_all:
     cld
     mov  byte [rel reset_wipe_done], 1  ; first: every other CPU stops trusting RAM keys
     xor  eax, eax
+    RW_WIPE wgt_secret_bytes, 128      ; native password editor, including interrupted Format recheck
+    RW_CLEAR fc4_active
+    RW_CLEAR fc4_decision
+    RW_WIPE_RANGE fc4_private, fc4_private_end
+    RW_WIPE_RANGE ash_private, ash_private_end
+    RW_WIPE_RANGE sas_private, sas_private_end
     ; the owner's DATA key, its boot copy and a staged 2FA copy (P1)
     RW_CLEAR session_local_unlock_seen
     RW_CLEAR prin_owner_session_ready
@@ -123,7 +129,31 @@ reset_wipe_all:
     ; owner S1b-2c-0: the owner stage key Z and its pre-EBS buffers (zeroed when
     ; the owner store pass ends; a pre-EBS fault can interrupt that)
     RW_CLEAR osk_key_ready
+    RW_CLEAR ass_key_ready
+    RW_WIPE app_store_mac_key, 32
+    RW_WIPE_RANGE ass_transient, ass_transient_end
+    RW_WIPE_RANGE acs_scratch, acs_scratch_end
+    RW_WIPE_RANGE ab_key, ab_members
+    ; Documents lifecycle callbacks belong to the BSP. A fault on any CPU
+    ; revokes every interrupted operation before wiping its private staging,
+    ; without calling those callbacks or releasing the outer busy guards.
+    RW_CLEAR pdc_active
+    RW_CLEAR pdc_executing
+    RW_CLEAR tfs_active
+    RW_CLEAR pdr_valid
+    RW_CLEAR pud_load_active
+    RW_CLEAR pud_create_phase
+    RW_WIPE_RANGE tfs_private_begin, tfs_private_end
+    RW_WIPE_RANGE pdr_private, pdr_end
+    RW_WIPE_RANGE pud_load_private, pud_load_end
+    RW_WIPE_RANGE pud_create_private, pud_create_end
+    RW_WIPE_RANGE pdc_private, pdc_private_end
+    RW_CLEAR pds_seed_ready
+    RW_CLEAR pds_ready
+    RW_WIPE_RANGE pds_private_begin, pds_private_end ; ordinary document provenance key and interrupted record IO
     RW_CLEAR ig_key_ready
+    RW_WIPE_RANGE acp_scratch, acp_scratch_end ; original private account consume; floor/busy excluded
+    RW_WIPE_RANGE tgs_private_begin, tgs_private_end ; Terminal consent keys, readiness, scopes and interrupted IO
     RW_WIPE  osk_key, 32
     RW_WIPE  osk_blob, OSK_SIZE
     RW_WIPE  osk_verify, OSK_SIZE
@@ -145,6 +175,11 @@ reset_wipe_all:
     ; the node signing identity's KEK
     RW_CLEAR nid_active_kek_valid
     RW_WIPE  nid_active_kek, 32
+    RW_CLEAR nid_runtime_valid
+    RW_WIPE  nid_runtime_public, 32
+    RW_CLEAR node_identity_store_state
+    RW_CLEAR nis_busy
+    RW_WIPE_RANGE nis_private, nis_private_end
     ; the SSH host key seed (it IS the private key), the last KDF output and
     ; every connection's session keys (heap table)
     RW_CLEAR ssh_hostkey_ready

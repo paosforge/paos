@@ -8,7 +8,10 @@
 ; back by normal boot context. It does not read EFI variables, change policy,
 ; or mint promotion authority; PaOSBootReady remains the sole compact token.
 
-C7HV_OUT_CAP equ 768
+; Longest current line: 798 bytes + NUL, including unmeasured build state,
+; 20-digit heap/optional epoch and 10-digit optional state. Retain margin;
+; every append independently reserves its terminator inside this allocation.
+C7HV_OUT_CAP equ 1024
 
 health_verdict_declare:
     mov  byte [rel c7hv_out_ready], 0
@@ -167,7 +170,19 @@ cmd_verb_c7health:
     call c7hv_out_str
     mov  edi, [rel opt_state]
     call c7hv_out_dec
+    cmp  byte [rel c7hv_out_overflow], 0
+    je   .publish
+    ; Never publish a partial status=valid line or its promotion-token text.
+    ; Retire it and return a defined read-only unavailable observation instead.
+    call c7hv_out_reset
+    lea  rdi, [rel str_c7hv_truncated]
+    call c7hv_out_str
+    mov  qword [r12 + RSP_VAL], 0
+    cmp  byte [rel c7hv_out_overflow], 0
+    jne  .out                         ; even the refusal must fit completely
+.publish:
     mov  byte [rel c7hv_out_ready], 1
+.out:
     pop  r12
     pop  rbx
     ret
@@ -193,30 +208,62 @@ c7hv_heap_used:
 
 ; RDI = value: at most 20 decimal digits + NUL (fmt_dec).
 c7hv_out_dec:
-    mov  rsi, [rel c7hv_out_cur]
+    ; fmt_dec has no destination bound. Render into a private 21-byte scratch
+    ; first, then use the same bounded append as every other string.
+    sub  rsp, 24
+    mov  rsi, rsp
     call fmt_dec
-    add  [rel c7hv_out_cur], rax
+    mov  rdi, rsp
+    call c7hv_out_str
+    add  rsp, 24
     ret
 
 c7hv_out_reset:
+    mov  byte [rel c7hv_out_ready], 0
+    mov  byte [rel c7hv_out_overflow], 0
     lea  rax, [rel c7hv_out_buf]
     mov  [rel c7hv_out_cur], rax
     mov  byte [rax], 0
     ret
 
-c7hv_out_str:
+; RDX = bytes excluding NUL. Return RSI=cursor, CF=0 iff the entire append
+; plus NUL fits. Subtraction after checking cursor avoids pointer-add wrap.
+; A refusal is sticky until reset; no caller writes after CF=1.
+c7hv_out_reserve:
+    cmp  byte [rel c7hv_out_overflow], 0
+    jne  .full
     mov  rsi, [rel c7hv_out_cur]
+    lea  rax, [rel c7hv_out_buf]
+    cmp  rsi, rax
+    jb   .full
+    lea  rax, [rel c7hv_out_buf + C7HV_OUT_CAP - 1]
+    cmp  rsi, rax
+    ja   .full
+    sub  rax, rsi
+    cmp  rdx, rax
+    ja   .full
+    clc
+    ret
+.full:
+    mov  byte [rel c7hv_out_overflow], 1
+    stc
+    ret
+
+c7hv_out_str:
 .copy:
-    mov  al, [rdi]
-    test al, al
+    cmp  byte [rdi], 0
     jz   .done
+    mov  edx, 1
+    call c7hv_out_reserve
+    jc   .done
+    mov  al, [rdi]
     mov  [rsi], al
     inc  rdi
     inc  rsi
-    jmp  .copy
-.done:
     mov  byte [rsi], 0
     mov  [rel c7hv_out_cur], rsi
+    jmp  .copy
+.done:
     ret
 
 c7hv_out_status:
@@ -231,7 +278,9 @@ c7hv_out_status:
     jmp  c7hv_out_str
 
 c7hv_out_hex8:
-    mov  rsi, [rel c7hv_out_cur]
+    mov  edx, 4
+    call c7hv_out_reserve
+    jc   .out
     lea  r8, [rel c7hv_hex]
     mov  byte [rsi], '0'
     mov  byte [rsi + 1], 'x'
@@ -247,10 +296,13 @@ c7hv_out_hex8:
     mov  byte [rsi + 4], 0
     add  rsi, 4
     mov  [rel c7hv_out_cur], rsi
+.out:
     ret
 
 c7hv_out_hex64:
-    mov  rsi, [rel c7hv_out_cur]
+    mov  edx, 18
+    call c7hv_out_reserve
+    jc   .out
     lea  r8, [rel c7hv_hex]
     mov  byte [rsi], '0'
     mov  byte [rsi + 1], 'x'
@@ -268,10 +320,16 @@ c7hv_out_hex64:
     jnz  .nibble
     mov  byte [rsi], 0
     mov  [rel c7hv_out_cur], rsi
+.out:
     ret
 
 c7hv_out_hex_bytes:
-    mov  rsi, [rel c7hv_out_cur]
+    mov  edx, ecx
+    shl  rdx, 1                       ; widen before doubling uint32 count
+    call c7hv_out_reserve
+    jc   .out
+    test ecx, ecx
+    jz   .done                        ; empty input never reads its pointer
     lea  r8, [rel c7hv_hex]
 .byte:
     movzx eax, byte [rdi]
@@ -286,19 +344,23 @@ c7hv_out_hex_bytes:
     add  rsi, 2
     dec  ecx
     jnz  .byte
+.done:
     mov  byte [rsi], 0
     mov  [rel c7hv_out_cur], rsi
+.out:
     ret
 
 align 8
 c7hv_out_cur:   dq 0
 c7hv_out_ready: db 0
+c7hv_out_overflow: db 0
 c7hv_out_buf:   times C7HV_OUT_CAP db 0
 c7hv_hex:       db "0123456789abcdef"
 str_c7hv_verb:  db "C7HEALTH",0
 str_c7hv_prefix: db " c7_health status=",0
 str_c7hv_valid: db "valid schema=0x02 identity=slot-nonce-manifest profile=normal core_checkpoint=strong readback=exact",0
 str_c7hv_unavailable: db "unavailable schema=0x02 projection=read-only",0
+str_c7hv_truncated: db " c7_health status=unavailable schema=0x02 projection=read-only output=truncated",0
 str_c7hv_entry: db " entry=",0
 str_c7hv_nonce: db " nonce=",0
 str_c7hv_sequence: db " manager_seq=",0

@@ -6,4 +6,8 @@ $B mkdir -p /proc /sys /dev /run /tmp /root
 $B mount -t proc proc /proc
 $B mount -t sysfs sysfs /sys
 $B mount -t devtmpfs devtmpfs /dev
+if [ -f /etc/paos/local-clis.json ]; then
+    $B mkdir -p /dev/pts
+    $B mount -t devpts -o nosuid,noexec,mode=0620,ptmxmode=0666 devpts /dev/pts
+fi
 exec /bin/busybox sh /sbin/paos-driver-start

@@ -1,7 +1,7 @@
 ;; MODULE hv/snapshot_transport
 ;; LAYER 5
 ;; PURPOSE Finite SNAPSHOT scalar PIO route with original native endpoint and sequence.
-;; EXPORTS snapshot_driver_pio, snapshot_app_pio, snapshot_transport_retire, snapshot_transport_configure
+;; EXPORTS snapshot_transport_configure_privacy, snapshot_transport_configure_visibility, snapshot_transport_configure_custody, snapshot_driver_pio, snapshot_app_pio, snapshot_transport_retire, snapshot_transport_configure
 ;; IMPORTS hv/guest_request, hv/guest_transport, hv/app_vm, core/smp
 ;; CAPS
 ;; OWNER saga:live_snapshot
@@ -36,6 +36,51 @@ snapshot_transport_configure:
     ret
 
 ; Original VMX/SVM stopped driver exit, never an app-exit fallback.
+; Separate optional native custody callbacks; never wire pointers.
+snapshot_transport_configure_custody:
+    cmp byte [rel snapshot_pio_busy],0
+    jne .bad
+    cmp dword [rel cmd_dispatch_depth],0
+    jne .bad
+    push rdi
+    push rsi
+    call snapshot_transport_retire
+    pop rsi
+    pop rdi
+    mov [rel snapshot_pio_custody_op],rdi
+    mov [rel snapshot_pio_custody_current_op],rsi
+    mov eax,1
+    ret
+.bad:
+    xor eax,eax
+    ret
+snapshot_transport_configure_visibility:
+    cmp byte [rel command_auth_remote_active],0
+    jne .bad
+    cmp byte [rel snapshot_pio_busy],0
+    jne .bad
+    cmp dword [rel cmd_dispatch_depth],0
+    jne .bad
+    mov [rel snapshot_pio_visibility_op],rdi
+    mov eax,1
+    ret
+.bad:
+    xor eax,eax
+    ret
+snapshot_transport_configure_privacy:
+    cmp byte [rel command_auth_remote_active],0
+    jne .bad
+    cmp byte [rel snapshot_pio_busy],0
+    jne .bad
+    cmp dword [rel cmd_dispatch_depth],0
+    jne .bad
+    mov [rel snapshot_pio_privacy_op],rdi
+    mov [rel snapshot_pio_privacy_current_op],rsi
+    mov eax,1
+    ret
+.bad:
+    xor eax,eax
+    ret
 snapshot_driver_pio:
     push rbx
     push r12
@@ -159,6 +204,12 @@ snapshot_pio_pio:
     je .submit
     cmp r14d,2
     je .sequence
+    cmp r14d,5
+    je .privacy
+    cmp r14d,4
+    je .visibility
+    cmp r14d,3
+    je .custody
     jmp .invalidate
 .clear:
     call snapshot_transport_retire
@@ -166,6 +217,49 @@ snapshot_pio_pio:
 .begin:
     call snapshot_transport_retire
     mov byte [rel snapshot_pio_receiving],1
+    jmp .claimed
+.privacy:
+    cmp qword [rel snapshot_pio_privacy_op],0
+    je .invalidate
+    mov dword [rel snapshot_pio_receipt_bytes],448
+    jmp .observation
+.visibility:
+    cmp qword [rel snapshot_pio_visibility_op],0
+    je .invalidate
+    mov dword [rel snapshot_pio_receipt_bytes],512
+    jmp .observation
+.custody:
+    mov dword [rel snapshot_pio_receipt_bytes],320
+.observation:
+    cmp dword [rel snapshot_pio_source],1
+    jne .invalidate
+    cmp byte [rel snapshot_pio_receiving],0
+    jne .invalidate
+    cmp qword [rel snapshot_pio_custody_op],0
+    je .invalidate
+    cmp qword [rel snapshot_pio_custody_current_op],0
+    je .invalidate
+    mov byte [rel snapshot_pio_busy],1
+    mov rdi,rbx
+    mov esi,r12d
+    lea rdx,[rel snapshot_pio_custody]
+    cmp dword [rel snapshot_pio_receipt_bytes],448
+    je .privacy_call
+    cmp dword [rel snapshot_pio_receipt_bytes],512
+    jne .custody_call
+    call [rel snapshot_pio_visibility_op]
+    jmp .observation_done
+.privacy_call:
+    call [rel snapshot_pio_privacy_op]
+    jmp .observation_done
+.custody_call:
+    call [rel snapshot_pio_custody_op]
+.observation_done:
+    mov byte [rel snapshot_pio_busy],0
+    test eax,eax
+    jnz .invalidate
+    mov dword [rel snapshot_pio_mode],3
+    mov dword [rel snapshot_pio_cursor],0
     jmp .claimed
 .sequence:
     call snapshot_transport_retire
@@ -217,6 +311,8 @@ snapshot_pio_pio:
     shr eax,16
     cmp eax,ST_CONTROL
     je .magic
+    cmp dword [rel snapshot_pio_mode],3
+    je .custody_word
     cmp dword [rel snapshot_pio_mode],2
     je .native_word
     cmp dword [rel snapshot_pio_mode],1
@@ -225,6 +321,36 @@ snapshot_pio_pio:
     cmp eax,128
     jae .invalidate
     lea rdx,[rel snapshot_pio_reply]
+    mov edx,[rdx+rax]
+    add dword [rel snapshot_pio_cursor],4
+    jmp .claimed_edx
+.custody_word:
+    cmp dword [rel snapshot_pio_source],1
+    jne .invalidate
+    mov eax,[rel snapshot_pio_cursor]
+    cmp eax,[rel snapshot_pio_receipt_bytes]
+    jae .invalidate
+    mov byte [rel snapshot_pio_busy],1
+    mov rdi,rbx
+    mov esi,r12d
+    lea rdx,[rel snapshot_pio_custody]
+    cmp dword [rel snapshot_pio_receipt_bytes],448
+    jne .custody_current
+    cmp qword [rel snapshot_pio_privacy_current_op],0
+    je .current_missing
+    call [rel snapshot_pio_privacy_current_op]
+    jmp .current_done
+.current_missing:
+    mov eax,-1
+    jmp .current_done
+.custody_current:
+    call [rel snapshot_pio_custody_current_op]
+.current_done:
+    mov byte [rel snapshot_pio_busy],0
+    test eax,eax
+    jnz .invalidate
+    mov eax,[rel snapshot_pio_cursor]
+    lea rdx,[rel snapshot_pio_custody]
     mov edx,[rdx+rax]
     add dword [rel snapshot_pio_cursor],4
     jmp .claimed_edx
@@ -275,7 +401,7 @@ snapshot_transport_retire:
     mov byte [rel snapshot_pio_receiving],0
     lea rdi,[rel snapshot_pio_frame]
     xor eax,eax
-    mov ecx,(40+128)/8
+    mov ecx,(40+128+512)/8
     cld
     rep stosq
     pop rdi
@@ -290,6 +416,12 @@ snapshot_pio_submit_op: resq 1
 snapshot_pio_word_op: resq 1
 snapshot_pio_retire_op: resq 1
 snapshot_pio_floor_op: resq 1
+snapshot_pio_visibility_op: resq 1
+snapshot_pio_privacy_op: resq 1
+snapshot_pio_privacy_current_op: resq 1
+snapshot_pio_receipt_bytes: resq 1
+snapshot_pio_custody_op: resq 1
+snapshot_pio_custody_current_op: resq 1
 snapshot_pio_binding: resq 1
 snapshot_pio_count: resd 1
 snapshot_pio_cursor: resd 1
@@ -301,6 +433,7 @@ alignb 8
 snapshot_pio_probe: resb 48
 snapshot_pio_frame: resb 40
 snapshot_pio_reply: resb 128
+snapshot_pio_custody: resb 512
 snapshot_pio_data_end:
 %endmacro
 WDATA_BSS_DEFER WDATA_snapshot_transport

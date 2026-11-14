@@ -2,6 +2,9 @@
  * fixed local choices require separately admitted physical VT authority. */
 #define _GNU_SOURCE
 #include "update_effect.h"
+#ifdef PAOS_RESCUE_UPDATE_CHANNEL_HEADER
+#include "release_mapping.h"
+#endif
 
 #include <errno.h>
 #include <fcntl.h>
@@ -198,6 +201,62 @@ static int write_all(int fd, const uint8_t *data, size_t size) {
     return 0;
 }
 
+/* Neither filesystem names nor this importer grant update authority. */
+int prc_stage_local_update(int source_fd, const char *scratch,
+    uint8_t successor_sha256[32], uint64_t *candidate_size) {
+    if (!successor_sha256 || !candidate_size) return -1;
+    memset(successor_sha256, 0, 32); *candidate_size = 0;
+    struct stat source, directory, after;
+    int dir = -1, manifest = -1, image = -1, made_manifest = 0, made_image = 0;
+    int result = -1;
+    uint8_t header[1024], buffer[65536], digest[32];
+    if (!scratch || fstat(source_fd, &source) || !S_ISREG(source.st_mode) ||
+        source.st_size < 1536 || source.st_size > 67108864 + 1024 ||
+        (dir = open(scratch, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)) < 0 ||
+        fstat(dir, &directory) || directory.st_uid != geteuid() ||
+        (directory.st_mode & 0777) != 0700) goto done;
+    manifest = openat(dir, "paos-rescue.successor",
+        O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (manifest < 0) goto done;
+    made_manifest = 1;
+    image = openat(dir, "paos-rescue.candidate",
+        O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (image < 0) goto done;
+    made_image = 1;
+    off_t offset = 0;
+    while (offset < source.st_size) {
+        size_t count = offset == 0 ? sizeof(header) : sizeof(buffer);
+        if ((off_t)count > source.st_size - offset) count = (size_t)(source.st_size - offset);
+        uint8_t *data = offset == 0 ? header : buffer;
+        size_t copied = 0; unsigned interrupted = 0;
+        while (copied < count) {
+            ssize_t n = pread(source_fd, data + copied, count - copied, offset + (off_t)copied);
+            if (n < 0 && errno == EINTR && ++interrupted < 8) continue;
+            if (n <= 0) goto done;
+            copied += (size_t)n;
+        }
+        if (write_all(offset == 0 ? manifest : image, data, count)) goto done;
+        offset += (off_t)count;
+    }
+    if (fstat(source_fd, &after) || after.st_size != source.st_size ||
+        after.st_mtim.tv_sec != source.st_mtim.tv_sec ||
+        after.st_mtim.tv_nsec != source.st_mtim.tv_nsec ||
+        fsync(manifest) || fsync(image) || fsync(dir) ||
+        !SHA256(header, sizeof(header), digest)) goto done;
+    memcpy(successor_sha256, digest, 32);
+    *candidate_size = (uint64_t)source.st_size - sizeof(header);
+    result = 0;
+done:
+    if (manifest >= 0) close(manifest);
+    if (image >= 0) close(image);
+    if (result && dir >= 0) {
+        if (made_manifest) unlinkat(dir, "paos-rescue.successor", 0);
+        if (made_image) unlinkat(dir, "paos-rescue.candidate", 0);
+    }
+    if (dir >= 0) close(dir);
+    return result;
+}
+
 static int sync_file(int fd) {
     int result;
     do { result = fsync(fd); } while (result && errno == EINTR);
@@ -211,13 +270,21 @@ static int sync_directory(int dir) {
     return !result || errno == EINVAL || errno == EOPNOTSUPP ? 0 : -1;
 }
 
-static int atomic_bytes(int dir, const char *name, const uint8_t *data,
-                        size_t size, int allow_missing, unsigned *published) {
+/* NULL is used only by the pre-existing VT/PCAR operations. The Settings
+ * entry requires and freezes its own authority before reaching this helper. */
+static int update_current(const struct prc_settings_update_authority *authority) {
+    return !authority || authority->current(authority->context, authority->original) == 1;
+}
+
+static int atomic_bytes_authorized(int dir, const char *name, const uint8_t *data,
+                        size_t size, int allow_missing, unsigned *published,
+                        const struct prc_settings_update_authority *authority) {
+    if (!update_current(authority)) return -1;
     struct stat st;
     if (fstatat(dir, name, &st, AT_SYMLINK_NOFOLLOW)) {
         if (!allow_missing || errno != ENOENT) return -1;
     } else if (!S_ISREG(st.st_mode)) return -1;
-    /* Only update/rollback journal destinations may be absent. Publication
+    /* Update/rollback journals and original per-slot release records may be absent. Publication
      * still uses a private, flushed, read-back temp followed by rename; the
      * selected journal is independently checked and preserved as before. */
     char temp[64] = {0};
@@ -225,7 +292,7 @@ static int atomic_bytes(int dir, const char *name, const uint8_t *data,
     if (fd < 0) return -1;
     int valid = !write_all(fd, data, size) && !fsync(fd) &&
                 !exact_bytes(dir, temp, data, size);
-    if (valid) valid = renameat(dir, temp, dir, name) == 0;
+    if (valid) valid = update_current(authority) && renameat(dir, temp, dir, name) == 0;
     if (valid) {
         ++*published; /* A later flush/readback error cannot undo this rename. */
         /* VFAT rename dirties the moved file inode (its new directory-entry
@@ -240,9 +307,16 @@ static int atomic_bytes(int dir, const char *name, const uint8_t *data,
     return valid ? 0 : -1;
 }
 
+static int atomic_bytes(int dir, const char *name, const uint8_t *data,
+                        size_t size, int allow_missing, unsigned *published) {
+    return atomic_bytes_authorized(dir,name,data,size,allow_missing,published,NULL);
+}
+
 static int atomic_candidate(int dir, const char *name, int source,
                             uint32_t size, const uint8_t expected[32],
-                            unsigned *published) {
+                            unsigned *published,
+                            const struct prc_settings_update_authority *authority) {
+    if (!update_current(authority)) return -1;
     int original = regular_fd(dir, name);
     if (original < 0) return -1;
     close(original);
@@ -254,6 +328,7 @@ static int atomic_candidate(int dir, const char *name, int source,
     uint32_t remaining = size;
     int valid = 1;
     while (valid && remaining) {
+        if (!update_current(authority)) { valid = 0; break; }
         size_t chunk = remaining < sizeof(buffer) ? remaining : sizeof(buffer);
         ssize_t got = read(source, buffer, chunk);
         if (got <= 0 || write_all(fd, buffer, (size_t)got)) {
@@ -263,7 +338,7 @@ static int atomic_candidate(int dir, const char *name, int source,
     }
     if (valid) valid = !fsync(fd) && !hash_fd(fd, size, digest) &&
                        CRYPTO_memcmp(digest, expected, 32) == 0;
-    if (valid) valid = renameat(dir, temp, dir, name) == 0;
+    if (valid) valid = update_current(authority) && renameat(dir, temp, dir, name) == 0;
     if (valid) {
         ++*published;
         valid = !sync_file(fd) && !sync_directory(dir) &&
@@ -307,11 +382,14 @@ static int commit_replacement(const char *esp_root, const char *candidate_path,
     const uint8_t successor_manifest[1024],
     const uint8_t selected_state[512], unsigned selected_copy,
     const struct prc_update_plan *plan,
-    unsigned fault_after, unsigned *completed_stage, int recovery) {
+    unsigned fault_after, unsigned *completed_stage, int mode,
+    const struct prc_settings_update_authority *authority,
+    const uint8_t *original_record) {
+    const int recovery = mode == 1;
     if (completed_stage) *completed_stage = 0;
-    if (!esp_root || !candidate_path || !current_manifest ||
+    if (!update_current(authority) || !esp_root || !candidate_path || !current_manifest ||
         !successor_manifest || !selected_state || !plan || !completed_stage ||
-        selected_copy > 1 || fault_after > 4 ||
+        selected_copy > 1 || fault_after > (original_record ? 5U : 4U) ||
         (plan->active_entry != 1 && plan->active_entry != 2) ||
         plan->inactive_entry != (uint8_t)(3 - plan->active_entry) ||
         plan->candidate_size < 512 || plan->candidate_size > 64 * 1024 * 1024 ||
@@ -382,27 +460,37 @@ static int commit_replacement(const char *esp_root, const char *candidate_path,
         hash_fd(source, plan->candidate_size, candidate_sha) ||
         CRYPTO_memcmp(candidate_sha, plan->candidate_sha256, 32)) goto refused;
     if (retire) {
-        if (atomic_bytes(states, target_name, start, STATE_SIZE, 1, completed_stage)) goto refused;
+        if (atomic_bytes_authorized(states, target_name, start, STATE_SIZE, 1, completed_stage, authority)) goto refused;
         *completed_stage = ++stage;
         if (fault_after == stage) goto refused;
     }
     if ((retire && exact_bytes(states, target_name, start, STATE_SIZE)) ||
         atomic_candidate(slots, inactive_name, source, plan->candidate_size,
-                         plan->candidate_sha256, completed_stage)) goto refused;
+                         plan->candidate_sha256, completed_stage, authority)) goto refused;
     *completed_stage = ++stage;
     if (fault_after == stage) goto refused;
+    /* Persist the original authenticated PRL1 before PBMF/Trial can name the
+     * candidate. Same atomic publication and uncertainty accounting, no new
+     * slot writer or promotion. The outgoing slot's record is untouched. */
+    const char *record_name = plan->inactive_entry == 1 ? "release-a.prl1" : "release-b.prl1";
+    if (original_record) {
+        if (atomic_bytes_authorized(states, record_name, original_record, 512, 1,
+                                    completed_stage, authority)) goto refused;
+        *completed_stage = ++stage;
+        if (fault_after == stage) goto refused;
+    }
     if (exact_bytes(vault, "manifest.bin", current_manifest, MANIFEST_SIZE) ||
         exact_bytes(states, preserved_name, selected_state, STATE_SIZE) ||
         (retire && exact_bytes(states, target_name, start, STATE_SIZE)) ||
         exact_hash_at(slots, active_name, rd32(active + 4), active + 16) ||
-        atomic_bytes(vault, "manifest.bin", successor_manifest, MANIFEST_SIZE, 0, completed_stage))
+        atomic_bytes_authorized(vault, "manifest.bin", successor_manifest, MANIFEST_SIZE, 0, completed_stage, authority))
         goto refused;
     *completed_stage = ++stage;
     if (fault_after == stage) goto refused;
     uint8_t armed[STATE_SIZE];
     memcpy(armed, start, sizeof(armed));
     wr64(armed + 8, rd64(start + 8) + 1);
-    if (recovery) {
+    if (mode != 0) {
         /* Exactly one unverified Trial, not an active/verified promotion. The
          * old failure count/digest and other slot remain forensic history.
          * Manager consumes tries_left before launch; absent strong health the
@@ -424,11 +512,12 @@ static int commit_replacement(const char *esp_root, const char *candidate_path,
     wr32(armed + 508, crc32_ieee(armed, 508));
     if (exact_bytes(states, preserved_name, selected_state, STATE_SIZE) ||
         (retire && exact_bytes(states, target_name, start, STATE_SIZE)) ||
+        (original_record && exact_bytes(states, record_name, original_record, 512)) ||
         exact_bytes(vault, "manifest.bin", successor_manifest, MANIFEST_SIZE) ||
         exact_hash_at(slots, active_name, rd32(active + 4), active + 16) ||
-        atomic_bytes(states, armed_name, armed, STATE_SIZE, 1, completed_stage)) goto refused;
+        atomic_bytes_authorized(states, armed_name, armed, STATE_SIZE, 1, completed_stage, authority)) goto refused;
     *completed_stage = ++stage;
-    if (fault_after == stage) goto refused;
+    if (fault_after == stage || !update_current(authority)) goto refused;
     close(source); close(states); close(vault); close(slots);
     return 0;
 refused:
@@ -447,7 +536,7 @@ int prc_commit_quarantined_replacement(const char *esp_root, const char *candida
     const struct prc_update_plan *plan, unsigned fault_after, unsigned *completed_stage) {
     return commit_replacement(esp_root, candidate_path, current_manifest,
         successor_manifest, selected_state, selected_copy, plan,
-        fault_after, completed_stage, 1);
+        fault_after, completed_stage, 1, NULL, NULL);
 }
 
 int prc_commit_inactive_update(const char *esp_root, const char *candidate_path,
@@ -456,17 +545,19 @@ int prc_commit_inactive_update(const char *esp_root, const char *candidate_path,
     const struct prc_update_plan *plan, unsigned fault_after, unsigned *completed_stage) {
     return commit_replacement(esp_root, candidate_path, current_manifest,
         successor_manifest, selected_state, selected_copy, plan,
-        fault_after, completed_stage, 0);
+        fault_after, completed_stage, 0, NULL, NULL);
 }
 
-int prc_commit_released_update(const char *esp_root, const char *candidate_path,
+static int commit_released_update_mode(const char *esp_root, const char *candidate_path,
     const uint8_t current_manifest[1024], const uint8_t successor_manifest[1024],
     const uint8_t selected_state[512], unsigned selected_copy,
     const struct prc_update_plan *plan, const struct prc_release_result *release,
-    int recovery, unsigned fault_after, unsigned *completed_stage) {
+    int recovery, unsigned fault_after, unsigned *completed_stage,
+    const struct prc_settings_update_authority *authority,
+    const uint8_t *original_record) {
     if (completed_stage) *completed_stage = 0;
     if (!plan || !release || !release->policy_epoch || !release->security_version ||
-        (recovery != 0 && recovery != 1) ||
+        (recovery < 0 || recovery > 2) ||
         release->payload_size != plan->candidate_size ||
         !current_manifest || (plan->active_entry != 1 && plan->active_entry != 2) ||
         !release->current_security_version ||
@@ -480,7 +571,7 @@ int prc_commit_released_update(const char *esp_root, const char *candidate_path,
      * journal publication, then hashes/readbacks the actual copied bytes. */
     return commit_replacement(esp_root, candidate_path, current_manifest,
         successor_manifest, selected_state, selected_copy, plan,
-        fault_after, completed_stage, recovery);
+        fault_after, completed_stage, recovery, authority, original_record);
 }
 
 static int commit_previous_rollback(const char *esp_root,
@@ -562,6 +653,85 @@ refused:
 }
 
 /* Remote rollback retains its owner-signed PCAR contract unchanged. */
+int prc_commit_released_update(const char *esp_root, const char *candidate_path,
+    const uint8_t current_manifest[1024], const uint8_t successor_manifest[1024],
+    const uint8_t selected_state[512], unsigned selected_copy,
+    const struct prc_update_plan *plan, const struct prc_release_result *release,
+    int recovery, unsigned fault_after, unsigned *completed_stage) {
+    if (completed_stage) *completed_stage = 0;
+    if (recovery != 0 && recovery != 1) return -1;
+    return commit_released_update_mode(esp_root,candidate_path,current_manifest,
+        successor_manifest,selected_state,selected_copy,plan,release,recovery,
+        fault_after,completed_stage,NULL,NULL);
+}
+
+int prc_commit_local_released_update(const char *esp_root, const char *candidate_path,
+    const uint8_t current_manifest[1024], const uint8_t successor_manifest[1024],
+    const uint8_t selected_state[512], unsigned selected_copy,
+    const struct prc_update_plan *plan, const struct prc_release_result *release,
+    unsigned fault_after, unsigned *completed_stage) {
+    /* Ordinary-state admission, unverified one-attempt Trial publication.
+     * Only local VT caller uses this; legacy OP2/OP5 semantics are retained. */
+    return commit_released_update_mode(esp_root,candidate_path,current_manifest,
+        successor_manifest,selected_state,selected_copy,plan,release,2,
+        fault_after,completed_stage,NULL,NULL);
+}
+
+int prc_commit_settings_released_update(const char *esp_root,
+    const char *candidate_path, const uint8_t current_manifest[1024],
+    const uint8_t successor_manifest[1024], const uint8_t selected_state[512],
+    unsigned selected_copy, const struct prc_update_plan *plan,
+    const struct prc_release_result *release,
+    const struct prc_settings_update_authority *authority,
+    unsigned *completed_stage) {
+    if (completed_stage) *completed_stage = 0;
+    if (!completed_stage || !authority || !authority->current) return -1;
+    /* Do not retain mutable caller storage or permit policy/CHECK to write slots. */
+    const struct prc_settings_update_authority original = *authority;
+    if (!rd64(original.original) || rd32(original.original+8) != 2 ||
+        rd32(original.original+12) != 1 || !rd64(original.original+16) ||
+        !rd64(original.original+24) || !rd64(original.original+32) ||
+        !update_current(&original)) return -1;
+    return commit_released_update_mode(esp_root,candidate_path,current_manifest,
+        successor_manifest,selected_state,selected_copy,plan,release,2,0,
+        completed_stage,&original,NULL);
+}
+
+int prc_commit_settings_channel_update(const char *esp_root,
+    const char *candidate_path, const uint8_t current_manifest[1024],
+    const uint8_t successor_manifest[1024], const uint8_t selected_state[512],
+    unsigned selected_copy, const struct prc_update_plan *plan,
+    const uint8_t original_feed[1024], const struct prc_release_result *release,
+    const struct prc_settings_update_authority *authority,
+    unsigned *completed_stage) {
+    if (completed_stage) *completed_stage = 0;
+#ifndef PAOS_RESCUE_UPDATE_CHANNEL_HEADER
+    (void)esp_root; (void)candidate_path; (void)current_manifest;
+    (void)successor_manifest; (void)selected_state; (void)selected_copy;
+    (void)plan; (void)original_feed; (void)release; (void)authority;
+    return -1;
+#else
+    if (!completed_stage || !authority || !authority->current || !plan || !release ||
+        !original_feed || !current_manifest ||
+        (plan->active_entry != 1 && plan->active_entry != 2)) return -1;
+    const struct prc_settings_update_authority original = *authority;
+    const struct prc_release_result expected = *release;
+    uint8_t feed[1024]; memcpy(feed, original_feed, sizeof(feed));
+    if (!rd64(original.original) || rd32(original.original+8) != 2 ||
+        rd32(original.original+12) != 1 || !rd64(original.original+16) ||
+        !rd64(original.original+24) || !rd64(original.original+32) ||
+        !update_current(&original)) return -1;
+    const uint8_t *active = current_manifest + 128 + (plan->active_entry - 1U) * 128;
+    struct prc_release_result checked = {0};
+    if (prc_update_channel_offer_check_at(esp_root, plan->active_entry,
+            active+16, rd32(active+4), feed, &checked) ||
+        memcmp(&checked, &expected, sizeof(checked))) return -1;
+    return commit_released_update_mode(esp_root,candidate_path,current_manifest,
+        successor_manifest,selected_state,selected_copy,plan,&checked,2,0,
+        completed_stage,&original,feed+256);
+#endif
+}
+
 int prc_commit_previous_rollback(const char *esp_root,
     const uint8_t current_manifest[1024],
     const uint8_t selected_state[512], unsigned selected_copy,

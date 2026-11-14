@@ -1,6 +1,6 @@
 ;; MODULE gui/chat_app
 ;; LAYER 6
-;; EXPORTS chat_app_init, chat_app_tick, chat_declare, chat_process, fb_draw_char, fb_draw_str_n, sec_text_escape, sec_text_escape_row, fb_draw_scalar, fb_draw_wide16, wm_repaint_all, wm_zstamp, wm_zcounter, chat_out_buf, chat_out_ready
+;; EXPORTS chat_terminal_close_op, chat_app_init, chat_app_tick, chat_declare, chat_process, fb_draw_char, fb_draw_str_n, sec_text_escape, sec_text_escape_row, fb_draw_scalar, fb_draw_wide16, wm_repaint_all, wm_zstamp, wm_zcounter, chat_out_buf, chat_out_ready
 ;; IMPORTS boot/serial, boot/gop, gui/window, gui/window_mgmt, gui/cadence_mark, svc/command, core/native_app, core/lib/fmt, core/lib/str
 ;; CAPS
 ;; OWNER saga:gui
@@ -1246,6 +1246,9 @@ cmd_verb_focus:
     call chat_out_reset
     lea  rdi, [rel str_f_bad]           ; " focus=ERR bad_idx"
     call chat_put_str
+    mov  byte [rel chat_out_ready], 1
+    mov  qword [r13 + RSP_CODE], CMDE_BADSEL ; G-11: no live window at that index; the text is unchanged
+    jmp  .popreq
 .stage:
     mov  byte [rel chat_out_ready], 1
     mov  qword [r13 + RSP_CODE], CMDE_OK
@@ -1315,6 +1318,9 @@ cmd_verb_min:
     call chat_out_reset
     lea  rdi, [rel str_mn_bad]          ; " min=ERR bad_idx"
     call chat_put_str
+    mov  byte [rel chat_out_ready], 1
+    mov  qword [r13 + RSP_CODE], CMDE_BADSEL ; G-11: no live window at that index; the text is unchanged
+    jmp  .popreq
 .stage:
     mov  byte [rel chat_out_ready], 1
     mov  qword [r13 + RSP_CODE], CMDE_OK
@@ -1379,6 +1385,9 @@ cmd_verb_max:
     call chat_out_reset
     lea  rdi, [rel str_mx_bad]          ; " max=ERR bad_idx"
     call chat_put_str
+    mov  byte [rel chat_out_ready], 1
+    mov  qword [r13 + RSP_CODE], CMDE_BADSEL ; G-11: no live window at that index; the text is unchanged
+    jmp  .popreq
 .stage:
     mov  byte [rel chat_out_ready], 1
     mov  qword [r13 + RSP_CODE], CMDE_OK
@@ -1403,6 +1412,18 @@ cmd_verb_max:
 ;     SEC-winmove (C) (root 14:51:31): MAX's gates, as MIN. ---
 cmd_verb_close:
     call cmd_handler_prologue
+    ; Native Terminal delegation; -1 preserves the ordinary request path.
+    cmp qword [rel chat_terminal_close_op],0
+    je .ordinary
+    push rdi
+    push rsi
+    call [rel chat_terminal_close_op]
+    pop rsi
+    pop rdi
+    cmp eax,-1
+    je .ordinary
+    ret
+.ordinary:
     push rbx
     push r12
     push r13
@@ -1449,6 +1470,9 @@ cmd_verb_close:
     call chat_out_reset
     lea  rdi, [rel str_cl_bad]          ; " close=ERR bad_idx"
     call chat_put_str
+    mov  byte [rel chat_out_ready], 1
+    mov  qword [r13 + RSP_CODE], CMDE_BADSEL ; G-11: no live window at that index; the text is unchanged
+    jmp  .popreq
 .stage:
     mov  byte [rel chat_out_ready], 1
     mov  qword [r13 + RSP_CODE], CMDE_OK
@@ -1550,6 +1574,7 @@ CHAT_ANS_MAX equ 160
 align 8
 chat_out_cur:   dq 0
 chat_ans_cur:   dq 0
+chat_terminal_close_op: dq 0
 chat_closed_ms: dq 0
 chat_mode_ptr:  dq 0                    ; runtime lea-filled (never a static dq symbol)
 wm_state:       times WM_MAX dd 0

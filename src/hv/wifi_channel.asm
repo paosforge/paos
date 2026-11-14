@@ -489,7 +489,7 @@ wfc_retire_safe:
     jz .bad
     test edx,4095
     jnz .bad
-    mov ecx,0xc0000000
+    mov ecx,0xd0000000               ; compact host bytes, split GPA does not add a hole
     cmp rdx,rcx
     ja .bad
     add rax,rdx

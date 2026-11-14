@@ -1,7 +1,7 @@
 ;; MODULE hv/driver_domain
 ;; LAYER 5
 ;; EXPORTS nd_begin, nd_prepare, nd_current, nd_stop, nd_backend_stopped, nd_tick, nd_snapshot, nd_cmdline, nd_reserve_allowed
-;; IMPORTS hv/filesystem_domain, hv/vmx, hv/vm_profile, hv/nic_selection, hv/nic_assignment, boot/header, boot/native_driver_preload, boot/native_driver_gate, hv/wifi_channel
+;; IMPORTS hv/driver_domain_restart, core/memory_budget, hv/filesystem_domain, hv/vmx, hv/vm_profile, hv/nic_selection, hv/a1_nic_selection, hv/nic_assignment, boot/header, boot/native_driver_preload, boot/native_driver_gate, hv/wifi_channel, hv/guestpower, hv/nd_isolation
 ;; CAPS extension
 ;; OWNER saga:hv
 ;; CONTEXT: bsp_only
@@ -12,6 +12,7 @@
 ; boot_ms_now uses the first kernel boot timestamp, not admission-relative time.
 ND_BOOT_MS equ 120000
 ND_CALL_MS equ 4000
+ND_A1_PRIVATE_QWORDS equ (320+64+256+8)/8 ; nd_a1_request/map/result/scope
 ND_STATUS_BYTES equ 2048
 
 ; Validate native-authored nonce: exactly16 lowerhex+NUL, nonzero.
@@ -57,6 +58,15 @@ nd_clock:
     jz .bad
     cmp rax,[rel nd_clock_ms]
     jb .bad
+    ; Original boot keeps its absolute120s limit. Only an exact explicitly
+    ; selected post-ACK restart may use its bounded existing return reserve.
+    push rax
+    call nd_restart_clock
+    mov edx,eax
+    pop rax
+    test edx,edx
+    js .bad
+    jnz .measured
     cmp dword [rel nd_operational],1
     je .measured
     cmp rax,ND_BOOT_MS
@@ -77,6 +87,8 @@ nd_begin:
     push r12
     push r13
     push r14
+    push r15
+    sub rsp,8
     mov rbx,rdi
     mov r12d,esi
     mov r13,rdx
@@ -148,6 +160,12 @@ nd_begin:
     test eax,eax
     jz .bad
     mov r14,[rel nd_clock_ms]
+    xor r15d,r15d                   ; legacy singleton mode0
+    mov rax,[rel native_driver_selected_policy]
+    cmp rax,2                       ; immutable build selector, NOT runtime MODE
+    je .a1_select
+    cmp rax,1
+    ja .bad                         ; unknown build never falls back
     mov edi,r12d
     lea rsi,[rel nd_selector]
     mov edx,592
@@ -168,6 +186,30 @@ nd_begin:
     jne .bad
     cmp r12d,[rel nd_selector+8]
     jne .bad
+    jmp .selected
+.a1_select:
+    mov rdi,rbx
+    mov esi,r12d
+    lea rdx,[rel nd_a1_candidate]
+    call nd_a1_capture
+    test eax,eax
+    jnz .bad
+    mov rdi,rbx
+    mov esi,r12d
+    lea rdx,[rel nd_a1_check]
+    call nd_a1_capture
+    test eax,eax
+    jnz .bad
+    lea rdi,[rel nd_a1_candidate]
+    lea rsi,[rel nd_a1_check]
+    mov ecx,76                      ; full608, includes original ISO/group/claims
+    cld
+    repe cmpsq
+    jne .bad
+    cmp qword [rel nd_attempt],-1
+    je .bad                         ; native attempt never wraps or aliases
+    mov r15d,1                      ; MODE1 only after actual signed policy
+.selected:
     call nd_clock
     test eax,eax
     jz .bad
@@ -178,6 +220,26 @@ nd_begin:
     mov ebp,[rel hv_linux_start_gen]
     inc ebp
     jz .bad
+    mov [rel nd_mode],r15d           ; frozen with this original START tuple
+    mov dword [rel nd_a1_error],0
+    lea rdi,[rel nd_a1_request]      ; no preceding attempt's R2 operands/result
+    xor eax,eax
+    mov ecx,ND_A1_PRIVATE_QWORDS
+    cld
+    rep stosq
+    test r15d,r15d
+    jz .mode_bound
+    inc qword [rel nd_attempt]
+    lea rsi,[rel nd_a1_candidate]
+    lea rdi,[rel nd_a1_original]
+    mov ecx,76
+    rep movsq
+    ; A1NS is never a NICS singleton or a stale preceding legacy selection.
+    lea rdi,[rel nd_selector]
+    xor eax,eax
+    mov ecx,148
+    rep stosq
+.mode_bound:
     mov eax,[rbx+VP_DEVICES]
     mov [rel nd_devices],eax        ; immutable admitted closure, not a later selection
     mov [rel nd_profile],rbx
@@ -247,11 +309,26 @@ nd_begin:
 .bad:
     xor eax,eax
 .out:
+    add rsp,8
+    pop r15
     pop r14
     pop r13
     pop r12
     pop rbp
     pop rbx
+    ret
+
+; RDI=exact signed profile,ESI=BDF,RDX=private608. Recheck immutable
+; build selection on every native capture. No profile include means refusal.
+nd_a1_capture:
+    cmp qword [rel native_driver_selected_policy],2
+    jne .policy
+%ifdef PAOS_DRIVER_DOMAIN_PROFILE_INC
+    mov ecx,608
+    jmp a1_nic_snapshot
+%endif
+.policy:
+    mov eax,41                      ; A1N_E_POLICY; never singleton fallback
     ret
 
 ; Loader-only capture BEFORE attach. Postcallback identity/fullcost checked.
@@ -278,6 +355,10 @@ nd_prepare:
     test eax,eax
     jz .fault
     mov r12,[rel nd_clock_ms]
+    cmp dword [rel nd_mode],1
+    je .a1_prepare
+    cmp dword [rel nd_mode],0
+    jne .fault
 %macro ND_CAPTURE 2
     mov rax,[rel %1]
     mov [rel %2],rax
@@ -347,6 +428,48 @@ nd_prepare:
     mov dword [rel nd_state],2
     mov eax,1
     jmp .out
+.a1_prepare:
+    mov rdi,[rel nd_profile]
+    mov esi,[rel nd_bdf]
+    lea rdx,[rel nd_a1_check]
+    call nd_a1_capture
+    test eax,eax
+    jnz .a1_refused
+    lea rdi,[rel nd_a1_original]
+    lea rsi,[rel nd_a1_check]
+    mov ecx,76
+    cld
+    repe cmpsq
+    mov eax,43                      ; A1N_E_CHANGED; retain original608 intact
+    jne .a1_refused
+    call nd_owner                   ; full native tuple after the capture
+    test eax,eax
+    jz .fault
+    call nd_clock
+    test eax,eax
+    jz .fault
+    mov rax,[rel nd_clock_ms]
+    sub rax,r12
+    cmp rax,ND_CALL_MS
+    jae .fault
+    ; Original R2 op1 once: family config/MMIO READS only, A1RS retained.
+    mov rdi,r12
+    call nd_a1_probe
+    test eax,eax
+    jnz .a1_refused
+    call nd_clock
+    test eax,eax
+    jz .fault
+    mov rax,[rel nd_clock_ms]
+    sub rax,r12
+    cmp rax,ND_CALL_MS
+    jae .fault
+    ; Actual A1 assignment/reset/map backend is not implemented yet (VM/AMD).
+    ; Stop this original START BEFORE pool clearing/device/DMA writes. Do not
+    ; feed608 into legacy592, invoke a legacy reset, or infer custody release.
+    mov eax,46                      ; A1 assignment supplier unavailable
+.a1_refused:
+    mov [rel nd_a1_error],eax
 .fault:
     call nd_fault_stop
 .bad:
@@ -408,6 +531,8 @@ nd_owner_map:
     ret
 
 nd_current:
+    cmp dword [rel nd_mode],0        ; legacy receipt never establishes A1 ready
+    jne .bad
     cmp dword [rel nd_state],2
     jne .bad
     cmp byte [rel hv_linux_running],1
@@ -517,7 +642,10 @@ nd_tick:
     sub rsp,8
     call nd_current
     test eax,eax
-    jnz .done
+    jz .fault
+    call nd_power_tick                 ; T5-1.C10b-1b bounded Shut down (VM 106671 Q1)
+    jmp .done
+.fault:
     call nd_fault_stop
 .done:
     add rsp,8
@@ -552,6 +680,8 @@ nd_backend_stopped:
     mov byte [rel hv_linux_stop_req],1
     cmp dword [rel nd_attached],0
     je .retired
+    cmp dword [rel nd_mode],0
+    jne .uncertain                  ; no A1 -> legacy release fallback
     call nd_owner_map
     test eax,eax
     jz .uncertain
@@ -564,6 +694,7 @@ nd_backend_stopped:
     mov dword [rel nd_released],1
     mov dword [rel nd_state],4
     call nd_transport_retire
+    call guestpower_retired             ; C10b-1a S5: clean only here, marker == nd_generation
     add rsp,8
 .out:
     ret
@@ -672,7 +803,7 @@ nd_snapshot:
     mov ecx,ND_STATUS_BYTES/8
     rep stosq
     mov dword [rbx],0x3153444e
-    mov word [rbx+4],2
+    mov word [rbx+4],9
     mov word [rbx+6],ND_STATUS_BYTES
     inc dword [rel nd_snapshot_sequence]
     mov eax,[rel nd_snapshot_sequence]
@@ -735,6 +866,8 @@ nd_snapshot:
     mov ecx,35
     rep movsq
 .no_profile:
+    cmp dword [rel nd_mode],1
+    je .a1_status
     lea rsi,[rel nd_selector]
     lea rdi,[rbx+448]
     mov ecx,74
@@ -744,7 +877,48 @@ nd_snapshot:
     lea rdi,[rbx+1088]
     call nic_assignment_receipt
     mov [rbx+1040],eax
+    ; NDS1 v5: this START's raw attach reason (6 BAR admission, 3 reset; a
+    ; selector/group code passes through), read only with the reset record.
+    mov eax,[rel nic_assignment_error]
+    mov [rbx+1044],eax
 .done:
+    ; NDS1 v4: retain the original reset attempt, including failed attach.
+    ; Passive copy only: no new reset, group scan, refresh or custody change.
+    lea rdi,[rbx+1344]
+    call nic_assignment_reset_observation
+    ; NDS1 v6 (R2, ROOT108305 B): the same attempt's passive NLK1 root-port
+    ; Link Status record. Copy only: no PCI access, reset or custody change.
+    lea rdi,[rbx+1408]
+    call nic_assignment_link_observation
+    ; NDS1 v7 (R2b, ROOT108718/108722): the same attempt's passive NRT1
+    ; config-retention record. Copy only: no PCI access, reset or custody change.
+    lea rdi,[rbx+1472]
+    call nic_assignment_retention_observation
+    jmp .policy_status
+.a1_status:
+    ; Different version: no copied NICS/legacy reset/group receipts. Existing
+    ; v9 consumers must not mistake A1 for isolated/attached. Full original
+    ; A1NS608 stays in native custody for the eventual qualified backend.
+    mov word [rbx+4],11
+    ; v11: this START's original R2 op1 A1RS256 (zero if never dispatched),
+    ; retained exactly as the leaf left it, refusals included; then the
+    ; selected function's ORIGINAL A1NS config256, the facts a leaf that
+    ; refuses before reading still leaves for R2 (AMD118432).
+    lea rsi,[rel nd_a1_result]
+    lea rdi,[rbx+448]
+    mov ecx,32
+    rep movsq
+    lea rsi,[rel nd_a1_original]
+    add rsi,64                       ; A1NS config256
+    mov ecx,32
+    rep movsq                        ; rdi continues at +704
+    mov eax,[rel nd_mode]
+    mov [rbx+2032],eax
+    mov eax,[rel nd_a1_error]
+    mov [rbx+2036],eax
+    mov rax,[rel nd_attempt]
+    mov [rbx+2040],rax
+.policy_status:
     ; NDS1 v2 retains the same eight-page envelope. Effective native policy
     ; and gate counters are observations, never successful-device counts.
     mov rax,[rel native_driver_selected_policy]
@@ -759,6 +933,82 @@ nd_snapshot:
     lea rsi,[rel native_driver_blocked]
     mov ecx,11
     rep movsq
+    ; NDS1 v3: actual allocator/loader readback in existing page6. This is
+    ; passive: never START/STOP, acquire, release, map or refresh a lifetime.
+    ; Keep both native tuples so the consumer can detect drift independently.
+    mov dword [rbx+1536],0x314c414e       ; NAL1
+    mov word [rbx+1540],1
+    mov word [rbx+1542],256
+    mov al,[rel hv_linux_running]
+    mov [rbx+1548],al
+    mov al,[rel hv_linux_start_active]
+    mov [rbx+1549],al
+    mov al,[rel hv_linux_vmx_live]
+    mov [rbx+1550],al
+    mov al,[rel hv_linux_task_started]
+    mov [rbx+1551],al
+%macro NAL_COPY 2
+    mov rax,[rel %1]
+    mov [rbx+1536+%2],rax
+%endmacro
+    NAL_COPY nd_generation,16
+    NAL_COPY hv_linux_mb_gen,24
+    NAL_COPY hv_linux_mb_token,32
+    NAL_COPY hv_linux_region,40
+    NAL_COPY hv_linux_region_capacity,48
+    NAL_COPY hv_linux_region_resident,56
+    NAL_COPY hv_linux_ram,64
+    NAL_COPY hv_linux_ram_bytes,72
+    NAL_COPY nd_ram,80
+    NAL_COPY nd_ram_bytes,88
+    NAL_COPY nd_region,96
+    NAL_COPY nd_capacity,104
+    mov eax,[rel hv_linux_start_gen]
+    mov [rbx+1648],eax
+    mov eax,[rel hv_linux_start_consumed]
+    mov [rbx+1652],eax
+    mov eax,[rel vm_profile_gen]
+    mov [rbx+1656],eax
+    mov eax,[rel vm_profile_live_devices]
+    mov [rbx+1660],eax
+    mov edi,1                          ; MB_OWNER_HV_LINUX
+    mov rsi,[rel hv_linux_mb_gen]
+    mov rdx,[rel hv_linux_mb_token]
+    lea rcx,[rbx+1664]
+    mov r8d,56                         ; MB_ALLOCATION_BYTES
+    call mb_allocation_read
+    mov [rbx+1544],eax                 ; busy/absent is preserved, never retried
+    mov eax,[rel hv_linux_kernel_size]
+    mov [rbx+1720],eax
+    mov eax,[rel hv_linux_initrd_size]
+    mov [rbx+1724],eax
+    NAL_COPY hv_linux_initrd_gpa,192
+    mov eax,[rel vm_profile_live_mmio]
+    mov [rbx+1736],eax
+    mov eax,[rel vm_profile_live_leaves]
+    mov [rbx+1740],eax
+    NAL_COPY vm_profile_live_reserve,208
+    NAL_COPY hv_svm_cur_vmcb,216
+    NAL_COPY hv_linux_eptp,224
+%unmacro NAL_COPY 2
+    call boot_ms_now
+    mov [rbx+1768],rax
+    mov al,[rel hv_linux_run_req]
+    mov [rbx+1776],al
+    call guestpower_mapped             ; NAL1 241: actual PT[9] is the paos.power page (SEC107097)
+    mov [rbx+1777],al
+    cmp dword [rel nd_mode],1
+    je .status_complete             ; no stale legacy NAA1/GRF1/GRR1 on A1
+    lea rdi,[rbx+1792]              ; NAA1 passive original admission, v8 only
+    call nic_assignment_admission_observation
+    ; NDS1 v9 keeps eight pages. GRF1 occupies old reserved408..439;
+    ; GRR1 occupies old reserved1856..2031. Same START/selected BDF only.
+    mov rdi,[rel nd_generation]
+    mov esi,[rel nd_bdf]
+    lea rdx,[rbx+408]
+    lea rcx,[rbx+1856]
+    call ndiso_group_snapshot
+.status_complete:
     mov eax,ND_STATUS_BYTES
     jmp .out
 .bad:
@@ -861,6 +1111,9 @@ nd_terminal: dd 0
 nd_released: dd 0
 nd_attached: dd 0
 nd_snapshot_sequence: dd 0
+nd_mode: dd 0                       ; 0 legacy,1 signed A1; immutable per START
+nd_a1_error: dd 0
+nd_attempt: dq 0                    ; native monotonic A1 attempt; retained on STOP
 nd_start_authority: db 0
 align 8
 nd_generation: dq 0
@@ -877,6 +1130,15 @@ nd_bootparam: times 160 db 0
 align 16
 nd_selector: times 592 db 0
 nd_selector_check: times 592 db 0
+nd_a1_original: times 608 db 0
+nd_a1_candidate: times 608 db 0
+nd_a1_check: times 608 db 0
+; Original R2 op1 operands/result (driver_domain_a1probe); contiguous, cleared
+; on every START. A1RS is an observation, never attach/reset authority.
+nd_a1_request: times 320 db 0
+nd_a1_map: times 64 db 0
+nd_a1_result: times 256 db 0
+nd_a1_scope: dq 0
 nd_storage_end:
 %endmacro
 WDATA_DEFER WDATA_hv_driver_domain

@@ -1,6 +1,6 @@
 ;; MODULE dev/power/ec_power
 ;; LAYER 3
-;; EXPORTS ecp_census_match, ecp_forecast_update, ecp_forecast_snapshot, ecp_forecast_project, ecp_lid_button_snapshot, ecp_lid_confirm_begin, ecp_lid_confirm_cancel, ecp_init_cooperative, ecp_sample_begin, ecp_sample_step, ecp_sample_cancel, ecp_sample_recover, ecp_sample_state, ecp_bat_sample_ms, ecp_freshness, ecp_init, ecp_refresh, ecp_pm1_poll, ecp_lid_poll, ecp_lid_read_now, ecp_bl_set_pct, ecp_bl_lid_blank, ecp_bl_lid_restore, ecp_bl_lid_dark, ecp_status_format, ecp_lid, ecp_lid_events, ecp_q_other, ecp_bl_ok, ecp_bl_duty, ecp_bl_max, ecp_bl_min, ecp_bl_base, ecp_active, ecp_ac, ecp_bat_present, ecp_bat_state, ecp_bat_pct, ecp_bat_rate, ecp_bat_rem, ecp_bat_full, ecp_bat_design, ecp_bat_mv, ecp_bat_dmv, ecp_bat_warn, ecp_warn_events, ecp_pwrbtn_presses, ecp_ec_timeouts, ecp_ec_garbage, ecp_pm1_sts_port, ecp_sci_en, ecp_ec_writes, ecp_data_port, ecp_cmd_port
+;; EXPORTS ecp_census_match, ecp_forecast_update, ecp_forecast_snapshot, ecp_forecast_project, ecp_lid_button_snapshot, ecp_lid_confirm_begin, ecp_lid_confirm_cancel, ecp_init_cooperative, ecp_sample_begin, ecp_sample_step, ecp_sample_cancel, ecp_sample_recover, ecp_sample_state, ecp_bat_sample_ms, ecp_freshness, ecp_init, ecp_refresh, ecp_pm1_poll, ecp_lid_poll, ecp_lid_read_now, ecp_bl_observe, ecp_bl_set_pct, ecp_bl_set_duty, ecp_bl_lid_blank, ecp_bl_lid_restore, ecp_bl_lid_dark, ecp_status_format, ecp_lid, ecp_lid_events, ecp_q_other, ecp_bl_ok, ecp_bl_duty, ecp_bl_max, ecp_bl_min, ecp_bl_base, ecp_active, ecp_ac, ecp_bat_present, ecp_bat_state, ecp_bat_pct, ecp_bat_rate, ecp_bat_rem, ecp_bat_full, ecp_bat_design, ecp_bat_mv, ecp_bat_dmv, ecp_bat_warn, ecp_warn_events, ecp_pwrbtn_presses, ecp_ec_timeouts, ecp_ec_garbage, ecp_pm1_sts_port, ecp_sci_en, ecp_ec_writes, ecp_data_port, ecp_cmd_port
 ;; IMPORTS boot/smbios, bus/acpi, bus/pci, bus/hal, core/time, boot/serial
 ;; CAPS io
 ;; OWNER saga:rc_power
@@ -13,7 +13,7 @@
 ; compares two SMBIOS strings and returns. The only row today is the Dell
 ; Latitude 5490 (rc-target4 DELL_LAPTOP_BACKEND_MAP.md a6f699ac, DSDT 382c156f;
 ; the same values are the "ec" quirk of gauntlet_v2/config/machine_quirks.json
-; dell-latitude-5490-SERIAL, and a host test pins the two together).
+; the lab Dell Latitude 5490, and a host test pins the two together).
 ;
 ; EC transport (ACPI 6.x sec. 12.2/12.3; DSDT ECDV _CRS data 0x930, cmd/status
 ; 0x934; no _GLK, no ECDT): RD_EC 0x80 = wait IBF=0, cmd, wait IBF=0, address,
@@ -2094,6 +2094,20 @@ ecp_bl_read_state:
     xor  eax, eax
     ret
 
+; ecp_bl_observe -> EAX 1 fresh usable non-lid-held PWM / 0 unavailable.
+; Owner BACKLIGHT query refreshes readback without any PWM write.
+ecp_bl_observe:
+    cmp  byte [rel ecp_active], 1
+    jne  .no
+    cmp  byte [rel ecp_bl_ok], 1
+    jne  .no
+    cmp  byte [rel ecp_bl_lid_dark], 0
+    jne  .no
+    jmp  ecp_bl_read_state
+.no:
+    xor  eax, eax
+    ret
+
 ; ecp_bl_set_pct(EDI = 0..100) -> EAX 0 set (and read back) / -1 refused.
 ;   duty = clamp(max * pct / 100, min, max); never 0.
 ecp_bl_set_pct:
@@ -2135,6 +2149,45 @@ ecp_bl_set_pct:
     call ecp_bl_read_state
     test eax, eax
     jz   .refuse                              ; the PWM went unusable under the write
+    cmp  [rel ecp_bl_duty], ebx
+    jne  .refuse
+    xor  eax, eax
+    pop  rbx
+    ret
+.refuse:
+    mov  eax, -1
+    pop  rbx
+    ret
+
+; ecp_bl_set_duty(EDI = exact nonzero duty) -> EAX 0 verified / -1 refused.
+; Owner BACKLIGHT restoration: no percent quantization, no max/enable/polarity
+; change. Firmware may have chosen a duty below the user percentage minimum.
+; Validate the CURRENT PWM, preserve its max and refuse zero or out-of-range.
+ecp_bl_set_duty:
+    push rbx
+    mov  ebx, edi
+    cmp  byte [rel ecp_active], 1
+    jne  .refuse
+    cmp  byte [rel ecp_bl_lid_dark], 0
+    jne  .refuse
+    cmp  byte [rel ecp_bl_ok], 1
+    jne  .refuse
+    test ebx, ebx
+    jz   .refuse
+    call ecp_bl_read_state
+    test eax, eax
+    jz   .refuse
+    cmp  ebx, [rel ecp_bl_max]
+    ja   .refuse
+    mov  edx, [rel ecp_bl_ctl2]
+    and  edx, 0xFFFF0000
+    or   edx, ebx
+    mov  esi, ECP_BL_CTL2
+    call ecp_bl_wr
+    inc  dword [rel ecp_bl_writes]
+    call ecp_bl_read_state
+    test eax, eax
+    jz   .refuse
     cmp  [rel ecp_bl_duty], ebx
     jne  .refuse
     xor  eax, eax
@@ -2820,7 +2873,7 @@ ecp_fmt_dec:                                 ; EAX unsigned
 ; --- platform descriptors (one row per machine; host test pins them) -----------
 align 8
 ecp_desc_table:
-    ; Dell Latitude 5490 (serial redacted, BIOS 1.41.0): DSDT 382c156f, map a6f699ac
+    ; Dell Latitude 5490 (lab unit, BIOS 1.41.0): DSDT 382c156f, map a6f699ac
     db "Dell Inc.", 0
     times 16 - 10 db 0
     db "Latitude 5490", 0

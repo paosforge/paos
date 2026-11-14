@@ -283,7 +283,9 @@ command_aihook_submit_authorized:
     mov  qword [rel aihook_req + REQ_SEL], 0
     mov  qword [rel aihook_req + REQ_ARG], 0
     mov  qword [rel aihook_req + REQ_SOURCE], CMD_SOURCE_AIHOOK   ; RCQ-15 S2: the ingress is named, never INTERNAL
-    mov  qword [rel aihook_req + REQ_PRINCIPAL], CMD_PRINCIPAL_NONE
+    ; This frame earned exactly PRIN_SYSTEM from SYSTEM_KEY above. Carry that
+    ; verified identity to request-scoped leaves; unsigned AIhook stays NONE.
+    mov  qword [rel aihook_req + REQ_PRINCIPAL], PRIN_SYSTEM
     mov  [rel aihook_req + REQ_VERB], r12
     mov  [rel aihook_req + REQ_ARG], r13
     lea  rdi, [rel aihook_auth_ticket]

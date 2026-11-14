@@ -1,6 +1,6 @@
 ;; MODULE gui/widget_chart
 ;; LAYER 6
-;; EXPORTS wgt_chart_register, wgt_chart_draw, wgt_chart_set, wgt_chart_get, wgt_chart_push, wgt_chart_type
+;; EXPORTS wgt_chart_register, wgt_chart_draw, wgt_chart_set, wgt_chart_get, wgt_chart_push, wgt_chart_append, wgt_chart_type, wgt_chart_content_samples
 ;; IMPORTS gui/widget, gui/widget_progress, gui/window_mgmt, core/lib/fmt, core/lib/str, svc/command, svc/command_auth, boot/serial
 ;; OWNER saga:gui_kit_wave2
 ;
@@ -14,6 +14,7 @@ CHART_RING_MASK       equ CHART_RING_CAP-1
 CHART_INSTANCE_MAX    equ 8
 CHART_MODE_SPARKLINE  equ 0
 CHART_MODE_BAR        equ 1
+CHART_APPEND_MAX      equ 16            ; samples per guest PUSH
 
 ; Type-local reuse of the base widget tail. WGI_BIND remains available to the
 ; form/netmon cadence seam.
@@ -245,6 +246,91 @@ wgt_chart_push:
 .bad:
     mov  eax, 1
 .out:
+    pop  r14
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+
+; EDI=stock chart id, RSI=NUL-terminated samples, EDX=0 check only or 1 apply
+; -> EAX 0 done, 1 malformed, 2 no ring free. Guest PUSH (A1b): 1..16 canonical
+; unsigned decimal u32 (no sign, no leading zero but "0"), single commas. Every
+; sample parses before any effect; apply appends in order and paints once.
+wgt_chart_append:
+    push rbx
+    push r12
+    push r13
+    push r14
+    sub  rsp, 8
+    mov  r12d, edi
+    mov  r13, rsi
+    mov  r14d, edx
+    mov  r8d, 0xffffffff
+    xor  ebx, ebx                       ; samples parsed
+.sample:
+    cmp  ebx, CHART_APPEND_MAX
+    jae  .malformed
+    xor  eax, eax
+    xor  ecx, ecx                       ; digits
+.digit:
+    movzx edx, byte [r13]
+    sub  edx, '0'
+    cmp  edx, 9
+    ja   .delim
+    test ecx, ecx
+    jz   .first
+    test eax, eax                       ; "0" then a digit: leading zero
+    jz   .malformed
+.first:
+    imul rax, rax, 10
+    add  rax, rdx
+    cmp  rax, r8
+    ja   .malformed
+    inc  ecx
+    inc  r13
+    jmp  .digit
+.delim:
+    test ecx, ecx                       ; an empty sample
+    jz   .malformed
+    lea  rdx, [rel chart_parse_values]
+    mov  [rdx + rbx*4], eax
+    inc  ebx
+    movzx eax, byte [r13]
+    test eax, eax
+    jz   .parsed
+    cmp  eax, ','
+    jne  .malformed
+    inc  r13
+    jmp  .sample
+.parsed:
+    test r14d, r14d                     ; check only: nothing claimed
+    jz   .ok
+    mov  edi, r12d
+    call wgt_chart_ring_ptr
+    jc   .full
+    xor  r13d, r13d
+.push:
+    cmp  r13d, ebx
+    jae  .pushed
+    lea  rax, [rel chart_parse_values]
+    mov  esi, [rax + r13*4]
+    mov  edi, r12d
+    call wgt_chart_push
+    inc  r13d
+    jmp  .push
+.pushed:
+    mov  edi, r12d
+    call wgt_draw_id
+.ok:
+    xor  eax, eax
+    jmp  .out
+.malformed:
+    mov  eax, 1
+    jmp  .out
+.full:
+    mov  eax, 2
+.out:
+    add  rsp, 8
     pop  r14
     pop  r13
     pop  r12
@@ -649,6 +735,75 @@ wgt_chart_parse_samples:
     pop  rbx
     ret
 
+; Guarded WIDGETGET content leaf, EDI=already admitted original chart id.
+; EAX=1 appended the complete existing chronological ring, EAX=0 unavailable.
+; Unlike CHARTREAD's allocating helper, this never claims, clears or writes a
+; ring/widget. Validate every index/owner before output or ring dereference.
+wgt_chart_content_samples:
+    push rbx
+    push r12
+    push r13
+    push r14
+    mov  r12d, edi
+    call wgt_slot_ptr
+    mov  r13d, [rax + CHART_COUNT]
+    cmp  r13d, CHART_RING_CAP
+    ja   .unavailable
+    mov  r14d, [rax + CHART_HEAD]
+    cmp  r14d, CHART_RING_CAP
+    jae  .unavailable
+    cmp  r13d, CHART_RING_CAP
+    je   .slot
+    cmp  r14d, r13d                    ; unwrapped ring's next write index
+    jne  .unavailable
+.slot:
+    mov  ecx, [rax + CHART_SLOT]
+    dec  ecx                           ; unbound zero also fails unsigned bound
+    cmp  ecx, CHART_INSTANCE_MAX
+    jae  .unavailable
+    lea  rdx, [rel chart_ring_owner]
+    cmp  [rdx + rcx*4], r12d
+    jne  .unavailable
+    imul rcx, CHART_RING_CAP*4
+    lea  r12, [rel chart_rings]
+    add  r12, rcx
+    sub  r14d, r13d
+    and  r14d, CHART_RING_MASK
+    lea  rdi, [rel str_chart_samples_out]
+    call wgt_out_str
+    test r13d, r13d
+    jnz  .start
+    lea  rdi, [rel str_chart_no_samples]
+    call wgt_out_str
+    jmp  .complete
+.start:
+    xor  ebx, ebx
+.sample:
+    test ebx, ebx
+    jz   .number
+    lea  rdi, [rel str_chart_comma]
+    call wgt_out_str
+.number:
+    mov  eax, r14d
+    add  eax, ebx
+    and  eax, CHART_RING_MASK
+    mov  edi, [r12 + rax*4]
+    call wgt_out_dec
+    inc  ebx
+    cmp  ebx, r13d
+    jb   .sample
+.complete:
+    mov  eax, 1
+    jmp  .out
+.unavailable:
+    xor  eax, eax
+.out:
+    pop  r14
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+
 ; Shared read record. EDI=widget id, RSI=id token, RDX=nonce token.
 wgt_chart_stage_read:
     push rbx
@@ -795,25 +950,34 @@ cmd_verb_chartpush:
                                         ; under wmx_draw_all leave RBX dirty (MSI seam census 2026-10-02)
     call wgt_out_dec
     jmp  .stage
+; G-11: each refusal keeps its text and gets its own code (EBX; the sample count is dead here).
 .oversize:
     lea  rdi, [rel str_chart_err_oversize]
+    mov  ebx, CMDE_BADARG
     jmp  .error
 .syntax:
     lea  rdi, [rel str_chart_err_syntax]
+    mov  ebx, CMDE_BADARG
     jmp  .error
 .samples:
     lea  rdi, [rel str_chart_err_samples]
+    mov  ebx, CMDE_BADARG
     jmp  .error
 .missing:
     lea  rdi, [rel str_chart_err_missing]
+    mov  ebx, CMDE_BADSEL
     jmp  .error
 .capacity:
     lea  rdi, [rel str_chart_err_capacity]
+    mov  ebx, CMDE_BUSY
 .error:
     call wgt_out_str
+    mov  [r15 + RSP_CODE], rbx
+    jmp  .staged
 .stage:
-    mov  byte [rel wgt_out_ready], 1
     mov  qword [r15 + RSP_CODE], CMDE_OK
+.staged:
+    mov  byte [rel wgt_out_ready], 1
     mov  qword [r15 + RSP_VAL], 0
     pop  r15
     pop  r14
@@ -858,16 +1022,20 @@ cmd_verb_chartread:
     mov  rdx, r13
     call wgt_chart_stage_read
     jmp  .stage
-.bad:
+.bad:                                   ; G-11: each refusal keeps its text and gets its own code
     lea  rdi, [rel str_chart_err_syntax]
     call wgt_out_str
-    jmp  .stage
+    mov  qword [r14 + RSP_CODE], CMDE_BADARG
+    jmp  .staged
 .missing:
     lea  rdi, [rel str_chart_err_missing]
     call wgt_out_str
+    mov  qword [r14 + RSP_CODE], CMDE_BADSEL
+    jmp  .staged
 .stage:
-    mov  byte [rel wgt_out_ready], 1
     mov  qword [r14 + RSP_CODE], CMDE_OK
+.staged:
+    mov  byte [rel wgt_out_ready], 1
     mov  qword [r14 + RSP_VAL], 0
     pop  r14
     pop  r13
@@ -996,6 +1164,7 @@ str_chart_mode_out:    db " mode=",0
 str_chart_count_out:   db " count=",0
 str_chart_scale_out:   db " scale=",0
 str_chart_samples_out: db " samples=",0
+str_chart_no_samples:  db "-",0
 str_chart_comma:       db ",",0
 str_chart_err_syntax:  db " chart ERR syntax",0
 str_chart_err_samples: db " chart ERR samples",0

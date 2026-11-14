@@ -1,7 +1,7 @@
 ;; MODULE dev/net/virtio_domain
 ;; LAYER 3
-;; EXPORTS virtio_domain_ops, virtio_domain_selected_census, virtio_domain_static_policy, virtio_domain_policy_generation, virtio_domain_dhcp_start, virtio_domain_create, virtio_domain_mode_status, virtio_domain_selftest, virtio_domain_register_verb, virtio_domain_autoboot_tick, virtio_domain_transport_pump, virtio_domain_guest_rx_publish, virtio_domain_guest_rx_can_accept, virtio_domain_is_handle, virtio_domain_note_dhcp, virtio_domain_note_arp, virtio_domain_gateway_resolution_start, virtio_domain_guest_progress, virtio_domain_service_health, virtio_domain_gateway_resolution_tick, virtio_domain_status_line, virtio_domain_frame_stats, virtio_domain_reply_retire
-;; IMPORTS net/netdev, net/dhcp, hv/hv_ops, hv/vmx, hv/guestnet, hv/vtd, core/lib/mem, core/time, boot/serial
+;; EXPORTS virtio_domain_restart_net_start, virtio_domain_restart_net_step, virtio_domain_restart_net_pack, virtio_domain_restart_observation, virtio_domain_ops, virtio_domain_selected_census, virtio_domain_static_policy, virtio_domain_policy_generation, virtio_domain_dhcp_start, virtio_domain_create, virtio_domain_mode_status, virtio_domain_selftest, virtio_domain_register_verb, virtio_domain_autoboot_tick, virtio_domain_transport_pump, virtio_domain_guest_rx_publish, virtio_domain_guest_rx_can_accept, virtio_domain_is_handle, virtio_domain_note_dhcp, virtio_domain_note_arp, virtio_domain_gateway_resolution_start, virtio_domain_guest_progress, virtio_domain_service_health, virtio_domain_gateway_resolution_tick, virtio_domain_status_line, virtio_domain_frame_stats, virtio_domain_reply_retire
+;; IMPORTS hv/driver_domain_net, net/netdev, net/dhcp, hv/hv_ops, hv/vmx, hv/guestnet, hv/vtd, core/lib/mem, core/time, boot/serial
 ;; CAPS
 ;; OWNER saga:domain_backend_seam
 ; ============================================================================
@@ -11,10 +11,10 @@
 ; the IP stack. A real driver-domain transport can replace the fake guest/ring
 ; handles without changing the struct dev header, vtable, or netdev core.
 ;
-; Ring contract (one descriptor per direction in v1): the producer copies data
-; and length, executes SFENCE, then transfers .owner and publishes .count=1.
-; The consumer observes .count/.owner, executes LFENCE, consumes the bytes, and
-; returns ownership. Full means -1/again immediately; there is no wait loop.
+; PaOS-private SPSC rings: producer-consumer is the occupied slot count.
+; Each side writes only its aligned 64-bit sequence; seq&15 selects a slot.
+; SFENCE precedes publication/release, LFENCE follows observation. Every slot
+; retains its frame bounds; full returns immediately without overwriting.
 ; ============================================================================
 
 DOMAIN_MODE_TRANSPARENT_L2 equ 0
@@ -30,7 +30,9 @@ DOMAIN_OWNER_GUEST         equ 1
 
 DOMAIN_FRAME_MIN           equ 14
 DOMAIN_FRAME_MAX           equ 1514
-DOMAIN_RING_DEPTH          equ 1
+DOMAIN_RING_DEPTH          equ 16
+DOMAIN_RING_MASK           equ (DOMAIN_RING_DEPTH - 1)
+DOMAIN_SLOT_SIZE           equ 1528       ; len4 + reserved4 + frame1514 + pad6
 DOMAIN_UNIMPLEMENTED       equ -2
 DOMAIN_PUBLISH_FULL        equ -2
 DOMAIN_AUTOBOOT_GRACE_MS   equ 30000
@@ -50,11 +52,16 @@ DOMAIN_HOOK_ALL            equ 0x7f
 struc domain_ring
   .producer: resq 1              ; monotonically increasing producer sequence
   .consumer: resq 1              ; monotonically increasing consumer sequence
-  .count:    resd 1              ; 0 empty / 1 full (bounded v1 depth)
-  .owner:    resd 1              ; DOMAIN_OWNER_* allowed to touch the payload
+  .count:    resd 1              ; retired, not synchronization authority
+  .owner:    resd 1              ; retired, not synchronization authority
+  .slots:
+  ; First-slot aliases retain the diagnostic layout. Data-path accesses add
+  ; (sequence & DOMAIN_RING_MASK) * DOMAIN_SLOT_SIZE to .len/.data.
   .len:      resd 1
   .reserved: resd 1
   .data:     resb DOMAIN_FRAME_MAX
+  .pad:      resb 6
+  .tail:     resb (DOMAIN_RING_DEPTH - 1) * DOMAIN_SLOT_SIZE
 endstruc
 
 ; The uniform dev header is deliberately first: a virtio_domain_ctx* IS the
@@ -218,7 +225,7 @@ virtio_domain_init:
     mov  qword [rdx + domain_ring.consumer], 0
     mov  dword [rdx + domain_ring.count], 0
     mov  dword [rdx + domain_ring.len], 0
-    mov  dword [rdx + domain_ring.owner], DOMAIN_OWNER_GUEST
+    mov  dword [rdx + domain_ring.owner], 0
     sfence
     mov  dword [rdi + virtio_domain_ctx.lifecycle], DOMAIN_LIFE_READY
     and  dword [rdi + dev.flags], ~NETDEV_F_ABSENT   ; a guest is attached
@@ -259,6 +266,8 @@ virtio_domain_stop:
     mov  rax, [rdi + virtio_domain_ctx.tx_ring]
     test rax, rax
     jz   .rx
+    mov  rdx, [rax + domain_ring.producer]
+    mov  [rax + domain_ring.consumer], rdx
     mov  dword [rax + domain_ring.count], 0
     mov  dword [rax + domain_ring.len], 0
     mov  dword [rax + domain_ring.owner], DOMAIN_OWNER_HOST
@@ -266,9 +275,11 @@ virtio_domain_stop:
     mov  rax, [rdi + virtio_domain_ctx.rx_ring]
     test rax, rax
     jz   .done
+    mov  rdx, [rax + domain_ring.producer]
+    mov  [rax + domain_ring.consumer], rdx
     mov  dword [rax + domain_ring.count], 0
     mov  dword [rax + domain_ring.len], 0
-    mov  dword [rax + domain_ring.owner], DOMAIN_OWNER_GUEST
+    mov  dword [rax + domain_ring.owner], 0
 .done:
     sfence
     xor  eax, eax
@@ -396,19 +407,23 @@ virtio_domain_tx:
     mov  rbx, [r12 + virtio_domain_ctx.tx_ring]
     test rbx, rbx
     jz   .degraded
-    cmp  dword [rbx + domain_ring.count], DOMAIN_RING_DEPTH
+    mov  rax, [rbx + domain_ring.producer]
+    sub  rax, [rbx + domain_ring.consumer]
+    cmp  rax, DOMAIN_RING_DEPTH
     jae  .tx_full                        ; bounded -1/again, never wait
-    cmp  dword [rbx + domain_ring.owner], DOMAIN_OWNER_HOST
-    jne  .fail
-    lea  rdi, [rbx + domain_ring.data]
+    mov  rax, [rbx + domain_ring.producer]
+    and  eax, DOMAIN_RING_MASK
+    imul rax, DOMAIN_SLOT_SIZE
+    lea  rdi, [rbx + rax + domain_ring.data]
     mov  rsi, r13
     mov  rdx, r14
     call memcpy
-    mov  [rbx + domain_ring.len], r14d
+    mov  rax, [rbx + domain_ring.producer]
+    and  eax, DOMAIN_RING_MASK
+    imul rax, DOMAIN_SLOT_SIZE
+    mov  [rbx + rax + domain_ring.len], r14d
+    sfence                               ; slot payload/len before publication
     inc  qword [rbx + domain_ring.producer]
-    sfence                               ; payload/len visible before ownership
-    mov  dword [rbx + domain_ring.owner], DOMAIN_OWNER_GUEST
-    mov  dword [rbx + domain_ring.count], DOMAIN_RING_DEPTH
     lock inc qword [r12 + virtio_domain_ctx.tx_frames]
     lock add qword [r12 + virtio_domain_ctx.tx_bytes], r14
     lock inc qword [rel domain_reply_accepted]
@@ -448,33 +463,40 @@ virtio_domain_rx_poll:
     mov  rbx, [r12 + virtio_domain_ctx.rx_ring]
     test rbx, rbx
     jz   .degraded
-    cmp  dword [rbx + domain_ring.count], 0
+    mov  rax, [rbx + domain_ring.producer]
+    sub  rax, [rbx + domain_ring.consumer]
+    test rax, rax
     je   .empty
-    cmp  dword [rbx + domain_ring.owner], DOMAIN_OWNER_HOST
-    jne  .fail
+    cmp  rax, DOMAIN_RING_DEPTH
+    ja   .fail
+    mov  rax, [rbx + domain_ring.consumer]
+    and  eax, DOMAIN_RING_MASK
+    imul rax, DOMAIN_SLOT_SIZE
     lfence                               ; observe payload after producer publish
-    mov  edx, [rbx + domain_ring.len]
+    mov  edx, [rbx + rax + domain_ring.len]
     cmp  rdx, r14
     ja   .fail                           ; caller buffer too short: do not consume
     cmp  rdx, DOMAIN_FRAME_MAX
     ja   .fail
     push rdx
     mov  rdi, r13
-    lea  rsi, [rbx + domain_ring.data]
+    lea  rsi, [rbx + rax + domain_ring.data]
     call memcpy
     pop  r14                             ; return length; original cap no longer needed
     ; w046 secret hygiene: the frame now lives only in the caller's buffer.
-    ; Zero the consumed bytes BEFORE ownership returns to the guest (the
-    ; SFENCE below orders these fast-string stores ahead of the owner store).
-    lea  rdi, [rbx + domain_ring.data]
+    ; Zero the consumed slot before the producer can reuse it.
+    mov  rax, [rbx + domain_ring.consumer]
+    and  eax, DOMAIN_RING_MASK
+    imul rax, DOMAIN_SLOT_SIZE
+    push rax
+    lea  rdi, [rbx + rax + domain_ring.data]
     xor  esi, esi
     mov  rdx, r14
     call memset
-    inc  qword [rbx + domain_ring.consumer]
-    mov  dword [rbx + domain_ring.count], 0
-    mov  dword [rbx + domain_ring.len], 0
+    pop  rax
+    mov  dword [rbx + rax + domain_ring.len], 0
     sfence
-    mov  dword [rbx + domain_ring.owner], DOMAIN_OWNER_GUEST
+    inc  qword [rbx + domain_ring.consumer]
     lock inc qword [r12 + virtio_domain_ctx.rx_frames]
     lock add qword [r12 + virtio_domain_ctx.rx_bytes], r14
     or   dword [r12 + virtio_domain_ctx.hooks], DOMAIN_HOOK_INSTRUMENT
@@ -576,6 +598,13 @@ virtio_domain_capstone_bootstrap:
     jnz  .fail
     lea  rdi, [rel domain_ctx1]
     call guestnet_domain_bind
+%ifdef PAOS_NIC_ASSIGNMENT
+    ; The full owner may still be booting. Keep the native command path and
+    ; its health intact until the existing live-generation predicate passes.
+    mov  byte [rel domain_egress_bound], 0
+    cmp  byte [rel domain_capstone_nd], 1
+    je   .activate
+%endif
     call domain_prepare_egress
     lea  rdx, [rel domain_ctx1]
     cmp  rax, rdx
@@ -584,6 +613,10 @@ virtio_domain_capstone_bootstrap:
     call command_udp_bind_domain
     test rax, rax
     jnz  .rollback_bind
+%ifdef PAOS_NIC_ASSIGNMENT
+    mov  byte [rel domain_egress_bound], 1
+%endif
+.activate:
     mov  byte [rel domain_capstone_active], 1
     mov  byte [rel domain_dhcp_started], 0
     mov  dword [rel domain_ctx1 + virtio_domain_ctx.mode], DOMAIN_MODE_TRANSPARENT_L2
@@ -625,7 +658,17 @@ virtio_domain_capstone_stop:
     ; second unbind finds no saved OOB handle and would zero the native pump.
     mov  al, [rel domain_capstone_active]
     mov  [rel domain_stop_was_active], al
+%ifdef PAOS_NIC_ASSIGNMENT
+    cmp  byte [rel domain_capstone_nd], 1
+    jne  .stop_network
+    cmp  byte [rel domain_egress_bound], 1
+    jne  .keep_native
+.stop_network:
+%endif
     call dhcp_wire_stop
+%ifdef PAOS_NIC_ASSIGNMENT
+.keep_native:
+%endif
     mov  byte [rel domain_dhcp_started], 0
     mov  byte [rel domain_static_policy], 0
     mov  byte [rel domain_capstone_active], 0
@@ -646,6 +689,14 @@ virtio_domain_capstone_stop:
     push rax
     cmp  byte [rel domain_stop_was_active], 1
     jne  .unbound
+%ifdef PAOS_NIC_ASSIGNMENT
+    cmp  byte [rel domain_capstone_nd], 1
+    jne  .unbind
+    cmp  byte [rel domain_egress_bound], 1
+    jne  .unbound
+.unbind:
+    mov  byte [rel domain_egress_bound], 0
+%endif
     call command_udp_unbind_domain
     call domain_restore_egress
 .unbound:
@@ -747,21 +798,24 @@ virtio_domain_guest_rx_publish:
     mov  rax, [r12 + virtio_domain_ctx.rx_ring]
     test rax, rax
     jz   .pub_invalid
-    cmp  dword [rax + domain_ring.count], 0
-    jne  .pub_full
-    cmp  dword [rax + domain_ring.owner], DOMAIN_OWNER_GUEST
-    jne  .pub_invalid
+    mov  rcx, [rax + domain_ring.producer]
+    sub  rcx, [rax + domain_ring.consumer]
+    cmp  rcx, DOMAIN_RING_DEPTH
+    jae  .pub_full
+    mov  rcx, [rax + domain_ring.producer]
+    and  ecx, DOMAIN_RING_MASK
+    imul rcx, DOMAIN_SLOT_SIZE
     push rax
-    lea  rdi, [rax + domain_ring.data]
+    push rcx
+    lea  rdi, [rax + rcx + domain_ring.data]
     mov  rsi, r13
     mov  rdx, rbx
     call memcpy
+    pop  rcx
     pop  rax
-    mov  [rax + domain_ring.len], ebx
-    inc  qword [rax + domain_ring.producer]
+    mov  [rax + rcx + domain_ring.len], ebx
     sfence
-    mov  dword [rax + domain_ring.owner], DOMAIN_OWNER_HOST
-    mov  dword [rax + domain_ring.count], DOMAIN_RING_DEPTH
+    inc  qword [rax + domain_ring.producer]
     lock inc qword [rel domain_publish_accepted]
     xor  eax, eax
     jmp  .pub_out
@@ -790,10 +844,10 @@ virtio_domain_guest_rx_can_accept:
     mov  rax, [rdi + virtio_domain_ctx.rx_ring]
     test rax, rax
     jz   .not_ready
-    cmp  dword [rax + domain_ring.count], 0
-    jne  .not_ready
-    cmp  dword [rax + domain_ring.owner], DOMAIN_OWNER_GUEST
-    jne  .not_ready
+    mov  rcx, [rax + domain_ring.producer]
+    sub  rcx, [rax + domain_ring.consumer]
+    cmp  rcx, DOMAIN_RING_DEPTH
+    jae  .not_ready
     mov  eax, 1
     ret
 .not_ready:
@@ -802,7 +856,7 @@ virtio_domain_guest_rx_can_accept:
 
 ; Domain TX ring -> guest virtio RX queue (PaOS-to-physical bridge direction).
 ; Higher policy owns explicit static/off vs automatic DORA (EDI=0/1).
-; Discard the bounded pending host TX slot when its L3 policy is replaced or
+; Discard all bounded pending host TX slots when its L3 policy is replaced or
 ; revoked, before a later pump can forward a frame from the retired endpoint.
 ; No guest, NIC or native recovery handle is stopped by this operation.
 virtio_domain_static_policy:
@@ -810,13 +864,9 @@ virtio_domain_static_policy:
     mov  rax, [rel domain_ctx1 + virtio_domain_ctx.tx_ring]
     test rax, rax
     jz   .out
-    cmp  dword [rax + domain_ring.count], 0
-    je   .out
-    inc  qword [rax + domain_ring.consumer]
-    mov  dword [rax + domain_ring.count], 0
-    mov  dword [rax + domain_ring.len], 0
+    mov  rdx, [rax + domain_ring.producer]
     sfence
-    mov  dword [rax + domain_ring.owner], DOMAIN_OWNER_HOST
+    mov  [rax + domain_ring.consumer], rdx
 .out:
     ret
 
@@ -889,9 +939,19 @@ virtio_domain_transport_pump:
     call virtio_domain_policy_generation
     test eax, eax
     jz   .pump_done
+%ifdef PAOS_NIC_ASSIGNMENT
+    cmp  byte [rel domain_capstone_nd], 1
+    jne  .egress_ready
+    cmp  byte [rel domain_egress_bound], 1
+    je   .egress_ready
+    call virtio_domain_nd_bind
+    test rax, rax
+    jnz  .pump_done
+.egress_ready:
+%endif
     ; Do not spend DORA attempts while the guest is still booting or building
-    ; its bridge.  The v1 TX ring has one slot, so starting earlier leaves the
-    ; initial DISCOVER parked behind a transport that intentionally cannot
+    ; its bridge. Starting earlier leaves the initial DISCOVER parked behind
+    ; a transport that intentionally cannot
     ; consume it yet.  Start at the readiness edge and drain that first frame
     ; in this same pump pass.
     cmp  byte [rel domain_static_policy], 0
@@ -906,30 +966,68 @@ virtio_domain_transport_pump:
     jnz  .pump_done
 .pump_frames:
     push rbx
+    push r12
+    push r13
+    mov  r12d, DOMAIN_RING_DEPTH
     lea  rdi, [rel domain_ctx1]
     mov  rbx, [rdi + virtio_domain_ctx.tx_ring]
     test rbx, rbx
     jz   .pump_out
-    cmp  dword [rbx + domain_ring.count], DOMAIN_RING_DEPTH
-    jne  .pump_out
-    cmp  dword [rbx + domain_ring.owner], DOMAIN_OWNER_GUEST
-    jne  .pump_out
-    mov  edx, [rbx + domain_ring.len]
+.pump_loop:
+    mov  rax, [rbx + domain_ring.producer]
+    sub  rax, [rbx + domain_ring.consumer]
+    test rax, rax
+    jz   .pump_out
+    cmp  rax, DOMAIN_RING_DEPTH
+    ja   .pump_out
+    mov  r13, [rbx + domain_ring.consumer]
+    and  r13d, DOMAIN_RING_MASK
+    imul r13, DOMAIN_SLOT_SIZE
+    lfence
+    mov  edx, [rbx + r13 + domain_ring.len]
     cmp  edx, DOMAIN_FRAME_MAX
     ja   .pump_out
-    lea  rsi, [rbx + domain_ring.data]
-    call guestnet_rx_deliver
-    test eax, eax
-    jz   .pump_out
-    inc  qword [rbx + domain_ring.consumer]
-    mov  dword [rbx + domain_ring.count], 0
-    mov  dword [rbx + domain_ring.len], 0
+    lea  rdi, [rel domain_ctx1]
+    lea  rsi, [rbx + r13 + domain_ring.data]
+    call virtio_domain_restart_net_deliver
+    cmp  eax, 1
+    jne  .pump_out                       ; retain head on every refusal
+    mov  dword [rbx + r13 + domain_ring.len], 0
     sfence
-    mov  dword [rbx + domain_ring.owner], DOMAIN_OWNER_HOST
+    inc  qword [rbx + domain_ring.consumer]
     lock inc qword [rel domain_ctx1 + virtio_domain_ctx.guest_kicks]
+    dec  r12d
+    jnz  .pump_loop                      ; bounded even if producer replenishes
 .pump_out:
+    pop  r13
+    pop  r12
     pop  rbx
 .pump_done:
+    ret
+
+; Called only after policy_generation has checked the live full-owner START.
+; A partial command bind must restore its saved native handle before retiring
+; the failed domain. The pending capstone itself has no command/DHCP custody.
+virtio_domain_nd_bind:
+%ifdef PAOS_NIC_ASSIGNMENT
+    call domain_prepare_egress
+    lea  rdx, [rel domain_ctx1]
+    cmp  rax, rdx
+    jne  .rollback
+    lea  rdi, [rel domain_ctx1]
+    call command_udp_bind_domain
+    test rax, rax
+    jnz  .partial_bind
+    mov  byte [rel domain_egress_bound], 1
+    xor  eax, eax
+    ret
+.partial_bind:
+    call command_udp_unbind_domain
+.rollback:
+    call domain_restore_egress
+    call virtio_domain_capstone_stop
+%endif
+    mov  rax, -1
     ret
 
 ; RDI=ordinary netdev handle -> EAX=1 only for the capstone domain instance.
@@ -1117,6 +1215,13 @@ virtio_domain_status_line:
     call domain_put_binding
     cmp  byte [rel domain_capstone_active], 1
     jne  .primary_native
+%ifdef PAOS_NIC_ASSIGNMENT
+    cmp  byte [rel domain_capstone_nd], 1
+    jne  .primary_domain
+    cmp  byte [rel domain_egress_bound], 1
+    jne  .primary_native
+.primary_domain:
+%endif
     lea  rdi, [rel str_domain_primary_domain]
     call udp_put_str
     jmp  .lease
@@ -1443,6 +1548,7 @@ virtio_domain_fake_guest:
     push r12
     push r13
     push r14
+    push r15
     mov  r12, rdi
     test r12, r12
     jz   .fail
@@ -1454,39 +1560,47 @@ virtio_domain_fake_guest:
     jz   .fail
     test rbx, rbx
     jz   .fail
-    cmp  dword [r13 + domain_ring.count], DOMAIN_RING_DEPTH
-    jne  .fail
-    cmp  dword [r13 + domain_ring.owner], DOMAIN_OWNER_GUEST
-    jne  .fail
-    cmp  dword [rbx + domain_ring.count], 0
-    jne  .fail
-    cmp  dword [rbx + domain_ring.owner], DOMAIN_OWNER_GUEST
-    jne  .fail
+    mov  rax, [r13 + domain_ring.producer]
+    sub  rax, [r13 + domain_ring.consumer]
+    test rax, rax
+    jz   .fail
+    cmp  rax, DOMAIN_RING_DEPTH
+    ja   .fail
+    mov  rax, [rbx + domain_ring.producer]
+    sub  rax, [rbx + domain_ring.consumer]
+    cmp  rax, DOMAIN_RING_DEPTH
+    jae  .fail
+    mov  r15, [r13 + domain_ring.consumer]
+    and  r15d, DOMAIN_RING_MASK
+    imul r15, DOMAIN_SLOT_SIZE
     lfence
-    mov  r14d, [r13 + domain_ring.len]
+    mov  r14d, [r13 + r15 + domain_ring.len]
     cmp  r14, DOMAIN_FRAME_MIN
     jb   .fail
     cmp  r14, DOMAIN_FRAME_MAX
     ja   .fail
-    lea  rdi, [rbx + domain_ring.data]
-    lea  rsi, [r13 + domain_ring.data]
+    mov  rax, [rbx + domain_ring.producer]
+    and  eax, DOMAIN_RING_MASK
+    imul rax, DOMAIN_SLOT_SIZE
+    push rax
+    lea  rdi, [rbx + rax + domain_ring.data]
+    lea  rsi, [r13 + r15 + domain_ring.data]
     mov  rdx, r14
     call memcpy
-    inc  qword [r13 + domain_ring.consumer]
-    mov  dword [r13 + domain_ring.count], 0
-    mov  dword [r13 + domain_ring.len], 0
-    mov  dword [r13 + domain_ring.owner], DOMAIN_OWNER_HOST
-    mov  [rbx + domain_ring.len], r14d
-    inc  qword [rbx + domain_ring.producer]
+    pop  rax
+    mov  dword [r13 + r15 + domain_ring.len], 0
     sfence
-    mov  dword [rbx + domain_ring.owner], DOMAIN_OWNER_HOST
-    mov  dword [rbx + domain_ring.count], DOMAIN_RING_DEPTH
+    inc  qword [r13 + domain_ring.consumer]
+    mov  [rbx + rax + domain_ring.len], r14d
+    sfence
+    inc  qword [rbx + domain_ring.producer]
     lock inc qword [r12 + virtio_domain_ctx.guest_kicks]
     xor  eax, eax
     jmp  .out
 .fail:
     mov  rax, -1
 .out:
+    pop  r15
     pop  r14
     pop  r13
     pop  r12
@@ -1570,13 +1684,19 @@ domain_restore_egress:
     mov  qword [rel domain_saved_count], 0
     ret
 
-; w046: after a consuming rx_poll the rx ring's first 96 data bytes (the KAT
+; w046: after a consuming rx_poll the released slot's 96 data bytes (the KAT
 ; frame size) and its len must be zero. Records, never fails the seam KAT.
 domain_rx_wipe_check:
     inc  byte [rel domain_rx_wipe_checks]
-    cmp  dword [rel domain_rx_ring1 + domain_ring.len], 0
+    mov  rax, [rel domain_rx_ring1 + domain_ring.consumer]
+    dec  rax
+    and  eax, DOMAIN_RING_MASK
+    imul rax, DOMAIN_SLOT_SIZE
+    lea  rdi, [rel domain_rx_ring1]
+    add  rdi, rax
+    cmp  dword [rdi + domain_ring.len], 0
     jne  .bad
-    lea  rdi, [rel domain_rx_ring1 + domain_ring.data]
+    add  rdi, domain_ring.data
     mov  ecx, 96
     xor  eax, eax
     cld
@@ -1690,7 +1810,9 @@ virtio_domain_selftest:
     call serial_string
 
     mov  r12, [rel domain_ctx1 + virtio_domain_ctx.tx_ring]
-    cmp  dword [r12 + domain_ring.count], DOMAIN_RING_DEPTH
+    mov  rax, [r12 + domain_ring.producer]
+    sub  rax, [r12 + domain_ring.consumer]
+    cmp  rax, 1
     jne  .fail
     cmp  dword [r12 + domain_ring.len], 96
     jne  .fail
@@ -1742,12 +1864,16 @@ virtio_domain_selftest:
     ; readiness predicate changes at that exact edge.
     mov  byte [rel domain_capstone_active], 1
     mov  r15, [rel domain_publish_full]
+    mov  r13d, DOMAIN_RING_DEPTH
+.fill_rx_ring:
     lea  rdi, [rel domain_ctx1]
     lea  rsi, [rel domain_kat_frame]
     mov  edx, 96
     call virtio_domain_guest_rx_publish
     test rax, rax
     jnz  .fail
+    dec  r13d
+    jnz  .fill_rx_ring
     mov  r14, [rel domain_rx_ring1 + domain_ring.producer]
     lea  rdi, [rel domain_ctx1]
     lea  rsi, [rel domain_kat_frame]
@@ -1775,6 +1901,18 @@ virtio_domain_selftest:
     call virtio_domain_guest_rx_can_accept
     cmp  eax, 1
     jne  .fail
+    ; Drain the rest of the deliberately full KAT burst. No pending test
+    ; traffic or unwiped slot may survive into the live transport.
+    mov  r13d, DOMAIN_RING_DEPTH - 1
+.drain_rx_ring:
+    lea  rdi, [rel domain_ctx1]
+    lea  rsi, [rel domain_kat_rx]
+    mov  edx, 96
+    call virtio_domain_rx_poll
+    cmp  rax, 96
+    jne  .fail
+    dec  r13d
+    jnz  .drain_rx_ring
     mov  byte [rel domain_capstone_active], 0
 
     ; Emit both runtime-computed hashes on one line. serial_hex64 owns the 0x.
@@ -1800,11 +1938,15 @@ virtio_domain_selftest:
     call netdev_tx
     cmp  rax, -1
     jne  .fail
+    mov  r13d, DOMAIN_RING_DEPTH
+.fill_tx_ring:
     lea  rsi, [rel domain_kat_frame]
     mov  edx, 96
-    call netdev_tx                       ; occupy the sole TX descriptor
+    call netdev_tx                       ; occupy all bounded TX descriptors
     test rax, rax
     jnz  .fail
+    dec  r13d
+    jnz  .fill_tx_ring
     lea  rsi, [rel domain_kat_frame]
     mov  edx, 96
     call netdev_tx                       ; full -> immediate -1/again
@@ -1864,8 +2006,8 @@ virtio_domain_selftest:
     ret
 
 ; A DHCPACK arms gateway resolution. Keep it armed until the common ARP RX path
-; observes a reply from the offered router to the leased PaOS address. The v1
-; domain TX ring is deliberately one entry deep, so a one-shot send can lose to
+; observes a reply from the offered router to the leased PaOS address. The
+; bounded domain TX ring can fill, so a one-shot send can lose to
 ; ordinary backpressure; one bounded retry per second makes that loss harmless.
 virtio_domain_gateway_resolution_reset:
     mov  byte [rel domain_paos_arp], 0
@@ -1962,6 +2104,7 @@ domain_kat_frame:   times 96 db 0
 domain_kat_rx:      times 96 db 0
 domain_capstone_nd: db 0
 domain_capstone_active: db 0
+domain_egress_bound: db 0
 domain_stop_was_active: db 0
 domain_static_policy:   db 0
 domain_dhcp_started:    db 0
@@ -1994,7 +2137,7 @@ str_domain_negative:
 str_domain_fail:
     db "[PAOS64] domain backend seam KAT FAIL", 13, 10, 0
 str_domain_rx_wipe_pass:
-    db "[PAOS64] domain.kat rx ring wiped after copy-out consumes=2 residue=none [domain.rx.wipe.kat]", 13, 10, 0
+    db "[PAOS64] domain.kat rx ring wiped after copy-out consumes=17 checks=2 residue=none [domain.rx.wipe.kat]", 13, 10, 0
 str_domain_rx_wipe_fail:
     db "[PAOS64] domain.kat rx ring NOT wiped after copy-out [domain.rx.wipe.fail]", 13, 10, 0
 
@@ -2085,6 +2228,53 @@ domain_rx_wipe_bad:    db 0              ; w046: 1 = a consumed frame stayed in 
 %endmacro
 WDATA_DEFER WDATA_dev_net_virtio_domain_0
 
+%include "dev/net/virtio_domain_restart_net.inc"
+
 virtio_domain_selected_census:
     jmp virtio_domain_census_read
 %include "dev/net/virtio_domain_census.inc"
+
+; RDI=104-byte caller-owned diagnostic. Pure bounded BSP observation; no
+; lifecycle, queue, route or traffic mutation. The closed census brackets its
+; own generation/assignment reads; an unstable census remains explicit.
+; Offsets: clock8, census64, rx/tx16, raw bridge/queues/binding8, bridge_ms8.
+virtio_domain_restart_observation:
+    push rbx
+    mov rbx,rdi
+    xor eax,eax
+    mov ecx,13
+    cld
+    rep stosq
+    call boot_ms_now
+    mov [rbx],rax
+    lea rdi,[rel domain_ctx1]
+    lea rsi,[rbx+8]
+    call virtio_domain_selected_census
+    mov rax,[rel domain_ctx1+virtio_domain_ctx.rx_frames]
+    mov [rbx+72],rax
+    mov rax,[rel domain_ctx1+virtio_domain_ctx.tx_frames]
+    mov [rbx+80],rax
+    mov al,[rel domain_capstone_active]
+    mov [rbx+88],al
+    mov al,[rel domain_capstone_nd]
+    mov [rbx+89],al
+    mov ax,[rel hv_vcon_q_ready]
+    mov [rbx+90],ax
+    mov ax,[rel guestnet_q_ready]
+    mov [rbx+92],ax
+    mov al,[rel guestnet_driver_ok]
+    mov [rbx+95],al
+    mov rax,[rel guestnet_domain_ctx]
+    test rax,rax
+    jz .binding
+    lea rdx,[rel domain_ctx1]
+    cmp rax,rdx
+    mov al,1
+    je .binding
+    mov al,2
+.binding:
+    mov [rbx+94],al
+    mov rax,[rel nd_bridge_ms]
+    mov [rbx+96],rax
+    pop rbx
+    ret

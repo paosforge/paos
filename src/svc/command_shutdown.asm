@@ -1,7 +1,7 @@
 ;; MODULE svc/command_shutdown
 ;; LAYER 5
-;; EXPORTS command_shutdown_request, command_shutdown_take, command_shutdown_failed, power_button_presses_routed, power_button_presses_logged
-;; IMPORTS svc/command_auth, boot/boot_v2_handoff, boot/boot_v2_health, boot/serial
+;; EXPORTS command_shutdown_request, command_shutdown_take, command_shutdown_failed, command_power_return_bootwin, command_power_return_commit, command_power_return_trace, command_power_return_ahci, command_power_return_nvme, command_power_return_nvme_lifetime, command_power_return_nvme_completion, command_power_return_nic, command_power_return_nic_warm, command_power_return_native_nic, command_power_return_work, command_power_return_pci, command_power_return_usb, command_power_return_event, command_power_return_local_begin, command_power_return_local_answer, command_power_return_terminal, power_button_presses_routed, power_button_presses_logged
+;; IMPORTS core/lib/fmt, boot/header, boot/beacon, core/build_id, svc/command_auth, boot/boot_v2_handoff, boot/boot_v2_health, boot/serial, core/time
 ;; CAPS
 ;; OWNER saga:rc_power
 ; ============================================================================
@@ -49,6 +49,10 @@ command_shutdown_request:
     mov  [rel sd_out_cur], rax
     lea  rdi, [rel sd_s_head]           ; "SHUTDOWN "
     call sd_out_str
+    mov  rdi, rbx
+    call command_power_return_request  ; finite opt-in return plan; no effect here
+    test rax, rax
+    jnz  .out
     ; --- grammar: <nonce> [force-trial] ---
     xor  ecx, ecx
 .nonce:
@@ -110,6 +114,9 @@ command_shutdown_request:
     cmp  byte [rel sd_state], SD_FAILED
     jne  .busy                          ; pending or executing: one at a time
 .fresh:
+    call command_power_return_busy
+    test eax, eax
+    jnz  .busy
     ; --- Boot-v2 Trial still pending its strong-health checkpoint ---
     cmp  byte [rel sd_req_force], 1
     je   .accept
@@ -134,6 +141,7 @@ command_shutdown_request:
     mov  [rel sd_force], al
     mov  qword [rel sd_reason], 0
     mov  byte [rel sd_state], SD_PENDING
+    mov  byte [rel sd_kind], 3          ; legacy SHUTDOWN keeps POWER_SHUTDOWN
     inc  dword [rel sd_accepted_count]
     lea  rdi, [rel sd_s_accepted]
     call sd_out_str
@@ -174,12 +182,15 @@ command_shutdown_request:
     ret
 
 ; command_shutdown_take -> EAX 1 when an accepted request was waiting (it is
-;   now EXECUTING and the caller must run the power-off), else 0.
+;   now EXECUTING), else 0. EDX = actual POWER_RESTART(2)/SHUTDOWN(3).
 command_shutdown_take:
     xor  eax, eax
     cmp  byte [rel sd_state], SD_PENDING
     jne  .out
     mov  byte [rel sd_state], SD_EXECUTING
+    mov edi,2
+    call command_power_return_event
+    movzx edx, byte [rel sd_kind]
     mov  eax, 1
 .out:
     ret
@@ -187,6 +198,11 @@ command_shutdown_take:
 ; command_shutdown_failed(RDI = power_execute's reason text): nothing powered
 ;   off. The nonce now reports "failed <nonce> <reason>".
 command_shutdown_failed:
+    push rdi
+    mov edi,7
+    call command_power_return_event
+    pop rdi
+    mov byte [rel pr_state],PR_EXPIRED ; returned executor cannot label a later request
     mov  [rel sd_reason], rdi
     mov  byte [rel sd_state], SD_FAILED
     ret
@@ -312,6 +328,7 @@ sd_refused_count:   resd 1
 sd_state:           resb 1
 sd_force:           resb 1
 sd_req_force:       resb 1
+sd_kind:            resb 1
 sd_nonce:           resb SD_NONCE_MAX + 1
 sd_req_nonce:       resb SD_NONCE_MAX + 1
 sd_out_buf:         resb SD_OUT_MAX
@@ -320,3 +337,7 @@ WDATA_BSS_DEFER WDATA_svc_command_shutdown_0
 %if SD_IDLE != 0
     %error "sd_state is zero-filled: SD_IDLE must stay 0"
 %endif
+
+%include "svc/command_power_return.inc"
+%include "svc/command_power_pci.inc"
+%include "svc/command_power_usb.inc"

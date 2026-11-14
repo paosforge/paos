@@ -1,0 +1,17 @@
+# Overlay the pinned FULL resolved6.18.57 driver-domain config, not tinyconfig.
+# ROOT111224: both arms use SMP; disclose the PaOS guest's actual vCPU shape.
+CONFIG_SMP=y
+CONFIG_NR_CPUS=256
+CONFIG_EFI=y
+CONFIG_EFI_STUB=y
+CONFIG_RELOCATABLE=y
+# CONFIG_RANDOMIZE_BASE is not set
+CONFIG_PHYSICAL_START=0x1000000
+CONFIG_PHYSICAL_ALIGN=0x200000
+# ONDEMAND default depends on !(X86_INTEL_PSTATE && SMP) in6.18.57.
+# Keep the Intel driver; explicitly select schedutil for BOTH shared arms.
+CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y
+# CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE is not set
+# A distinct ABI name prevents mixing old UP modules into this shared kernel.
+CONFIG_LOCALVERSION="-paos-driver-shared"
+# CONFIG_LOCALVERSION_AUTO is not set

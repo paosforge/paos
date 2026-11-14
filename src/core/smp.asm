@@ -1,6 +1,6 @@
 ;; MODULE core/smp
 ;; LAYER 1
-;; EXPORTS smp_timer_initial_count, smp_matmul, cpu_pf_matmul_units, smp_core_custody_acquire_native_guarded, smp_core_custody_check_native_guarded, smp_core_custody_release_native_guarded, smp_core_custody_check_gang_member, smp_core_custody_acquire_intel_absent, smp_core_custody_check_intel_absent, smp_core_custody_release_intel_absent, smp_core_custody_acquire_svm, smp_core_custody_svm_prepare, smp_core_custody_svm_check, smp_core_custody_svm_transfer, smp_core_custody_svm_land, smp_core_custody_svm_host, smp_core_custody_release_svm, smp_core_custody_acquire, smp_core_custody_check, smp_core_custody_release, smp_core_custody_gate, smpwork_async_results, smp_idle_observation_snapshot, smp_par_begin, smp_par_begin_single, smp_pc_cpu_chunks, smp_pc_finished_us, smp_par_step, smp_par_status, smp_par_cancel, smp_par_release, smpwork_async_begin, smpwork_async_step, smpwork_async_take, smpwork_async_cancel, smpwork_async_status, smpwork_async_detail, smpwork_async_progress, smp_par_for, smp_par_for_retired, smp_pf_bench, smp_pf_bench_observation, smp_bsp_idle_hlt, smp_bsp_hlt_tsc, smp_bsp_hlt_count, smp_idle_enter, smp_idle_hint, smp_idle_io_base, smp_idle_irq_refusals, smp_idle_mwait_count, smp_idle_hlt_count, smp_idle_cpu_state, smp_idle_cpu_edx5, smp_selftest, smp_msr_apply_aps, smp_msr_read_aps, smp_msr_req_rd_val, smp_msr_req_rd_c5, smp_msr_req_rd_type, smpwork_snapshot, smp_command_register_verb, smp_frequency_snapshot_validate, smp_lapic_detect_mode, smp_lapic_read32, smp_lapic_write32, smp_lapic_read_id, smp_current_logical, smp_preempt_global_init, smp_preempt_set_bsp_initial, smp_preempt_init_local, smp_preempt_timer_restore_bsp, smp_preempt_send_kicks, smp_preempt_send_resched_one, smp_mapping_update_begin, smp_mapping_update_commit, smp_coherence_prepare_mode, smp_lock_collision_selftest, smp_fault_concurrent_selftest, smp_tlb_coherence_selftest, smp_coherence_expected, smp_coherence_actual, smp_coherence_double_run, smp_coherence_lost, smp_fault_isolated, smp_faults_last_contained, smp_tlb_epoch, smp_tlb_requested, smp_tlb_acked, smp_stale_mapping, smp_irq_entries, smp_irq_eois, smp_irq_duplicate_eoi, smp_irq_ownership_faults, smp_timer_post_dcr, smp_timer_post_lvt, smp_timer_post_icr, smp_timer_post_current, smp_timer_irq0_before, smp_timer_preempt0_before, smp_timer_restore_seq, smp_timer_restore_ok, smp_halt_wait_us, smp_topology_online, smp_bsp_tick_handover, smp_bsp_tick_lease_begin, smp_bsp_tick_lease_end, smp_bsp_tick_owner
+;; EXPORTS smp_cpu_report_copy, smp_timer_initial_count, smp_matmul, cpu_pf_matmul_units, smp_core_custody_acquire_native_guarded, smp_core_custody_check_native_guarded, smp_core_custody_release_native_guarded, smp_core_custody_check_gang_member, smp_core_custody_acquire_intel_absent, smp_core_custody_check_intel_absent, smp_core_custody_release_intel_absent, smp_core_custody_acquire_svm, smp_core_custody_svm_prepare, smp_core_custody_svm_check, smp_core_custody_svm_transfer, smp_core_custody_svm_land, smp_core_custody_svm_host, smp_core_custody_release_svm, smp_core_custody_acquire, smp_core_custody_check, smp_core_custody_release, smp_core_custody_gate, smpwork_async_results, smp_idle_observation_snapshot, smp_par_begin, smp_par_begin_single, smp_pc_cpu_chunks, smp_pc_finished_us, smp_par_step, smp_par_status, smp_par_cancel, smp_par_release, smpwork_async_begin, smpwork_async_step, smpwork_async_take, smpwork_async_cancel, smpwork_async_status, smpwork_async_detail, smpwork_async_progress, smp_par_for, smp_par_for_retired, smp_pf_bench, smp_pf_bench_observation, smp_bsp_idle_hlt, smp_bsp_hlt_tsc, smp_bsp_hlt_count, smp_idle_enter, smp_idle_hint, smp_idle_io_base, smp_idle_irq_refusals, smp_idle_mwait_count, smp_idle_hlt_count, smp_idle_cpu_state, smp_idle_cpu_edx5, smp_selftest, smp_msr_apply_aps, smp_msr_read_aps, smp_msr_req_rd_val, smp_msr_req_rd_c5, smp_msr_req_rd_type, smpwork_snapshot, smp_command_register_verb, smp_frequency_snapshot_validate, smp_lapic_detect_mode, smp_lapic_read32, smp_lapic_write32, smp_lapic_read_id, smp_current_logical, smp_preempt_global_init, smp_preempt_set_bsp_initial, smp_preempt_init_local, smp_preempt_timer_restore_bsp, smp_preempt_send_kicks, smp_preempt_send_resched_one, smp_mapping_update_begin, smp_mapping_update_commit, smp_coherence_prepare_mode, smp_lock_collision_selftest, smp_fault_concurrent_selftest, smp_tlb_coherence_selftest, smp_coherence_expected, smp_coherence_actual, smp_coherence_double_run, smp_coherence_lost, smp_fault_isolated, smp_faults_last_contained, smp_tlb_epoch, smp_tlb_requested, smp_tlb_acked, smp_stale_mapping, smp_irq_entries, smp_irq_eois, smp_irq_duplicate_eoi, smp_irq_ownership_faults, smp_timer_post_dcr, smp_timer_post_lvt, smp_timer_post_icr, smp_timer_post_current, smp_timer_irq0_before, smp_timer_preempt0_before, smp_timer_restore_seq, smp_timer_restore_ok, smp_halt_wait_us, smp_topology_online, smp_bsp_tick_handover, smp_bsp_tick_lease_begin, smp_bsp_tick_lease_end, smp_bsp_tick_owner
 ;; IMPORTS core/mca_cmci, core/mca_poll, core/mca_init, boot/serial, boot/smbios, boot/gdt, boot/paging, boot/pmod_loader, core/lib/fmt, core/time, core/idt, core/heap, core/lock, core/sched, core/smp_audit, boot/indicator, sec/cpu_security_percpu, sec/cpu_microcode_percpu, sec/cpu_microcode_boot, sec/cpu_microcode_bsp_checked, sec/cpu_idle_tsa, core/normal_deadman
 ;; CAPS
 ;; OWNER saga:core
@@ -3209,6 +3209,61 @@ smp_command_register_verb:
 ; EDI dense logical CPU. Append only the immutable local-init sample; reading
 ; this view never samples the calling CPU on behalf of a different processor.
 ; Missing/busy/identity-mismatched records expose ready=0 without stale fields.
+; Read-only copied topology row, EDI=dense index, RSI=64-byte destination.
+; All 32 slots may be queried, including absent/failed rows. No dispatch or I/O.
+; EAX0 or -1; complete caller-owned 64B projection, original counts unmodified.
+smp_cpu_report_copy:
+    cmp edi,SMP_CPU_CAPACITY
+    jae .bad
+    mov r8d,edi
+    mov r9,rsi
+    mov rdi,rsi
+    xor eax,eax
+    mov ecx,8
+    cld
+    rep stosq
+%macro PCR_TOPO 2
+    mov eax,[rel %2]
+    mov [r9+%1],eax
+%endmacro
+    PCR_TOPO 0,smp_discovered_count
+    PCR_TOPO 4,smp_configured_count
+    PCR_TOPO 8,smp_enabled_count
+    PCR_TOPO 12,smp_topology_online
+    lea rdx,[rel cpu_apic_id]
+    mov eax,[rdx+r8*4]
+    mov [r9+16],eax
+    lea rdx,[rel cpu_state]
+    movzx eax,byte [rdx+r8]
+    mov [r9+20],eax
+%macro PCR_ID 2
+    lea rdx,[rel %2]
+    mov eax,[rdx+r8*4]
+    mov [r9+%1],eax
+%endmacro
+    PCR_ID 24,cpu_package
+    PCR_ID 28,cpu_core
+    PCR_ID 32,cpu_thread
+%unmacro PCR_ID 2
+    movzx eax,byte [rel smp_placement_valid]
+    mov [r9+36],eax
+    movzx eax,byte [rel smp_topology_exact]
+    mov [r9+40],eax
+    movzx eax,byte [rel smp_topology_overflow]
+    mov [r9+44],eax
+    mov dword [r9+48],SMP_CPU_CAPACITY
+    PCR_TOPO 52,smp_failed_count
+%unmacro PCR_TOPO 2
+    cmp r8d,[rel smp_discovered_count]
+    setb al
+    movzx eax,al
+    mov [r9+56],eax
+    xor eax,eax
+    ret
+.bad:
+    mov rax,-1
+    ret
+
 smpstat_cpu_security:
     push r12
     push r13
@@ -3297,6 +3352,9 @@ smpstat_cpu_microcode:
     lea r13,[rel smpstat_uc_bsp_fields]
 .table_ready:
     mov  r14d, 32
+    test r15,r15
+    jnz .field
+    mov r14d,39                       ; additive AP cost tail; BSP unchanged
 .field:
     movsxd rdi, dword [r13]
     lea  rax, [rel smpstat_uc_fields]
@@ -10536,6 +10594,13 @@ smpstat_sec_fields:
     dd smpstat_sec_ctrl - smpstat_sec_fields, CSS_CTRL, 8
     dd smpstat_sec_arch_valid - smpstat_sec_fields, CSS_ARCH_VALID, 4
     dd smpstat_sec_arch - smpstat_sec_fields, CSS_ARCH, 8
+smpstat_uc_cost_v: db " uc_cost_v=", 0
+smpstat_uc_cost_cpu: db " uc_cost_cpu=", 0
+smpstat_uc_cost_profile: db " uc_cost_profile=", 0
+smpstat_uc_cost_op: db " uc_cost_op=", 0
+smpstat_uc_cost_valid: db " uc_cost_valid=", 0
+smpstat_uc_cost_start: db " uc_cost_start=", 0
+smpstat_uc_cost_end: db " uc_cost_end=", 0
 smpstat_uc_bsp_header: db " uc_scope=early_bsp uc_ready=", 0
 smpstat_uc_header: db " uc_scope=early_ap uc_ready=", 0
 smpstat_uc_result32: db " uc_result32=", 0
@@ -10604,6 +10669,14 @@ smpstat_uc_fields:
     dd smpstat_uc_post_ctrl - smpstat_uc_fields, MCP_AFTER + CSS_CTRL, 8, 0
     dd smpstat_uc_post_arch_valid - smpstat_uc_fields, MCP_AFTER + CSS_ARCH_VALID, 4, 0
     dd smpstat_uc_post_arch - smpstat_uc_fields, MCP_AFTER + CSS_ARCH, 8, 0
+
+    dd smpstat_uc_cost_v - smpstat_uc_fields, MCP_COST_VERSION, 4, 0
+    dd smpstat_uc_cost_cpu - smpstat_uc_fields, MCP_COST_CPU, 4, 0
+    dd smpstat_uc_cost_profile - smpstat_uc_fields, MCP_COST_PROFILE, 4, 0
+    dd smpstat_uc_cost_op - smpstat_uc_fields, MCP_COST_OP, 4, 0
+    dd smpstat_uc_cost_valid - smpstat_uc_fields, MCP_COST_VALID, 4, 0
+    dd smpstat_uc_cost_start - smpstat_uc_fields, MCP_COST_START, 8, 0
+    dd smpstat_uc_cost_end - smpstat_uc_fields, MCP_COST_END, 8, 0
 
 smpstat_uc_bsp_fields:
     dd smpstat_uc_result32 - smpstat_uc_fields, MCB_RESULT, 4, 1

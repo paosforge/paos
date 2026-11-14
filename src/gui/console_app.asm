@@ -1,7 +1,7 @@
 ;; MODULE gui/console_app
 ;; LAYER 6
-;; EXPORTS console_app_init, console_app_tick, console_app_textfield_event, console_service_ready
-;; IMPORTS sec/session, sec/principal, core/log, gui/input_route, gui/form_loader, gui/widget_console_grid, gui/widget_tabstrip, gui/widget, gui/cadence_mark, svc/command, svc/command_cons, svc/command_udp, svc/hw_report, boot/serial, boot/boot_v2_handoff, sec/keyprov
+;; EXPORTS console_observe_unlock, console_app_init, console_app_tick, console_app_textfield_event, console_service_ready
+;; IMPORTS gui/window_mgmt, gui/session_restore, sec/session, sec/principal, core/log, gui/input_route, gui/form_loader, gui/widget_console_grid, gui/widget_tabstrip, gui/widget, gui/cadence_mark, svc/command, svc/command_cons, svc/command_udp, svc/hw_report, boot/serial, boot/boot_v2_handoff, sec/keyprov
 ;; CAPS CAP_GUI
 ;; OWNER saga:verb_console
 ; Contract 2152: a form-backed local projection of the one command registry.
@@ -117,6 +117,7 @@ console_app_init:
     ; Readiness belongs to the initialized service, never to a visible form.
     ; No synthetic Console STATUS request or paint proves Terminal usability.
     mov  byte [rel console_service_ready], 1
+    call console_observe_init
     lea  rdi, [rel str_console_service_marker]
     call serial_string
 .out:
@@ -301,6 +302,10 @@ console_cmd_formload:
     push rax
     call console_form_restore
     call console_bind_window
+    test eax,eax
+    jnz .not_authorized
+    call console_observation_authorize
+.not_authorized:
     pop  rax
     ret
 .fallback:
@@ -309,6 +314,21 @@ console_cmd_formload:
 ; FORMINFO has the same first-token shape as FORMLOAD. Temporarily exposing
 ; the row lets its established bounded pager return the declaration verbatim.
 console_cmd_forminfo:
+    push rdi
+    push rsi
+    mov rdi,[rdi + REQ_ARG]
+    test rdi,rdi
+    jz .not_state
+    lea rsi,[rel console_observation_arg]
+    call strcmp
+    test eax,eax
+    jnz .not_state
+    pop rsi
+    pop rdi
+    jmp console_observation_reply
+.not_state:
+    pop rsi
+    pop rdi
     mov  rax, [rdi + REQ_ARG]
     test rax, rax
     jz   .fallback
@@ -386,6 +406,7 @@ console_cmd_launch:
     call console_bind_window
     test eax, eax
     jnz  .load_fail
+    call console_observation_authorize
     call form_out_reset
     lea  rdi, [rel str_console_launch_ok]
     call form_out_put_str
@@ -528,6 +549,7 @@ console_bind_window:
     mov  [rel console_bound_session_noun], eax
     test edx, edx
     jnz  .have_transcript
+    call console_try_temporary_notice
     lea  rdi, [rel str_console_welcome]
     call console_append_cstr
     mov  byte [rel console_try_hw_pending], 1
@@ -546,6 +568,23 @@ console_bind_window:
     pop  r13
     pop  r12
     pop  rbx
+    ret
+
+; Explain the actual local Try session before its fresh Console accepts work.
+; This must not wait for the deferred driver census. Existing transcripts keep
+; their content. This is presentation only; it grants no command authority.
+console_try_temporary_notice:
+    cmp  byte [rel pbm_manager_launch], 1
+    jne  .out
+    cmp  byte [rel pbm_try_media], 1
+    jne  .out
+    cmp  byte [rel session_locked], SESSION_UNLOCKED
+    jne  .out
+    cmp  qword [rel session_bound_pid], PRIN_TRY
+    jne  .out
+    lea  rdi, [rel str_console_try_temporary]
+    jmp  console_append_cstr
+.out:
     ret
 
 ; First local Try welcome: project the existing read-only boot inventory into
@@ -591,6 +630,9 @@ console_try_hardware_report:
     inc  ebx
     cmp  ebx, HW_C_BATTERY
     jbe  .class
+    ; Keep the warning at the visible end of the potentially long snapshot,
+    ; including when driver discovery completes on a later Console tick.
+    call console_try_temporary_notice
 .wait:
     pop  rbx
 .out:
@@ -1646,6 +1688,7 @@ str_console_prompt: db "> ",0
 str_console_nl: db 10,0
 str_console_tab_banner: db "PaOS Console - new tab: its own transcript",10,0
 str_console_welcome: db "PaOS Console - registered verbs are the command language",10,"Type STATUS or WINTREE; prefixing a verb with / is optional",10,0
+str_console_try_temporary: db "Try session is temporary.",10,"Restarting or leaving Try ends this session.",10,"Work in this session is not restored after restart.",10,0
 str_console_try_hw: db "Try hardware snapshot: detected devices and bound drivers",10,"none=unclaimed; unusable=driver failed; bound is not a live test",10,0
 str_console_try_hw_fail: db " hardware report unavailable",0
 str_console_session_owner: db "session=owner",0
@@ -1672,3 +1715,5 @@ str_console_service_marker: db "[PAOS64] Console command/transcript service read
 str_console_init_fail: db "[PAOS64] verb-console rung 2: console form/app initialization FAIL",13,10,0
 
 str_console_secret_line: db "<credential command redacted>",0
+
+%include "gui/console_observation.inc"

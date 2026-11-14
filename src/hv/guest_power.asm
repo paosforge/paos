@@ -24,75 +24,141 @@ GP_VERIFIED equ 6
 GP_OWNER_BYTES equ 184
 
 ; Host S5 preflight -> EAX 0 only when no current guest work/assignment is live.
+; EDX names the first actual blocker (1..23), or 0 when ready. Caller-saved
+; observation only: no extra reads, teardown, retry or admission authority.
 ; Read-only scalar census: a pending stop, parked vCPU or service ACK is not
 ; actual stop, DMA/IRQ teardown or guest filesystem flush. Never follow a domain
 ; pointer. The terminal caller repeats this check with IF clear before effects;
 ; this predicate neither initiates teardown nor grants passthrough quiescence.
 hv_guest_power_s5_inactive:
+    xor r10d,r10d                ; no injected ownership refusal
+    xor r11d,r11d                ; ordinary callers can never inherit exemptions
+.census:
+    mov edx,1                    ; first actual blocker ordinal
     cmp byte [rel hv_linux_running], 0
     jne .refused
+    mov edx,2                    ; first actual blocker ordinal
     cmp byte [rel hv_linux_start_active], 0
     jne .refused
+    mov edx,3                    ; first actual blocker ordinal
     cmp byte [rel hv_linux_run_req], 0
     jne .refused
+    mov edx,4                    ; first actual blocker ordinal
     cmp byte [rel hv_linux_stop_req], 0
     jne .refused
+    mov edx,5                    ; first actual blocker ordinal
     cmp byte [rel hv_linux_vmx_live], 0
     jne .refused
     ; CPU-off alone cannot release PIN1/warm custody or a live SVM context.
     ; Their existing terminal/revoke/scrub paths clear these receipts only
     ; after actual retirement. This reader never clears them on an ACK.
+    mov edx,6                    ; first actual blocker ordinal
     cmp qword [rel hv_svm_cur_vmcb], 0
     jne .refused
+    mov edx,7                    ; first actual blocker ordinal
     cmp byte [rel hvp_bound], 0
     jne .refused
+    mov edx,8                    ; first actual blocker ordinal
     cmp byte [rel hvw_bound], 0
     jne .refused
+    mov edx,9                    ; first actual blocker ordinal
     cmp byte [rel vtd_owner_guest], 0
     jne .refused
+    mov edx,10                    ; first actual blocker ordinal
     cmp byte [rel vtd_network_mode], 0
     jne .refused
+    mov edx,11                    ; first actual blocker ordinal
     cmp qword [rel guestnet_domain_ctx], 0
     jne .refused
+    mov edx,12                    ; first actual blocker ordinal
     cmp byte [rel guestnet_active], 0
     jne .refused
+    mov edx,13                    ; first actual blocker ordinal
     cmp byte [rel hv_guest_power_fenced], 0
     jne .refused
+    mov edx,14                    ; first actual blocker ordinal
     cmp qword [rel hv_guest_power_inflight], 0
     jne .refused
+    bt r11d,31                   ; dedicated contained reader avoids passive-record writes
+    jc .retained_nic
     call pcia_guest_owned
+    jmp .nic_result
+.retained_nic:
+    mov eax,1                    ; the caller proved this domain's POISON leaf now
+.nic_result:
+    mov edx,15                    ; helper may clobber caller-saved EDX
     test eax, eax
-    jnz .refused
+    jz .token
+    bt r11d,15
+    jnc .refused
+.token:
     ; Ordinary release clears cached addresses BEFORE mb_release. On BUSY or
     ; stale-key refusal the real owner token remains: CPU-off and NULL addresses
     ; must not permit host S5. Never clear or retry any owner from this reader.
+    mov edx,16                    ; first actual blocker ordinal
+    cmp r10d,edx                ; private ownership proof failed at this ordinal
+    je .refused
     cmp qword [rel hv_linux_mb_token], 0
-    jne .refused
+    je .region
+    bt r11d,16
+    jnc .refused
+.region:
+    mov edx,17                    ; first actual blocker ordinal
+    cmp r10d,edx                ; private ownership proof failed at this ordinal
+    je .refused
     cmp qword [rel hv_linux_region], 0
-    jne .refused
+    je .capacity
+    bt r11d,17
+    jnc .refused
+.capacity:
+    mov edx,18                    ; first actual blocker ordinal
+    cmp r10d,edx                ; private ownership proof failed at this ordinal
+    je .refused
     cmp qword [rel hv_linux_region_capacity], 0
-    jne .refused
+    je .resident
+    bt r11d,18
+    jnc .refused
+.resident:
+    mov edx,19                    ; first actual blocker ordinal
+    cmp r10d,edx                ; private ownership proof failed at this ordinal
+    je .refused
     cmp qword [rel hv_linux_region_resident], 0
-    jne .refused
+    je .readers
+    bt r11d,19
+    jnc .refused
+.readers:
     ; External console/surface/audio readers retain guest spans independently
     ; of CPU state. Their own terminal paths must detach them first.
+    mov edx,20                    ; first actual blocker ordinal
     cmp byte [rel cdp_bound], 0
     jne .refused
+    mov edx,21                    ; first actual blocker ordinal
     cmp byte [rel gws_bound], 0
     jne .refused
+    mov edx,22                    ; first actual blocker ordinal
     cmp byte [rel padc_bound], 0
     jne .refused
 %ifdef RCQ37_MEDIA_PROFILE
 %if RCQ37_MEDIA_PROFILE
+    mov edx,23                    ; first actual blocker ordinal
     cmp byte [rel hv_vcon_pmr_bound], 0
     jne .refused
 %endif
 %endif
+    xor edx, edx                    ; every existing check passed
     xor eax, eax
     ret
 .refused:
     mov eax, 1
     ret
+
+; Private entry, only nd_contained_power_ok after its fresh proof. R11D has
+; bit31 (contained mode) plus exactly 15..19, backed by the actual allocator
+; read. R10D is zero or the first failed ownership ordinal (16..19); it
+; forces refusal even if a stale scalar is zero. The public entry clears both.
+.contained:
+    jmp .census
+
 
 ; Scalar receipts only. Never dereference a possibly replaced guest/domain
 ; pointer to establish identity. The still-pinned real backend and reservation

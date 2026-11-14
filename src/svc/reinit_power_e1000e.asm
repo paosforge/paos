@@ -222,6 +222,9 @@ reinit_power_e1000e_s5:
     mov ecx,4
     call reinit_power_e1000e_pci
     mov [rbx+16],eax
+    ; PMCSR.D3 alone is insufficient. Intel82574 rev3.3/3.4 §5.4.4.2.2/.3
+    ; clears IO/MEM decode on entry; a stand-in that retains Command bits is
+    ; uncertain too. Never hide that contradiction by relaxing this readback.
     test eax,7                         ; D3 disables IO/MEM; BM already cleared
     jnz .uncertain
     mov dword [rbx+4],4

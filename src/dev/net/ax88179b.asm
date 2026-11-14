@@ -1,6 +1,6 @@
 ;; MODULE dev/net/ax88179b
 ;; LAYER 3
-;; EXPORTS ax88179b_lifecycle_poll, ax88179b_selftest, ax88179b_port_owned, ax88179b_frame_stats
+;; EXPORTS ax88179b_lifecycle_poll, ax88179b_selftest, ax88179b_port_owned, ax88179b_frame_stats, ax88179b_link_snapshot
 ;; IMPORTS boot/native_driver_gate, dev/net/ax_lifecycle, usb/enum, net/netdev, dev/net/ax88179b_attach, dev/net/ax88179b_control, dev/net/ax88179b_link, dev/net/ax88179b_codec, boot/serial, core/time
 ;; CAPS
 ;; OWNER saga:net
@@ -59,8 +59,17 @@
     call axb_control
 %endmacro
 
+; Call sites retain an admission-refused outcome without moving any instruction
+; before the native policy entry gate in axb_activate itself.
+%macro AXB_ACTIVATE 0
+    mov dword [rel axb_diag_phase],2
+    mov dword [rel axb_diag_outcome],4
+    mov qword [rel axb_diag_phy_valid],0
+    call axb_activate
+%endmacro
+
 ax88179b_selftest:
-    NATIVE_DRIVER_REFUSE 6, 0
+    NATIVE_DRIVER_REFUSE 10, 0
     push rbx
     push rbp
     push r12
@@ -193,11 +202,28 @@ axb_delay_ms:
 
 ; Helpers use a self-less synchronous callback; bind self explicitly here.
 axb_control:
+    push rbx
+    mov rbx,rcx                    ; retained data pointer; never serialized
+    mov rax,[rsi]
+    mov [rel axb_diag_setup],rax
+    inc qword [rel axb_diag_controls]
     mov rdi,[rel axb_hc]
     mov rax,[rel axb_hcops]
-    jmp [rax+usbhc_ops.control]
+    call [rax+usbhc_ops.control]
+    mov [rel axb_diag_result],rax   ; preserve the complete uint64 completion
+    cmp rax,2
+    jne .done
+    mov rdx,0x00020011000302c0      ; only an exact existing PHYSR read
+    cmp [rel axb_diag_setup],rdx
+    jne .done
+    movzx edx,word [rbx]
+    mov [rel axb_diag_phy],edx
+    mov dword [rel axb_diag_phy_valid],1
+.done:
+    pop rbx
+    ret
 axb_configure:
-    NATIVE_DRIVER_REFUSE 6
+    NATIVE_DRIVER_REFUSE 10
     mov rdi,[rel axb_hc]
     movzx esi,byte [rel axb_port]
     mov rax,[rel axb_hcops]
@@ -210,8 +236,9 @@ axb_configure:
 
 ; Only before any RX TD: parked init, or first link-up after parked link-down.
 axb_activate:
-    NATIVE_DRIVER_REFUSE 6
+    NATIVE_DRIVER_REFUSE 10
     sub rsp,8
+    mov dword [rel axb_diag_outcome],3 ; failure unless helper completes
     lea rdi,[rel axb_devbuf]
     mov esi,18
     movzx edx,byte [rel axb_port]
@@ -221,6 +248,7 @@ axb_activate:
     call ax88179b_link_start
     test eax,eax
     jz .done
+    mov [rel axb_diag_outcome],eax  ; 1 active / 2 valid PHY-down
     mov edx,2
     cmp eax,1
     jne .state
@@ -232,7 +260,7 @@ axb_activate:
     ret
 
 axb_create:
-    NATIVE_DRIVER_REFUSE 6
+    NATIVE_DRIVER_REFUSE 10
     lea rdi,[rel axb_ops]
 %assign ai 0
 %rep 8
@@ -303,6 +331,8 @@ axb_enter:
     mov eax,1
     ret
 .gone:
+    mov dword [rel axb_diag_phase],4
+    mov dword [rel axb_diag_outcome],7 ; disconnected, no fabricated PHY sample
     call axb_retire
 .unlock:
     mov dword [rel axb_busy],0
@@ -608,13 +638,16 @@ axb_link_status:
     jz .down_unowned
     cmp byte [rel axb_state],2
     jne .sample
-    call axb_activate               ; no RX TD has ever been armed while parked
+    AXB_ACTIVATE                    ; no RX TD has ever been armed while parked
     test eax,eax
     jz .retire
     cmp byte [rel axb_state],3
     jne .down
     jmp .speed
 .sample:
+    mov dword [rel axb_diag_phase],3
+    mov dword [rel axb_diag_outcome],3
+    mov qword [rel axb_diag_phy_valid],0
     AXB_USB 0x00020011000302c0,axb_phy,2
     cmp rax,2
     jne .retire
@@ -622,8 +655,10 @@ axb_link_status:
     and eax,0xe400
     movzx edx,word [rel axb_link+8]
     and edx,0xe400
+    mov dword [rel axb_diag_outcome],6 ; exact sample changed, retire below
     cmp eax,edx
     jne .retire                    ; never reconfigure across a pending RX TD
+    mov dword [rel axb_diag_outcome],5 ; exact unchanged active sample
 .speed:
     movzx edx,word [rel axb_link+8]
     mov eax,(1000<<8)|1
@@ -695,6 +730,72 @@ ax88179b_frame_stats:
     ret
 ; END FRAME STATS
 
+; Cached newer-AX diagnostic, RDI=128 writable bytes. No HC/port callback,
+; allocation, policy, health, selection or lifecycle change. Private owner is
+; tried once; a busy record has only version=1,busy=1 and no sampled values.
+; Sixteen uint64 fields: version,state,registered,health,busy,phase,outcome,
+; phy_valid,phy,cached_link_valid,cached_phy,cached_usb,cached_chip,
+; control_count,last_setup,last_result. PHY-valid belongs to the latest
+; activation/active-link sample; cached-link fields belong to the last completed
+; helper publication and may be older. Setup is eight wire bytes, never a pointer.
+; Phase:0 none,1 bind/init,2 activation,3 active PHY poll,4 disconnect.
+; Outcome:0 none,1 active,2 PHY-down,3 helper/control failure,4 policy refusal,
+; 5 active PHY unchanged,6 active PHY changed,7 disconnect. State1 also covers
+; retirement for unrelated TX/RX failures; outcome is not a general health code.
+; RAX=0 cached snapshot,1 busy,-1 NULL. SysV nonvolatiles are untouched.
+ax88179b_link_snapshot:
+    test rdi,rdi
+    jz .bad
+    mov r8,rdi
+    xor eax,eax
+    mov ecx,16
+    cld
+    rep stosq
+    mov qword [r8],1
+    mov ecx,1
+    lock cmpxchg [rel axb_busy],ecx
+    jne .busy
+    movzx eax,byte [rel axb_state]
+    mov [r8+8],rax
+    movzx eax,byte [rel axb_registered]
+    mov [r8+16],rax
+    mov eax,[rel axb_dev+dev.health]
+    mov [r8+24],rax
+    mov eax,[rel axb_diag_phase]
+    mov [r8+40],rax
+    mov eax,[rel axb_diag_outcome]
+    mov [r8+48],rax
+    mov eax,[rel axb_diag_phy_valid]
+    mov [r8+56],rax
+    mov eax,[rel axb_diag_phy]
+    mov [r8+64],rax
+    cmp qword [rel axb_link+24],1
+    jne .controls
+    mov qword [r8+72],1
+    movzx eax,word [rel axb_link+8]
+    mov [r8+80],rax
+    movzx eax,byte [rel axb_link+7]
+    mov [r8+88],rax
+    movzx eax,byte [rel axb_link+6]
+    mov [r8+96],rax
+.controls:
+    mov rax,[rel axb_diag_controls]
+    mov [r8+104],rax
+    mov rax,[rel axb_diag_setup]
+    mov [r8+112],rax
+    mov rax,[rel axb_diag_result]
+    mov [r8+120],rax
+    mov dword [rel axb_busy],0
+    xor eax,eax
+    ret
+.busy:
+    mov qword [r8+32],1
+    mov eax,1
+    ret
+.bad:
+    mov rax,-1
+    ret
+
 ; BEGIN AXB STATIC
 align 16
 axb_runtime_begin:
@@ -703,6 +804,13 @@ axb_registered: db 0
 axb_port: db 0
 axb_speed: db 0
 axb_busy: dd 0
+axb_diag_phase: dd 0
+axb_diag_outcome: dd 0
+axb_diag_phy_valid: dd 0
+axb_diag_phy: dd 0
+axb_diag_controls: dq 0
+axb_diag_setup: dq 0
+axb_diag_result: dq 0
 axb_rx_seen: dq 0
 axb_rx_snapshot: times 64 db 0
 %if PAOS_LAB_AX88179B_RX_BEACON
@@ -744,6 +852,9 @@ str_axb_eol: db 13,10,0
 ; One actual wire bind shared by boot and replacement. No registry write here.
 axb_bind_wire:
     push rbp
+    mov dword [rel axb_diag_phase],1
+    mov dword [rel axb_diag_outcome],0
+    mov qword [rel axb_diag_phy_valid],0
     AXB_USB 0x0012000001000680,axb_devbuf,18
     mov rsi,rax
     lea rdi,[rel axb_devbuf]
@@ -828,7 +939,7 @@ axb_bind_wire:
     call ax88179b_init_parked
     cmp eax,1
     jne .failed
-    call axb_activate
+    AXB_ACTIVATE
     test eax,eax
     jz .failed
     mov eax,1
@@ -840,7 +951,7 @@ axb_bind_wire:
     ret
 
 ax88179b_lifecycle_poll:
-    NATIVE_DRIVER_REFUSE 6
+    NATIVE_DRIVER_REFUSE 10
     xor eax,eax
     mov ecx,1
     lock cmpxchg [rel axb_busy],ecx

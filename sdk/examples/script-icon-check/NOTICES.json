@@ -1,0 +1,10 @@
+{
+  "credits": [
+    {
+      "files": ["icon.png", "icon@2x.png"],
+      "creator": "Codex / rc-qemu-claude",
+      "license": "Apache-2.0",
+      "source": "Original geometric artwork for the PaOS SDK script icon example"
+    }
+  ]
+}

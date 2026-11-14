@@ -1,11 +1,11 @@
 ;; MODULE hv/filesystem_domain
 ;; LAYER 5
-;; EXPORTS fsg_begin, fsg_submit, fsg_poll, fsg_stop, fsg_retire, fsg_identity, fsg_attachment, fsg_current, fsg_prepare, fsg_backend_stopped, fsg_cmdline, fsg_fault, fsg_tick
-;; IMPORTS hv/driver_domain, hv/vmx, hv/vm_profile, hv/filesystem_wire, hv/guestfilesystem, fs/guest_volume, core/time
+;; EXPORTS fsg_reply_validate, fsg_begin, fsg_submit, fsg_poll, fsg_stop, fsg_retire, fsg_identity, fsg_attachment, fsg_current, fsg_prepare, fsg_backend_stopped, fsg_cmdline, fsg_fault, fsg_tick
+;; IMPORTS hv/driver_domain, hv/vmx, hv/vm_profile, hv/filesystem_wire, hv/guestfilesystem, fs/guest_volume, fs/fs_format, core/time
 ;; CAPS extension
 ;; OWNER saga:hv
 ;; CONTEXT: bsp_only
-; Original native supervisor, one NTFS attachment/job/START. These APIs are
+; Original native supervisor, one copy or confirmed-format attachment/job/START. These APIs are
 ; INTERNAL to the independently authorized VFS owner, never guest endpoints.
 ; All callers share the BSP cooperative guest boundary. No waiting or retries.
 ; A fault freezes storage before asking STOP and retains custody until the
@@ -53,7 +53,7 @@ fsg_span:
     mov eax,-1
     ret
 
-; RDI=signed built-in profile, RSI=independently authorized lease136,
+; RDI=signed built-in profile, RSI=independently authorized copy136/format144,
 ; RDX=native-authored FSG1 320, RCX=START256(sequence1). ->STARTgen or0.
 ; No authority from a package string, guest disk identity or echoed FSC1.
 fsg_begin:
@@ -137,6 +137,23 @@ fsg_begin:
     jnz .bad
     cmp qword [r14+248],1
     jne .bad
+    cmp word [r13+6],2
+    jne .lease_identity
+    mov rdi,r12
+    mov esi,144
+    call fsg_span
+    test eax,eax
+    jnz .bad
+    mov rax,[r12+16]
+    cmp rax,[r13+96]
+    jne .bad
+    movzx eax,byte [r13+200]
+    cmp eax,[r12+136]
+    jne .bad
+    movzx eax,byte [r13+201]
+    cmp eax,[r12+140]
+    jne .bad
+.lease_identity:
     ; Exact private lease tuple -> independent native grant.
     mov rax,[r12+128]
     cmp rax,[r13+72]
@@ -190,17 +207,54 @@ fsg_begin:
     lea rsi,[rel fsg_request]
     mov ecx,32
     rep movsq
+    cmp word [rel fsg_grant+6],2
+    jne .copy_acquire
+    lea rdi,[rel fsg_authorized]
+    mov rsi,r12
+    mov ecx,18
+    rep movsq
+    lea rdi,[rel fsg_grant+184]
+    call fs_format_bind_start       ; original F1 decision, once; never guest input
+    test eax,eax
+    jnz .bad
+    lea rdi,[rel fsg_authorized]
+    call guest_volume_acquire_format
+    jmp .acquired
+.copy_acquire:
     mov rdi,r12
     call guest_volume_acquire
+.acquired:
     test rax,rax
     jz .bad
     mov [rel fsg_handle],rax
     mov rdi,rax
     lea rsi,[rel fsg_volume]
     mov edx,136
+    cmp word [rel fsg_grant+6],2
+    jne .snapshot
+    mov edx,144
+.snapshot:
     call guest_volume_snapshot
     test rax,rax
     jnz .acquired_bad
+    cmp word [rel fsg_grant+6],2
+    jne .copy_vbr
+    lea rdi,[rel fsg_volume]
+    call fs_format_custody          ; exact original F1 incarnation/extent
+    test eax,eax
+    jnz .acquired_bad
+    lea rdi,[rel fsg_volume]
+    lea rsi,[rel fsg_authorized]
+    mov ecx,18                     ; full original descriptor, including kind/slot
+    cld
+    repe cmpsq
+    jne .acquired_bad
+    mov rdi,[rel fsg_handle]
+    call guest_volume_current      ; live media/lease; acquire_format owns geometry
+    test rax,rax
+    jnz .acquired_bad
+    jmp .metadata_ready            ; no filesystem/VBR precondition for FORMAT
+.copy_vbr:
     mov rdi,[rel fsg_handle]
     xor esi,esi
     mov edx,1
@@ -223,6 +277,7 @@ fsg_begin:
     jz .acquired_bad
     cmp rax,[rel fsg_volume+24]
     ja .acquired_bad
+.metadata_ready:
     call time_monotonic_now_us
     cmp rax,[rel fsg_clock]
     jb .acquired_bad
@@ -250,10 +305,12 @@ fsg_begin:
     mov qword [rel fsg_frame_deadline],0
     jmp .out
 .acquired_bad:
-    ; No START was published on these admitted failures. Consume reclaim once;
-    ; absence of a launched CPU is known here, not inferred from a guest bit.
+    ; No START was published on these admitted failures. Format uncertainty
+    ; retains custody; the legacy copy path consumes known-no-CPU reclaim once.
     mov rdi,[rel fsg_handle]
     call guest_volume_freeze
+    cmp word [rel fsg_grant+6],2
+    je .quarantined               ; uncertain acquisition keeps original custody
     mov rdi,[rel fsg_handle]
     mov rsi,[rel fsg_grant+72]
     call guest_volume_reclaim
@@ -395,12 +452,18 @@ fsg_stop:
     mov byte [rel hv_linux_run_req],0
     mov edi,eax
     call vm_profile_pair_finish
+    cmp word [rel fsg_grant+6],2
+    jne .armed_reclaim
+    cmp dword [rel fsg_faulted],0
+    jne .armed_quarantine
+.armed_reclaim:
     mov rdi,[rel fsg_handle]
     mov rsi,[rel fsg_grant+72]
     call guest_volume_reclaim
     mov dword [rel fsg_state],5
     test rax,rax
     jz .requested
+.armed_quarantine:
     mov dword [rel fsg_state],6
 .requested:
     add rsp,8
@@ -454,13 +517,18 @@ fsg_backend_stopped:
     cmp qword [rel hv_svm_cur_vmcb],0
     jne .uncertain
     call guestfilesystem_zero
+    cmp word [rel fsg_grant+6],2
+    jne .reclaim
+    cmp dword [rel fsg_faulted],0
+    jne .uncertain
+.reclaim:
     mov rdi,[rel fsg_handle]
     mov rsi,[rel fsg_grant+72]
     call guest_volume_reclaim
     mov dword [rel fsg_state],5
     test rax,rax
     jz .done
- .uncertain:
+.uncertain:
     mov dword [rel fsg_state],6     ; no custody release after uncertainty
 .done:
     add rsp,8
@@ -493,6 +561,9 @@ fsg_submit:
     call fsc_wire_request
     test eax,eax
     jnz .bad
+    mov ax,[rel fsg_initial+4]
+    cmp ax,[rbx+4]
+    jne .bad
     cmp word [rbx+6],2
     jb .bad
     mov rax,[rel fsg_sequence]
@@ -502,7 +573,11 @@ fsg_submit:
     jne .bad
     lea rdi,[rbx+8]
     lea rsi,[rel fsg_initial+8]
-    mov ecx,30                      ; all identity/names/padding, not opcode/seq
+    mov ecx,30                      ; v2 keeps all identity/names/padding
+    cmp word [rbx+4],3
+    jne .control_identity
+    mov ecx,9                       ; v3 controls have zero80..247, already validated
+.control_identity:
     cld
     repe cmpsq
     jne .bad
@@ -521,6 +596,30 @@ fsg_submit:
 .out:
     add rsp,8
     pop r12
+    pop rbx
+    ret
+
+; RDI=private reply, RSI=outstanding request ->0/-1. The pure wire
+; syntax validator has no retained job. Bind every v3 echo to original START
+; here, including STATUS/CANCEL/FINISH whose request payload is all zero.
+fsg_reply_validate:
+    push rbx
+    mov rbx,rdi
+    call fsc_wire_reply
+    test eax,eax
+    jnz .out
+    cmp word [rbx+4],3
+    jne .out
+    cmp dword [rbx+64],7             ; identity-only refusal has no filesystem echo
+    je .out
+    mov ax,[rel fsg_initial+80]
+    cmp ax,[rbx+112]
+    jne .bad
+    xor eax,eax
+    jmp .out
+.bad:
+    mov eax,-1
+.out:
     pop rbx
     ret
 
@@ -697,7 +796,8 @@ fsg_ram: dq 0
 fsg_ram_bytes: dq 0
 fsg_tx_offset: dd 0
 fsg_rx_offset: dd 0
-fsg_volume: times 136 db 0
+fsg_volume: times 144 db 0
+fsg_authorized: times 144 db 0
 fsg_vbr: times 512 db 0
 fsg_grant: times 320 db 0
 fsg_initial: times 256 db 0

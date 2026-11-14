@@ -1,18 +1,20 @@
 ;; MODULE fs/small_copy
 ;; LAYER 4
 ;; EXPORTS small_copy, small_copy_between, small_copy_fat_dispatch
-;; IMPORTS fs/vfs, fs/ntfs_disk, fs/fat32_disk, fs/ext4_disk, fs/ext4_copy, core/lib/mem
+;; IMPORTS fs/vfs, fs/ntfs_disk, fs/fat32_disk, fs/ext4_disk, fs/ext4_copy, fs/exfat_disk, core/lib/mem
 ;; CAPS
 ;; OWNER saga:fs_wave
-; Bounded plain-file copy into native NTFS or explicitly armed FAT scratch.
+; Bounded plain-file copy into native NTFS, armed FAT scratch or registered armed exFAT.
 ; BEGIN calls the existing CREATE transaction under this request's authority.
 ; Unflagged STEP/CANCEL only re-resolve and compare. The explicit partial hold
-; stages a private NT CREATE; STEP then uses a fresh guarded native RENAME.
+; stages a private NT/exFAT CREATE; STEP uses a fresh guarded native RENAME.
 ; No original write authority or grant is retained.
-; One BSP VFS job; 0..256B NTFS, 1..256B FAT, exact new path, mode0 only. Original
+; One BSP VFS job; 0..256B NTFS/exFAT, 1..256B FAT, new bounded native path. Original
 ; FAT same-volume copy remains selectable through small_copy_fat_dispatch.
 %include "core/abi/wdata.inc"
 SC_MAX equ 256
+SC_EXF_HOLD_MAX equ 0xffff             ; full job ID must fit the native 8.3 leaf
+SC_ID_BYTES equ 1024
 SC_E_CHANGED equ 17
 %if NT_SRC_FIELDS != 16 || NT_MAX_RUNS != 64
  %error "small_copy NTFS token layout must be updated"
@@ -28,7 +30,7 @@ struc sc_token
  .devops: resq 1
  .devpriv: resq 1
  .info: resq 1
- .kind: resq 1                      ; 1 NTFS, 2 FAT, 3 ext3/4 source
+ .kind: resq 1                      ; 1 NTFS, 2 FAT, 3 ext3/4 source, 4 exFAT
  .opstable: resb fs_ops_size
  .blk: resb blk_info_size
  .native: resb 2048                 ; fixed bounded immutable native geometry
@@ -42,7 +44,10 @@ small_copy_fat_dispatch:
     ; VFS reuses its one job address. A new legacy BEGIN must retire our
     ; completed pointer before the original FAT engine reuses that record.
     cmp ecx, FS_COPY_BEGIN
+    je .begin
+    cmp ecx, FS_COPY_BEGIN_CARRIED   ; a queued scratch BEGIN under its carry (rc-sec 105819 C9)
     jne fd_scratch_copy
+.begin:
     mov qword [rel sc_job], 0
     jmp fd_scratch_copy              ; original admission/engine unchanged
 .retained:
@@ -93,10 +98,16 @@ sc_begin:
     je .nt
     lea rax, [rel fd_scratch_ops]
     cmp [rbp + fsmount.ops], rax
-    jne .bad
+    jne .exfat
     lea rax, [rel fd_scratch_ctx]
     cmp [rbp + fsmount.priv], rax
     jne .bad
+    jmp .dest
+.exfat:
+    mov rdi, rbp
+    call exfat_disk_copy_device    ; exact original registered mount/context
+    test rax, rax
+    jz .bad
     jmp .dest
 .nt:
     lea rax, [rel nt_ctx]
@@ -105,10 +116,14 @@ sc_begin:
 .dest:
     cmp dword [rel sc_hold], 0
     je .hold_checked
-    ; Exact native NT destination and VFS pending admission only.
+    ; Exact native NT/exFAT destination and VFS pending admission only.
     lea rax, [rel nt_ops]
     cmp [rbp + fsmount.ops], rax
+    je .hold_native
+    lea rax, [rel exf_ops]
+    cmp [rbp + fsmount.ops], rax
     jne .bad
+.hold_native:
     cmp rbx, [rel vfs_partial_job]
     jne .bad
     cmp qword [rel vfs_partial_record + fs_copy_partial.stage], 1
@@ -381,6 +396,19 @@ sc_resume:
     call [rax + fs_ops.mutate_path]
     test rax, rax
     jnz .failed
+    ; NT keeps its reference across rename. exFAT's exact path/set trace
+    ; deliberately changes. Only a successful original guarded native RENAME
+    ; may bind that new trace, before the same full identity/read checks below.
+    cmp qword [rel sc_dest + sc_token.kind], 4
+    jne .rename_bound
+    lea rdi, [rel sc_dest]
+    lea rsi, [rel sc_dstpath]
+    mov edx, [rel sc_dstlen]
+    lea rcx, [rel sc_dest_id]
+    call sc_stat
+    cmp rax, [rel sc_length]
+    jne .failed
+.rename_bound:
     mov byte [rel sc_partial_state], 0
     mov dword [rbx + fs_copy_job.state], FS_JOB_VERIFYING
 .published:
@@ -446,6 +474,16 @@ sc_private_path:
     mov dword [rdi], 'FSWP'
     mov rax, [rel vfs_partial_record + fs_copy_partial.id]
     mov ecx, 16
+    cmp qword [rel sc_dest + sc_token.kind], 4
+    jne .hex
+    ; Native exFAT CREATE/RENAME accepts 8.3 only. Represent the ENTIRE
+    ; admitted ID, never truncate it or weaken that writer's name grammar.
+    test rax, rax
+    jz sc_no
+    cmp rax, SC_EXF_HOLD_MAX
+    ja sc_no
+    shl rax, 48
+    mov ecx, 4
 .hex:
     rol rax, 4
     mov edx, eax
@@ -460,7 +498,12 @@ sc_private_path:
     loop .hex
     mov dword [rdi + 4], '.TST'
     mov byte [rdi + 8], 0
-    add dword [rel sc_partlen], 24
+    mov eax, 24
+    cmp qword [rel sc_dest + sc_token.kind], 4
+    jne .length
+    mov eax, 12
+.length:
+    add [rel sc_partlen], eax
     xor eax, eax
     ret
 
@@ -527,6 +570,9 @@ sc_snapshot:                          ; RDI=mount, RSI=token ->0/-1
     lea rax, [rel ext_ops]
     cmp r12, rax
     je .ext
+    lea rax, [rel exf_ops]
+    cmp r12, rax
+    je .exfat
     ; New copy source/destination uses only the explicitly admitted FAT
     ; scratch descriptor. Existing legacy FAT copy/read adapters stay intact.
     lea rax, [rel fd_scratch_ops]
@@ -617,6 +663,16 @@ sc_snapshot:                          ; RDI=mount, RSI=token ->0/-1
     jz .bad
     mov r14, [r13 + ext_ctx.dev]
     mov rax, [r13 + ext_ctx.read_generation]
+    jmp .device
+.exfat:
+    mov rdi, rbx
+    lea rsi, [rbp + sc_token.native]
+    call exfat_disk_copy_snapshot    ; original immutable metadata BEFORE pointers
+    test rax, rax
+    jz .bad
+    mov r14, rax
+    mov qword [rbp + sc_token.kind], 4
+    mov rax, rdx
 .device:
     test r14, r14
     jz .bad
@@ -706,7 +762,7 @@ sc_bind_reads:
     je .fat_bind
     lea rbx, [rel sc_dest]
     cmp qword [rbx + sc_token.kind], 2
-    jne .ok
+    jne .exfat
 .fat_bind:
     mov [rel sc_fat_token], rbx
     mov rdi, rbx
@@ -752,6 +808,25 @@ sc_bind_reads:
     lea rsi, [rel sc_bpb_now]
     mov edx, 512
     call memcpy
+.exfat:
+    lea rbx, [rel sc_source]
+    cmp qword [rbx + sc_token.kind], 4
+    je .exfat_source
+    lea rbx, [rel sc_dest]
+    cmp qword [rbx + sc_token.kind], 4
+    jne .ok
+    jmp .exfat_bind
+.exfat_source:
+    cmp qword [rel sc_dest + sc_token.kind], 4
+    jne .exfat_bind
+    mov rax, [rbx + sc_token.mount]
+    cmp rax, [rel sc_dest + sc_token.mount]
+    jne .bad                        ; one original exFAT reader context per job
+.exfat_bind:
+    mov rdi, [rbx + sc_token.mount]
+    call exfat_disk_source_bind
+    test rax, rax
+    jnz .out
 .ok:
     xor eax, eax
     jmp .out
@@ -805,6 +880,13 @@ sc_io_begin:                           ; RDI=token, fresh read caches/media
     mov byte [rel ext_cp_guard_active], 1
     jmp .ok
 .fat:
+    cmp qword [rbx + sc_token.kind], 4
+    jne .fat_read
+    call exfat_disk_copy_read_begin
+    test rax, rax
+    jnz .out
+    jmp .ok
+.fat_read:
     mov rdi, rbx
     call sc_fat_read_bpb
     test rax, rax
@@ -826,18 +908,20 @@ sc_io_begin:                           ; RDI=token, fresh read caches/media
 
 sc_io_end:                             ; always disable scoped read guards
     mov qword [rel nt_src_reading], 0
+    mov qword [rel exf_src_reading], 0
     mov byte [rel ext_cp_guard_active], 0
     call sc_io_begin                   ; fresh BPB/UUID again after callback
     push rax
     mov qword [rel nt_src_reading], 0
+    mov qword [rel exf_src_reading], 0
     mov byte [rel ext_cp_guard_active], 0
     pop rax
     ret
 
 ; Stat/read compare callbacks are strictly read-only and bracketed by pure
 ; token checks. Native readers retain all physical bounds/refusal behavior.
-; The id buffer is 288B: full NTFS reference; full FAT dir entry+namespace;
-; or the ext resolved inode slot including its inode number and checksum seed.
+; Full padded identities: NTFS reference, FAT entry/namespace, ext inode, or
+; original exFAT ordered ancestor/entry/link transcript (overflow refuses).
 sc_stat:                               ; token,path,len,id ->size/-1
     push rbx
     push rbp
@@ -848,9 +932,29 @@ sc_stat:                               ; token,path,len,id ->size/-1
     mov rbp, rsi
     mov r12d, edx
     mov r13, rcx
+    mov rdi, r13
+    xor esi, esi
+    mov edx, SC_ID_BYTES
+    call memset
+    mov rdi, rbx
     call sc_io_begin
     test rax, rax
     jnz .bad
+    cmp qword [rbx + sc_token.kind], 4
+    jne .ordinary
+    mov rsi, rbp
+    mov edx, r12d
+    mov r8, r13
+    call exfat_disk_copy_stat
+    mov r14, rax
+    mov rdi, rbx
+    call sc_io_end
+    test rax, rax
+    jnz .bad
+    cmp r14, SC_MAX
+    ja .bad
+    jmp .check
+.ordinary:
     lea rdi, [rel sc_statbuf]
     xor esi, esi
     mov edx, fs_stat_size
@@ -874,7 +978,7 @@ sc_stat:                               ; token,path,len,id ->size/-1
     ja .bad
     mov rdi, r13
     xor esi, esi
-    mov edx, 288
+    mov edx, SC_ID_BYTES
     call memset
     cmp qword [rbx + sc_token.kind], 1
     jne .fat
@@ -979,7 +1083,7 @@ sc_check_file:                         ; same sc_stat ABI ->0/-1
     jne .bad
     mov rdi, r13
     lea rsi, [rel sc_id_now]
-    mov edx, 288
+    mov edx, SC_ID_BYTES
     call memcmp
     test rax, rax
     jnz .bad
@@ -1007,7 +1111,7 @@ sc_check_file:                         ; same sc_stat ABI ->0/-1
     jne .bad
     mov rdi, r13
     lea rsi, [rel sc_id_now]
-    mov edx, 288
+    mov edx, SC_ID_BYTES
     call memcmp
     jmp .out
 .bad:
@@ -1045,8 +1149,8 @@ sc_dstpath: resb SC_MAX
 sc_bytes: resb SC_MAX
 sc_check_bytes: resb SC_MAX
 sc_statbuf: resb fs_stat_size
-sc_source_id: resb 288
-sc_dest_id: resb 288
-sc_id_now: resb 288
+sc_source_id: resb SC_ID_BYTES
+sc_dest_id: resb SC_ID_BYTES
+sc_id_now: resb SC_ID_BYTES
 %endmacro
 WDATA_BSS_DEFER WDATA_BSS_fs_small_copy

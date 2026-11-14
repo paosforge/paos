@@ -1,7 +1,7 @@
 ;; MODULE gui/window_mgmt
 ;; LAYER 6
-;; EXPORTS wmx_tray_notice_paint, wmx_owner_reset_op, wmx_selftest, wm_owner, wmx_owner_open, wmx_owner_clear, wmx_native_bind, wmx_native_arena, wmx_native_dispatch, wmx_native_restart, wm_native_slot, wm_native_stuck, wmx_native_leaked, wmx_principal_may_act, wmx_req_may_act, wmx_frame_may_focus, wmx_stage_locked, wmx_stage_denied, wm_app_title, wmx_label_ptr, wmx_caption_hover, wmx_caption_part_at, wm_chrome, wmx_declare, wmx_move_tsc_last, wmx_move_tsc_max, wmx_draw_tsc, wmx_erase_tsc, wmx_clear_boot_marks, wmx_clear_boot_marks_force, wmx_top_visible_slot, wmx_zstamp_top, wmx_set_geom_slot, wmx_draw_defer_begin, wmx_draw_defer_end, wmx_draw_flush_deferred, wmx_paint_top_slot, wm_gen, wm_no_history, wmx_window_id, wmx_set_no_history, wmx_history_target
-;; IMPORTS gui/calendar, core/native_app, gui/guest_desktop, gui/wifi_local, boot/serial, boot/gop, gui/window, gui/widget, gui/widget_tabstrip, gui/widget_console_grid, gui/chat_app, gui/cadence_mark, gui/widget_image, gui/image_viewer, svc/command, dev/input/ps2, gui/lock_screen, sec/session, svc/history
+;; EXPORTS wmx_reveal_slot, wmx_open_app_window, wmx_terminal_move_op, wmx_tray_notice_paint, wmx_owner_reset_op, wmx_selftest, wm_owner, wmx_owner_open, wmx_owner_clear, wmx_native_bind, wmx_native_arena, wmx_native_dispatch, wmx_native_restart, wm_native_slot, wm_native_stuck, wmx_native_leaked, wmx_principal_may_act, wmx_req_may_act, wmx_frame_may_focus, wmx_stage_locked, wmx_stage_denied, wm_app_title, wmx_label_ptr, wmx_caption_hover, wmx_caption_part_at, wm_chrome, wmx_declare, wmx_move_tsc_last, wmx_move_tsc_max, wmx_draw_tsc, wmx_erase_tsc, wmx_clear_boot_marks, wmx_clear_boot_marks_force, wmx_top_visible_slot, wmx_zstamp_top, wmx_set_geom_slot, wmx_draw_defer_begin, wmx_draw_defer_end, wmx_draw_flush_deferred, wmx_paint_top_slot, wm_gen, wm_no_history, wmx_window_id, wmx_set_no_history, wmx_history_target
+;; IMPORTS gui/format_confirm, gui/adopt_confirm, gui/calendar, core/native_app, gui/guest_desktop, gui/wifi_local, boot/serial, boot/gop, gui/window, gui/widget, gui/widget_tabstrip, gui/widget_console_grid, gui/chat_app, gui/cadence_mark, gui/widget_image, gui/image_viewer, svc/command, dev/input/ps2, gui/lock_screen, sec/session, svc/history, gui/account_local
 ;; CAPS
 ;; OWNER saga:gui
 
@@ -1447,13 +1447,42 @@ wmx_stage_denied:
     mov  qword [rsi + RSP_VAL], 0
     ret
 
+; Native reveal without keyboard transfer. EDI exact live/minimized slot
+; already authorized by its caller -> EAX1 revealed,0 unavailable. Hidden/closed
+; slots cannot be surfaced. The existing raise path owns focus policy.
+wmx_reveal_slot:
+    push r12
+    mov r12d,edi
+    cmp edi,WM_MAX
+    jae .bad
+    lea rax,[rel wm_state]
+    cmp dword [rax+r12*4],WM_VISIBLE
+    je .show
+    cmp dword [rax+r12*4],WM_MIN
+    jne .bad
+.show:
+    call wmx_raise_stamp
+    lea rax,[rel wm_state]
+    mov dword [rax+r12*4],WM_VISIBLE
+    lea rax,[rel wm_attn]
+    mov byte [rax+r12],1
+    call wmx_draw_all
+    mov eax,1
+    pop r12
+    ret
+.bad:
+    xor eax,eax
+    pop r12
+    ret
+
 wmx_raise_slot:
     cmp  edi, WM_MAX
     jae  wmx_bad_slot_refuse
+    sub rsp,24
 %ifdef IMAGE_VIEWER_BUILT
-    push rdi
+    mov [rsp],rdi
     call widget_image_rebind_window     ; decode/cache repair in normal context, never paint
-    pop  rdi
+    mov rdi,[rsp]
 %endif
     call wmx_frame_may_focus
     test eax, eax
@@ -1472,6 +1501,7 @@ wmx_raise_slot:
     mov  byte [rcx + rdi], 0
     call wgt_focus_window
     call wmx_draw_all
+    add rsp,24
     ret
 .restack:
     ; F2b-2: a non-OWNER frame brings the window up but never takes the keyboard.
@@ -1479,6 +1509,7 @@ wmx_raise_slot:
     lea  rcx, [rel wm_state]
     mov  dword [rcx + rdi*4], WM_VISIBLE
     call wmx_draw_all
+    add rsp,24
     ret
 
 ; wmx_move_slot(edi=slot, esi=x, edx=y) — erase old rect, set origin, clamp, redraw.
@@ -1756,6 +1787,158 @@ wmx_find_free_slot:
     mov  eax, -1
     ret
 
+; Ordinary app launch: same arguments as wmx_open_window plus R10=stable app
+; identity (a native constant address, compared only, never dereferenced).
+; Placement runs before the caller materializes widgets or paints. Explicit
+; geometry/replay callers retain wmx_open_window. Neither API grants authority.
+wmx_open_app_window:
+    push r10
+    push rsi
+    push rdx
+    call wmx_open_window
+    cmp  eax, -1
+    je   .out
+    mov  edi, eax
+    mov  rsi, [rsp + 16]
+    mov  edx, [rsp + 8]
+    mov  ecx, [rsp]
+    push rax
+    call wmx_place_app_window
+    pop  rax
+.out:
+    add  rsp, 24
+    ret
+
+; EDI=new slot, RSI=stable app identity, EDX/ECX=preferred default x/y.
+; Only this new window is written. Opening order is separate from focus/z-order;
+; moved predecessors retain their geometry, and their current origin is used.
+; The latest live/minimized same-app window of the same owner is the anchor.
+; Wrap BOTH axes to the bounded default if the next rectangle would leave the
+; work area. Oversized windows start at zero on their oversized axis.
+wmx_place_app_window:
+    cmp  edi, WM_MAX
+    jae  .return
+    test rsi, rsi
+    jz   .return
+    push rbx
+    push rbp
+    push r12
+    push r13
+    push r14
+    push r15
+    mov  r12d, edi
+    mov  r13, rsi
+    mov  r14d, edx
+    mov  r15d, ecx
+    lea  rax, [rel wm_owner]
+    mov  rbp, [rax + r12*8]
+    mov  r8d, [rel fb_width]
+    lea  rax, [rel wm_w]
+    sub  r8d, [rax + r12*4]
+    jae  .x_room
+    xor  r8d, r8d
+.x_room:
+    mov  r9d, [rel fb_height]
+    sub  r9d, TASKBAR_H
+    jbe  .no_y_room
+    lea  rax, [rel wm_h]
+    sub  r9d, [rax + r12*4]
+    jae  .y_room
+.no_y_room:
+    xor  r9d, r9d
+.y_room:
+    test r14d, r14d
+    jns  .default_x_high
+    xor  r14d, r14d
+.default_x_high:
+    cmp  r14d, r8d
+    jbe  .default_y
+    mov  r14d, r8d
+.default_y:
+    test r15d, r15d
+    jns  .default_y_high
+    xor  r15d, r15d
+.default_y_high:
+    cmp  r15d, r9d
+    jbe  .scan_begin
+    mov  r15d, r9d
+.scan_begin:
+    mov  ebx, -1
+    xor  r10d, r10d
+    xor  r11d, r11d
+.scan:
+    cmp  r11d, WM_MAX
+    jae  .anchor
+    lea  rax, [rel wm_state]
+    mov  eax, [rax + r11*4]
+    cmp  eax, WM_VISIBLE
+    je   .live
+    cmp  eax, WM_MIN
+    jne  .next
+.live:
+    lea  rax, [rel wm_place_app_id]
+    cmp  [rax + r11*8], r13
+    jne  .next
+    lea  rax, [rel wm_owner]
+    cmp  [rax + r11*8], rbp
+    jne  .next
+    lea  rax, [rel wm_gen]
+    mov  ecx, [rax + r11*4]
+    lea  rax, [rel wm_place_gen]
+    cmp  [rax + r11*4], ecx
+    jne  .next
+    lea  rax, [rel wm_place_seq]
+    mov  rax, [rax + r11*8]
+    cmp  rax, r10
+    jbe  .next
+    mov  r10, rax
+    mov  ebx, r11d
+.next:
+    inc  r11d
+    jmp  .scan
+.anchor:
+    cmp  ebx, -1
+    je   .wrap
+    lea  rax, [rel wm_x]
+    mov  esi, [rax + rbx*4]
+    add  esi, GUI_TITLE_H
+    jc   .wrap
+    cmp  esi, r8d
+    ja   .wrap
+    lea  rax, [rel wm_y]
+    mov  edx, [rax + rbx*4]
+    add  edx, GUI_TITLE_H
+    jc   .wrap
+    cmp  edx, r9d
+    ja   .wrap
+    jmp  .place
+.wrap:
+    mov  esi, r14d
+    mov  edx, r15d
+.place:
+    lea  rax, [rel wm_x]
+    mov  [rax + r12*4], esi
+    lea  rax, [rel wm_y]
+    mov  [rax + r12*4], edx
+    lea  rax, [rel wm_place_app_id]
+    mov  [rax + r12*8], r13
+    lea  rax, [rel wm_gen]
+    mov  ecx, [rax + r12*4]
+    lea  rax, [rel wm_place_gen]
+    mov  [rax + r12*4], ecx
+    inc  qword [rel wm_place_clock]
+    mov  rcx, [rel wm_place_clock]
+    lea  rax, [rel wm_place_seq]
+    mov  [rax + r12*8], rcx
+    pop  r15
+    pop  r14
+    pop  r13
+    pop  r12
+    pop  rbp
+    pop  rbx
+.return:
+    ret
+
 ; wmx_open_window(rdi=title, esi=x, edx=y, ecx=w, r8d=h, r9d=restore_class)
 ; -> eax=slot/-1. This is the ordinary API used by the F1 demo.
 wmx_open_window:
@@ -1774,6 +1957,9 @@ wmx_open_window:
     cmp  eax, -1
     je   .open_out
     mov  edx, eax
+    ; An explicit/replayed occupant cannot inherit an old app placement key.
+    lea  rcx, [rel wm_place_app_id]
+    mov  qword [rcx + rdx*8], 0
     lea  rcx, [rel wm_title]
     mov  [rcx + rdx*8], rbx
     lea  rcx, [rel wm_x]
@@ -1898,6 +2084,12 @@ wmx_close_slot:
     push r12
     CADENCE_BATCH_BEGIN
     mov  r12d, edi
+    call adopt_confirm_retire
+    mov edi, r12d                      ; each retire hook receives original slot
+    call format_confirm_retire
+    mov edi,r12d
+    call account_local_close           ; erase while original window/widgets still exist
+    mov edi,r12d
 %ifdef WIFI_LOCAL_GUI_BUILT
     call wifi_local_close               ; wipe before retirement or slot reuse
     mov edi, r12d                      ; callback may clobber caller-saved operands
@@ -2395,14 +2587,16 @@ cmd_verb_winnew:
     call chat_out_reset
     lea  rdi, [rel str_wn_full]         ; " winnew=ERR no_free_slot"
     call chat_put_str
-    jmp  .stage
+    mov  qword [r13 + RSP_CODE], CMDE_BUSY  ; G-11: a refusal is never OK; the text is unchanged
+    jmp  .staged
 .locked:
     mov  rsi, r13
     call wmx_stage_locked
     jmp  .out
 .stage:
-    mov  byte [rel chat_out_ready], 1
     mov  qword [r13 + RSP_CODE], CMDE_OK
+.staged:
+    mov  byte [rel chat_out_ready], 1
     mov  [r13 + RSP_VAL], r14
 .out:
     pop  r15
@@ -2480,21 +2674,27 @@ cmd_verb_raise:
     pop  rax
     lea  rdi, [rel str_rs_guest_unavailable]
     cmp  eax, 1
-    je   .guest_text
+    je   .guest_refused
     lea  rdi, [rel str_rs_guest_full]
     cmp  eax, 2
-    je   .guest_text
+    je   .guest_refused
     lea  rdi, [rel str_rs_guest_shown]
-.guest_text:
     call chat_put_str
     jmp  .stage
+.guest_refused:                         ; G-11: not available now / no free slot
+    call chat_put_str
+    mov  qword [r13 + RSP_CODE], CMDE_BUSY
+    jmp  .staged
 .bad:
     call chat_out_reset
     lea  rdi, [rel str_rs_bad]          ; " raise=ERR bad_idx"
     call chat_put_str
+    mov  qword [r13 + RSP_CODE], CMDE_BADSEL ; G-11: no live window at that index
+    jmp  .staged
 .stage:
-    mov  byte [rel chat_out_ready], 1
     mov  qword [r13 + RSP_CODE], CMDE_OK
+.staged:
+    mov  byte [rel chat_out_ready], 1
     mov  [r13 + RSP_VAL], r12
     jmp  .out
 .locked:
@@ -2516,6 +2716,18 @@ cmd_verb_raise:
 ; or another principal's for a non-owner) " window=ERR denied", CMDE_AUTHDENY.
 cmd_verb_winmove:
     call cmd_handler_prologue
+    ; Native Terminal delegation; -1 preserves the ordinary request path.
+    cmp qword [rel wmx_terminal_move_op],0
+    je .ordinary
+    push rdi
+    push rsi
+    call [rel wmx_terminal_move_op]
+    pop rsi
+    pop rdi
+    cmp eax,-1
+    je .ordinary
+    ret
+.ordinary:
     push rbx
     push r12
     push r13
@@ -2577,9 +2789,12 @@ cmd_verb_winmove:
     call chat_out_reset
     lea  rdi, [rel str_wmv_bad]         ; " winmove=ERR bad_idx"
     call chat_put_str
+    mov  qword [r13 + RSP_CODE], CMDE_BADSEL ; G-11: no live window at that index
+    jmp  .staged
 .stage:
-    mov  byte [rel chat_out_ready], 1
     mov  qword [r13 + RSP_CODE], CMDE_OK
+.staged:
+    mov  byte [rel chat_out_ready], 1
     mov  [r13 + RSP_VAL], r12
     jmp  .out
 .locked:
@@ -2662,9 +2877,12 @@ cmd_verb_winresize:
     call chat_out_reset
     lea  rdi, [rel str_wrs_bad]         ; " winresize=ERR bad_idx"
     call chat_put_str
+    mov  qword [r13 + RSP_CODE], CMDE_BADSEL ; G-11: no live window at that index
+    jmp  .staged
 .stage:
-    mov  byte [rel chat_out_ready], 1
     mov  qword [r13 + RSP_CODE], CMDE_OK
+.staged:
+    mov  byte [rel chat_out_ready], 1
     mov  [r13 + RSP_VAL], r12
     jmp  .out
 .locked:
@@ -2727,9 +2945,12 @@ cmd_verb_wingeom:
     call chat_out_reset
     lea  rdi, [rel str_wg_bad]          ; " wingeom=ERR bad_idx"
     call chat_put_str
+    mov  qword [r13 + RSP_CODE], CMDE_BADSEL ; G-11: no live window at that index
+    jmp  .staged
 .stage:
-    mov  byte [rel chat_out_ready], 1
     mov  qword [r13 + RSP_CODE], CMDE_OK
+.staged:
+    mov  byte [rel chat_out_ready], 1
     mov  [r13 + RSP_VAL], r12
     pop  r13
     pop  r12
@@ -2974,6 +3195,7 @@ wmx_selftest:
 %include "core/abi/wdata.inc" ; WDATA_DEFER; standalone assemblies expand blocks in place
 ; Writable state: deferred to the page-isolated WDATA region (core/abi/wdata.inc).
 %macro WDATA_gui_window_mgmt_0 0
+wmx_terminal_move_op: dq 0
 str_verb_winnew:    db "WINNEW", 0
 str_verb_raise:     db "RAISE", 0
 str_verb_winmove:   db "WINMOVE", 0
@@ -3038,6 +3260,10 @@ wmx_move_tsc_max:   dq 0                 ; worst since boot (INPUTSET reset clea
 wmx_bad_slots:      dd 0                 ; out-of-range slots refused at a mutator entry
 wm_recent_clock:    dq 0                 ; shared session-only focus/launch order
 wm_recent_seq:      times WM_MAX dq 0
+wm_place_clock:     dq 0                ; launch order only, never raised/focused
+wm_place_seq:       times WM_MAX dq 0
+wm_place_app_id:       times WM_MAX dq 0   ; stable native app identity, not authority
+wm_place_gen:       times WM_MAX dd 0   ; refuse retired/reused window lifetimes
 wmx_owner_reset_op: dq 0                ; trusted window-lifetime observer, no authority
 wm_owner:           times WM_MAX dq 0    ; F2: per-slot owner principal (0 unowned, WM_OWNER_CHROME)
 wm_native_gen:      times WM_MAX dq 0    ; RC-task-manager: bound native module generation

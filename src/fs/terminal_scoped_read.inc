@@ -1,0 +1,26 @@
+; Native-only staged FS provider contract. SEC ABI_V1 desc256/scope128.
+; No wire object, claimed PID, path prefix or mount handle is authority.
+%ifndef TERMINAL_SCOPED_READ_INCLUDED
+%define TERMINAL_SCOPED_READ_INCLUDED 1
+TFS_DESC_BYTES equ 256
+TFS_OBJECT_BYTES equ 256
+TFS_READ_MAX equ 65536
+TFS_D_OP equ 56
+TFS_D_SCOPE equ 64
+TFS_D_TARGET equ 72
+TFS_D_GEN equ 80
+TFS_D_PROTECTED equ 88
+TFS_D_KEY equ 136
+TFS_DATA_READ equ 20
+TFS_FOLDER_READ equ 21
+TFS_O_VERSION equ 0
+TFS_O_CLASS equ 8
+TFS_O_TARGET equ 16
+TFS_O_GEN equ 24
+TFS_O_SIZE equ 32
+TFS_O_HANDLE equ 40
+TFS_O_KEY equ 64
+TFS_O_IDENTITY equ 128
+TFS_PUBLIC_FILE equ 1
+TFS_PUBLIC_DIRECTORY equ 2
+%endif

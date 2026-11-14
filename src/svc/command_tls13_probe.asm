@@ -1,7 +1,7 @@
 ;; MODULE svc/command_tls13_probe
 ;; LAYER 5
 ;; EXPORTS command_tls13_probe_init
-;; IMPORTS core/capability, core/lib/fmt, net/tls13, svc/command, svc/command_tls13
+;; IMPORTS core/capability, core/lib/fmt, core/time, net/tls13, svc/command, svc/command_tls13
 ;; CAPS
 ;; OWNER saga:net
 ; Same ordinary TLS engine, no trust/root/owner exception. TLSOBS is a bounded
@@ -249,6 +249,13 @@ tlsp_cmd_obs:
     inc r12d
     cmp r12d, 32
     jb .hash
+    ; Read the same synchronized UTC source used by ordinary certificate policy.
+    ; Zero remains an unavailable clock; never substitute the retained policy date.
+    lea rdi, [rel tlsp_current_utc]
+    call tlsp_text
+    call time_wall_utc_now_s
+    mov rdi, rax
+    call tlsp_u64
     jmp .finish
 .unavailable:
     lea rdi, [rel tlsp_obs_prefix]
@@ -378,6 +385,7 @@ tlsp_dash: db "-",0
 tlsp_crlf: db 13,10,0
 tlsp_attempt: db " attempt=",0
 tlsp_result: db " result=",0
+tlsp_current_utc: db " current_utc=",0
 tlsp_policy_utc: db " policy_utc=",0
 tlsp_peer_port: db " peer_port=",0
 tlsp_policy_reason: db " policy_reason=",0

@@ -1838,6 +1838,10 @@ gws_accept:
     je .refused
     cmp qword [rel gws_back], 0          ; no heap slab -> no snapshot storage
     je .refused
+    ; R10-H2: successful geometry validation AND source/back admission must
+    ; finish before pixel effects or candidate-dependent addresses/counts.
+    ; The ingress size LFENCE and publication SFENCE serve other boundaries.
+    lfence
     mov rdi, [rel gws_back]
     mov rsi, [rel gws_front]
     mov ecx, GWS_MAX / 8

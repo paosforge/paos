@@ -1,8 +1,8 @@
 ;; MODULE svc/command_audit
 %include "core/abi/build_profile.inc"
 ;; LAYER 5
-;; EXPORTS audit_sec_aer_event, audit_sec_session_unlock, audit_log_line, audit_log_net, audit_replace_newest, audit_selftest, cmd_verb_audit, audit_sec_event, audit_sec_rsp_meta, audit_sec_save, audit_sec_restore, audit_guardian_watch_tick, audit_sec_advisor_view, audit_sec_held, audit_sec_iommu_sync, audit_sec_iommu_event, audit_sec_iommu_amd_event, audit_sec_hid_drain, audit_sec_arp_drain, audit_sec_keyprov_refusal, audit_sec_airlock_drain
-;; IMPORTS boot/serial, boot/header, core/lib/fmt, core/lib/mem, core/lib/str, core/time, core/capability, sec/principal, svc/command, svc/resilience, dev/usb/hid, net/arp_cache, svc/command_udp, sec/airlock, svc/guardian_alert, sec/cpu_security_report, sec/cpu_microcode_bsp_report
+;; EXPORTS audit_sec_mca_drain, audit_sec_aer_event, audit_sec_session_unlock, audit_log_line, audit_log_net, audit_replace_newest, audit_selftest, cmd_verb_audit, audit_sec_event, audit_sec_rsp_meta, audit_sec_save, audit_sec_restore, audit_guardian_watch_tick, audit_sec_advisor_view, audit_sec_held, audit_sec_iommu_sync, audit_sec_iommu_event, audit_sec_iommu_amd_event, audit_sec_hid_drain, audit_sec_arp_drain, audit_sec_keyprov_refusal, audit_sec_airlock_drain
+;; IMPORTS core/mca_poll, svc/cpu_policy_report, boot/serial, boot/header, core/lib/fmt, core/lib/mem, core/lib/str, core/time, core/capability, sec/principal, svc/command, svc/resilience, dev/usb/hid, net/arp_cache, svc/command_udp, sec/airlock, svc/guardian_alert, sec/cpu_security_report, sec/cpu_microcode_bsp_report
 ;; CAPS
 ;; OWNER saga:command
 ; ============================================================================
@@ -148,7 +148,7 @@ AUDIT_SEC_C_IOMMU        equ 6         ; native VT-d observation, no enforcement
 AUDIT_SEC_C_GUARDIAN     equ 7         ; Guardian watch-tier SHADOW decision (no effect; SEC-GA1)
 AUDIT_SEC_C_HISTORY      equ 8         ; svc/history: a query, reopen or clear, or a refused append (RC-history H1)
 AUDIT_SEC_C_RESERVED     equ 9
-AUDIT_SEC_C_HARDWARE     equ 10        ; native polled AER observation, containment unknown
+AUDIT_SEC_C_HARDWARE     equ 10        ; native AER/MCA observations, handling unknown
 AUDIT_SEC_NCLASS         equ 10
 ; verdict: 0 or anything above INFO is stored as INFO, never as allowed/refused
 AUDIT_SEC_V_ALLOWED equ 1              ; admitted, and the synchronous response was OK
@@ -164,6 +164,7 @@ AUDIT_HID_MAX_LIVE         equ 4
 AUDIT_SEC_R_IOMMU_AMD      equ 0x0900  ; |2 IO_PAGE_FAULT, backend4
 AUDIT_SEC_R_IOMMU_VTD      equ 0x0600  ; | FRCD reason byte: observed live VT-d fault
 AUDIT_AER_MAX_LIVE         equ 4       ; independent finite native hardware detail quota
+AUDIT_SEC_R_MCA_OBSERVED   equ 0x0D01  ; CPU summary of passive non-corrected samples; handling unknown
 AUDIT_SEC_R_AER_POLL       equ 0x0C00  ; |1 nonfatal,2 fatal,3 both; observation only
 AUDIT_IOMMU_MAX_LIVE       equ 4       ; native storms cannot wash owner records
 AUDIT_SEC_R_SESSION_NATIVE equ 0x0A00 ; bounded native session outcome/ingress/method
@@ -509,6 +510,7 @@ audit_guardian_watch_tick:
     push rbx
     cmp  byte [rel audit_sec_test_active], 0
     jne  .out                              ; synthetic KAT events never consume a window
+    call audit_sec_mca_drain                ; bounded retained CPU observations; BSP writer only
     call iommu_sec_drain                    ; finite2 native records before10s refusal watch
     call audit_sec_hid_drain                ; finite2 lower-layer HID observations
     call audit_sec_arp_drain                ; finite2 native ARP detail attempts
@@ -727,6 +729,23 @@ audit_guardian_watch_tick:
     mov  r9d, 1
     mov  rcx, -1
 .aer_sum_ok:
+    mov  rax, [rel audit_mca_observed]
+    cmp  rax, -1
+    jne  .mca_quality_exact
+    or   r11d, 1024                        ; eleventh native source, lower bound
+.mca_quality_exact:
+    mov  r8, rax
+    sub  r8, [rel audit_guardian_last_mca_observed]
+    mov  [rel audit_guardian_last_mca_observed], rax
+    jae  .mca_delta
+    xor  r8d, r8d
+.mca_delta:
+    or   r10, r8
+    add  rcx, r8
+    jnc  .mca_sum_ok
+    mov  r9d, 1
+    mov  rcx, -1
+.mca_sum_ok:
     add  rdx, rcx
     jnc  .sum_ok
     mov  r9d, 1                           ; known sum is only a saturating minimum
@@ -1157,6 +1176,91 @@ audit_sec_event:
     pop  r13
     pop  r12
     pop  rbx
+    ret
+
+; BSP pull bridge over the accepted CPU-private original observations. Never
+; call AUDIT on an AP or in #MC. Exactly32 single-attempt stable RAM copies:
+; no hardware sampling, acknowledgement, recovery assessment or status clear.
+; Each typed row is a CPU summary (not one invented bank/error record). Original
+; bank/STATUS/ordinal and log losses remain in diag and HW mcalog. The independent
+; total includes refused raw logs; typed omissions coalesce by observation count.
+; Unavailable/unstable/inconsistent snapshots do not consume a CPU baseline.
+; Zero is never a quiet-run/containment assertion. KAT never consumes real state.
+audit_sec_mca_drain:
+    cmp byte [rel audit_sec_test_active],0
+    jne .out
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    sub rsp,32
+    xor ebx,ebx
+    lea r12,[rel audit_mca_cpu_seen]
+.cpu:
+    mov edi,ebx
+    mov rsi,rsp
+    call mca_poll_observed_copy
+    test eax,eax
+    jnz .next
+    mov r15,[rsp]                        ; actual sampled seen ordinal/count
+    mov rax,[rsp+8]
+    cmp rax,r15
+    ja .next
+    mov rcx,[rsp+16]
+    cmp rcx,r15
+    ja .next
+    add rax,rcx
+    jnc .extent
+    mov rax,-1
+.extent:
+    cmp rax,r15                          ; logged + dropped, saturating
+    jne .next
+    cmp qword [rsp+24],0
+    jne .next
+    mov r13,r15
+    sub r13,[r12+rbx*8]
+    jbe .next                            ; no replay after equal or regressed count
+    mov [r12+rbx*8],r15                   ; consume before callbacks/quota
+    add [rel audit_mca_observed],r13
+    jnc .counted
+    mov qword [rel audit_mca_observed],-1
+.counted:
+    cmp qword [rel audit_sec_seq],-1
+    je .coalesce
+    mov edi,AUDIT_SEC_C_HARDWARE
+    mov esi,PRIN_SYSTEM
+    call audit_sec_held
+    cmp eax,AUDIT_AER_MAX_LIVE             ; shared finite hardware detail quota
+    jae .coalesce
+    mov edi,AUDIT_SEC_C_HARDWARE | (AUDIT_SEC_V_INFO << 8) | (AUDIT_SEC_R_MCA_OBSERVED << 16)
+    mov esi,PRIN_SYSTEM
+    mov rdx,rbx                          ; original dense CPU, no inferred bank
+    call audit_sec_event
+    test eax,eax
+    jz .coalesce
+    mov rax,[rel audit_sec_seq]
+    dec eax
+    and eax,AUDIT_SEC_NREC-1
+    imul eax,AUDIT_SEC_REC_SZ
+    lea rdx,[rel audit_sec_ring]
+    mov byte [rdx+rax+ASR_BACKEND],6       ; passive native MCA; handling unknown
+    dec r13                              ; one retained CPU summary detail
+.coalesce:
+    add [rel audit_mca_coalesced],r13
+    jnc .next
+    mov qword [rel audit_mca_coalesced],-1
+.next:
+    inc ebx
+    cmp ebx,32
+    jb .cpu
+    add rsp,32
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+.out:
     ret
 
 ; Native BSP aer_poll producer only; no IRQ/AP/synthetic AERINJECT caller.
@@ -2147,6 +2251,7 @@ audit_parse_view:
 ; Exact, count-free CPU view. 0=legacy parser,1=cpu,-1=malformed cpu prefix.
 ; Read each byte only after its predecessor matched; short tokens are safe.
 audit_parse_cpu:
+    mov dword [rel audit_cpu_policy_page],0
     xor  eax, eax
     test rdi, rdi
     jz   .out
@@ -2165,6 +2270,10 @@ audit_parse_cpu:
     cmp  byte [rdi], 'u'
     jne  .out
     inc  rdi
+    cmp byte [rdi],0
+    je .tail
+    cmp byte [rdi],' '
+    jne .bad
 .tail:
     cmp  byte [rdi], ' '
     jne  .end
@@ -2174,15 +2283,52 @@ audit_parse_cpu:
     mov  eax, 1
     cmp  byte [rdi], 0
     je   .out
+    ; Exact optional policy page, bounded canonical token parser.
+    lea rsi,[rel audit_policy_word]
+.policy_word:
+    mov al,[rsi]
+    test al,al
+    jz .policy_number
+    cmp [rdi],al
+    jne .bad
+    inc rdi
+    inc rsi
+    jmp .policy_word
+.policy_number:
+    call cpu_policy_report_parse
+    test eax,eax
+    js .bad
+    inc eax
+    mov [rel audit_cpu_policy_page],eax
+    mov eax,1
+    ret
+.bad:
     mov  rax, -1
 .out:
     ret
+
+audit_policy_word: db 'policy ',0
 
 ; Same staged buffer and whole-snapshot refusal as existing AUDIT views.
 ; SHA256 binds the reviewed source census in docs/t1_6_absent_boundaries.json.
 audit_absent_boundary_word: db " ABSENTBOUNDARY=v1;sha256=de9a352fa0986522a95ffadaf716d0c291d6a188d7ca50e46a823a178fd54e0c;n=3;kpti=no-host-cpl3;swapgs_entry=no-host-user-syscall;user_return=no-host-user-return;other=not-exempt", 0
 audit_cpu_view:
     call audit_out_reset
+    mov edx,[rel audit_cpu_policy_page]
+    test edx,edx
+    jz .legacy
+    dec edx
+    lea rdi,[rel audit_out_buf]
+    mov esi,AUDIT_OUT_MAX
+    call cpu_policy_report_page
+    test rax,rax
+    js .full
+    lea rdx,[rel audit_out_buf]
+    add rdx,rax
+    mov [rel audit_out_cur],rdx
+    ret
+.legacy:
+    call cpu_policy_report_capture
     lea  rdi, [rel audit_out_buf]
     mov  esi, AUDIT_OUT_MAX
     xor  edx, edx
@@ -2603,10 +2749,10 @@ audit_guardian_window_render:
 %if !PAOS_PUBLIC_BUILD
 ; BEGIN Guardian sources renderer
 ; Current owner-seen observations, not the composition of a historical watch
-; window. Snapshot all ten sources before the first formatting helper. No
+; window. Snapshot all eleven sources before the first formatting helper. No
 ; clock, watch, producer, acknowledgement or event call; no private identities.
-; Header/rows fit1320 bytes even with every value MAX and every quality lower.
-AUDIT_GUARDIAN_SOURCES_MAX equ 1320
+; Header/rows fit1480 bytes even with every value MAX and every quality lower.
+AUDIT_GUARDIAN_SOURCES_MAX equ 1480
     times -((AUDIT_GUARDIAN_SOURCES_MAX + 24) >= AUDIT_OUT_MAX) db 0
 audit_guardian_sources_render:
     push rbx
@@ -2615,7 +2761,7 @@ audit_guardian_sources_render:
     sub  rsp, GUARDIAN_SOURCES_STACK
     mov  rdi, rsp
     mov  esi, GUARDIAN_SOURCES_SIZE
-    call guardian_alert_sources_snapshot ; fixed non-null writable stack264
+    call guardian_alert_sources_snapshot ; fixed non-null writable stack288
     mov  byte [rel audit_out_ready], 0
     call audit_out_reset
     lea  rdi, [rel str_audit_gsources_hdr]
@@ -2662,9 +2808,14 @@ audit_guardian_sources_render:
     call audit_put_str
     mov  rdi, [r12 + 16]                 ; 0 or3: both per-source counts same quality
     call .quality
+    cmp  ebx, 10
+    jne  .row_done
+    lea  rdi, [rel str_audit_gsources_mca_handling]
+    call audit_put_str
+.row_done:
     add  r12, 24
     inc  ebx
-    cmp  ebx, 10
+    cmp  ebx, 11
     jb   .row
     add  rsp, GUARDIAN_SOURCES_STACK
     pop  r15
@@ -3217,7 +3368,7 @@ str_audit_gwindow_overflow: db " aggregate_overflow=", 0
 str_audit_gwindow_ms: db " sample_ms=", 0
 ; END Guardian window strings
 ; BEGIN Guardian sources strings
-str_audit_gsources_hdr: db " audit guardian_sources_v=2 scope=observations n=10 total=", 0
+str_audit_gsources_hdr: db " audit guardian_sources_v=3 scope=observations n=11 total=", 0
 str_audit_gsources_unseen: db " unseen=", 0
 str_audit_gsources_total_q: db " total_q=", 0
 str_audit_gsources_unseen_q: db " unseen_q=", 0
@@ -3238,6 +3389,9 @@ str_audit_gsources_session: db "session", 0
 str_audit_gsources_keyprov: db "keyprov", 0
 align 8
 str_audit_gsources_aer: db "aer_uncorrected",0
+str_audit_gsources_mca: db "mca_noncorrected",0
+str_audit_gsources_mca_handling: db " handling=unknown",0
+align 8
 audit_guardian_sources_names:
     ; PaOS's flat PE payload has no fixups for static absolute pointers.
     ; Resolve each relative entry against this table's live RIP-relative base.
@@ -3251,6 +3405,7 @@ audit_guardian_sources_names:
     dq str_audit_gsources_session - audit_guardian_sources_names
     dq str_audit_gsources_keyprov - audit_guardian_sources_names
     dq str_audit_gsources_aer - audit_guardian_sources_names
+    dq str_audit_gsources_mca - audit_guardian_sources_names
 ; END Guardian sources strings
 ; BEGIN Guardian status strings
 str_audit_guardian_hdr: db " audit guardian_v=1 mode=shadow clock=", 0
@@ -3273,6 +3428,7 @@ audit_req_arg:   resq 1                 ; AUDIT request token (RSP_VAL echo)
 audit_head:      resd 1                 ; next-write slot
 audit_net_run:   resd 1                 ; non-admit rows appended since the last anchor
 audit_out_ready: resb 1                 ; 1 = audit_out_buf holds a staged reply
+audit_cpu_policy_page: resd 1
 audit_out_full:  resb 1                 ; a staged append was incomplete
 alignb 8
 audit_ring:      resb (AUDIT_NREC * AUDIT_REC_SZ)
@@ -3329,6 +3485,10 @@ audit_guardian_last_session_refused: resq 1 ; independent native unlock-refusal 
 audit_guardian_last_airlock_refused: resq 1 ; independent native AIRLOCK refusal baseline
 audit_guardian_last_hid_refused: resq 1 ; independent native HID refusal baseline
 audit_guardian_last_arp_observed: resq 1 ; independent normalized ARP INFO baseline
+audit_mca_observed: resq 1              ; sum of consumed real per-CPU sampled transitions
+audit_mca_coalesced: resq 1             ; observations without a separate typed CPU summary
+audit_mca_cpu_seen: resq 32             ; BSP baselines; never KAT-restored/reused
+audit_guardian_last_mca_observed: resq 1
 audit_aer_observed: resq 1              ; changed native uncorrected snapshots, not hardware totals
 audit_aer_coalesced: resq 1             ; detail omitted at typed quota/sequence ceiling
 audit_aer_last_us: resq 1               ; consumed native poll identity, not KAT restored

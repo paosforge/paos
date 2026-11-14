@@ -2,7 +2,7 @@
 %include "core/abi/build_profile.inc"
 ;; LAYER 0
 ;; EXPORTS boot_guest_foundation_init, efi_entry, boot_services, runtime_services, image_handle, system_table, boot_ms_now, boot_idle_compositor_ticks, boot_bg4_ebs_tsc, boot_bg5_ready_tsc, boot_bg5b_ack_tsc, boot_bg6_pixel_tsc, boot_p7_tsc, boot_prepixel_tsc, boot_device_cuts_tsc, boot_p1_ckpt_tsc, boot_native_cost_tsc, boot_native_cost_done, boot_nic_ready_tsc, boot_nic_ready_observed, boot_hv_foundation_ready_tsc, boot_hv_foundation_ready_ms, boot_hv_foundation_ready, boot_budget_run_full, boot_budget_gated, boot_budget_class, boot_budget_full_failures, boot_settle_tsc, boot_settle_state
-;; IMPORTS hv/app_vm, gui/app_install, gui/app_ingress, gui/app_launch_flow, hv/app_transport, gui/app_launcher, boot/native_driver_preload, boot/native_driver_report, svc/boot_failure_control, core/crash_identity, core/maintenance_sources, core/boot_maintenance_source, svc/command_memory_consumer, svc/service_progress, svc/recovery_boot, svc/recovery_controller, svc/device_failure_record, hv/warm_lifecycle, svc/lab_return, gui/power_exec, gui/lock_fade, core/mca_poll, core/mca_init, cognition/ai_intent_controller, hv/vmx, hv/hv_ops, sec/airlock, svc/boot_clock, boot/boot_menu, boot/serial, boot/paging, boot/pmod_loader, boot/gdt, boot/gop, boot/boot_v2_health, boot/menu_labels_qemu, bus/acpi, config/keep_config, core/idt, core/diag, core/lib/str, core/lib/fmt, core/lib/strmem_kat, core/log, core/heap, core/memmap, core/time, core/sched, core/dma, net/tls13, gui/console, gui/liveness_panel, sec/job_receipt, svc/hotpatch, svc/command_filmstrip, svc/command_compat, dev/net/e1000e, dev/net/cdc_ecm, dev/net/cdc_ncm, dev/net/ax88179, net/netdev, hv/vtd, hv/amdvi, gui/lock_screen, sec/session, core/reset_wipe, sec/owner_stage_key, dev/snd/hda_boot_handoff, boot/firmware_logo, boot/indicator, core/deadman_identity, svc/normal_deadman_live, gui/config_prefs, gui/command_idle_service
+;; IMPORTS gui/format_confirm, gui/adopt_confirm, sec/node_identity_store, gui/app_isolation, hv/app_vm, gui/app_remove, gui/app_install, gui/app_ingress, gui/app_launch_flow, hv/app_transport, gui/app_launcher, boot/native_driver_preload, boot/native_driver_report, svc/boot_failure_control, core/crash_identity, core/maintenance_sources, core/boot_maintenance_source, svc/command_memory_consumer, svc/service_progress, svc/recovery_boot, svc/recovery_controller, svc/device_failure_record, hv/warm_lifecycle, svc/lab_return, gui/power_exec, gui/lock_fade, core/mca_poll, core/mca_init, cognition/ai_intent_controller, hv/vmx, hv/hv_ops, sec/airlock, svc/boot_clock, boot/boot_menu, boot/serial, boot/paging, boot/pmod_loader, boot/gdt, boot/gop, boot/boot_v2_health, boot/menu_labels_qemu, bus/acpi, config/keep_config, core/idt, core/diag, core/lib/str, core/lib/fmt, core/lib/strmem_kat, core/log, core/heap, core/memmap, core/time, core/sched, core/dma, net/tls13, gui/console, gui/liveness_panel, sec/job_receipt, svc/hotpatch, svc/command_filmstrip, svc/command_compat, dev/net/e1000e, dev/net/cdc_ecm, dev/net/cdc_ncm, dev/net/ax88179, net/netdev, hv/vtd, hv/amdvi, gui/lock_screen, sec/session, core/reset_wipe, sec/owner_stage_key, sec/app_store_seal, dev/snd/hda_boot_handoff, boot/firmware_logo, boot/indicator, core/deadman_identity, svc/normal_deadman_live, gui/config_prefs, gui/command_idle_service, gui/terminal_consent, gui/account_local
 ;; (boot/header is the boot orchestrator — the upward L0->L1 call to core/idt is
 ;;  the documented modlint exception, like the L3->L4 register() edge)
 ;; CAPS
@@ -128,6 +128,15 @@ BOOT_TIMELINE_ID_DHCP_OFFER equ BOOT_TIMELINE_SPECIAL_BASE + 17
 %endif
 %if PAOS_LAB_B1_STARTING_FAILURE != 0 && PAOS_LAB_B1_STARTING_FAILURE != 1
 %error "PAOS_LAB_B1_STARTING_FAILURE must be 0 or 1"
+%endif
+%ifndef PAOS_LAB_B1_STARTING_STAGE
+%define PAOS_LAB_B1_STARTING_STAGE 0
+%endif
+%if PAOS_LAB_B1_STARTING_STAGE != 0 && PAOS_LAB_B1_STARTING_STAGE != 2
+%error "B1 startup failure stage must be P0 or P2"
+%endif
+%if PAOS_LAB_B1_STARTING_STAGE != 0 && !PAOS_LAB_B1_STARTING_FAILURE
+%error "B1 stage selection requires the explicit failure control"
 %endif
 %if PAOS_LAB_B1_STARTING_FAILURE
 %if PAOS_PUBLICITY_LAB_PROFILE != 1 || PAOS_SCAP_LAB_PROFILE != 1
@@ -550,7 +559,7 @@ efi_entry:
     call serial_string
 .selection_complete:
     C3WD_EDGE PBM_INIT_STAGE_P0, PBM_INIT_TRANSITION_STARTING
-%if PAOS_LAB_B1_STARTING_FAILURE
+%if PAOS_LAB_B1_STARTING_FAILURE && PAOS_LAB_B1_STARTING_STAGE == 0
     ; Only after the real P0 transition's durable readback. Safe/recovery bypass.
     call boot_b1_failure_control
 %endif
@@ -591,10 +600,16 @@ efi_entry:
     call recovery_state_preload         ; GE C2: read-only journal copy matching the CRC-bound Manager handoff
     call system_secret_preebs           ; SEC slice 2: the SYSTEM secret's NV|BS copy (only reachable before EBS) + the scrub gate
     call owner_stage_key_preebs         ; owner S1b-2c-0: the owner stage key Z (NV|BS, born pre-EBS from EFI_RNG/RDSEED/RDRAND, never from Y)
-    call app_install_grants_preebs      ; PaOSAppGrants MAC key: HKDF(Z, own label); Z itself is discarded by the next call
+    call app_install_grants_preebs      ; PaOSAppGrants MAC key: HKDF(Z, own label); owner_store below discards Z
+    call app_store_seal_preebs          ; app catalog MAC: separate HKDF(Z) domain before Z discard
+    call terminal_grants_store_preebs   ; distinct Terminal consent key domain before Z discard
+    call public_documents_seal_preebs   ; independent public Documents key domain before Z discard
     call owner_store_preebs             ; owner S1b-1: PaOSOwner A/B (NV|BS) select + PaOSOwnerStage commit, needs Z above
+    call terminal_grants_store_after_owner_preebs ; bind committed owner without consuming principal's handoff
+    call public_documents_seal_after_owner_preebs ; bind public Documents to committed owner handoff
     call replay_floor_preebs            ; SEC-replay-record-mac S1: PaOSReplayFloor (NV|BS) B/F' + RT mirror, needs ows_floor_seeded above
     call secureboot_snapshot           ; SB-sense: capture SecureBoot/SetupMode/MokListRT pre-EBS (firmware runtime live)
+    call node_identity_store_preebs    ; read-only authenticated identity before SYSTEM Y is taken
     call recovery_boot_preload          ; after Secure Boot + SMBIOS snapshot; optional owner-RSA grant stays OFF absent
     call usb_boot_media_snapshot        ; HUB0: read-only LoadedImage DevicePath -> USB boot-media port chain (hub policy)
     call boot_esp_guid_capture          ; RCQ-38 G1b: read-only boot-ESP partition GUID + removable bit (res_pack locator, Try admission)
@@ -722,6 +737,11 @@ efi_entry:
     call boot_budget_emit_armed
     BOOT_SELFTEST ST_LOG_MODE_POLICY
     C3WD_EDGE PBM_INIT_STAGE_P2, PBM_INIT_TRANSITION_STARTING
+%if PAOS_LAB_B1_STARTING_FAILURE && PAOS_LAB_B1_STARTING_STAGE == 2
+    ; Native IDT and persistent diag ring now own fatal faults. The firmware
+    ; trap hook remains retired; no new handler or recovery authority.
+    call boot_b1_failure_control
+%endif
 
     ; --- core self-tests, each bracketed by a diag-ring phase breadcrumb (PHASE) ---
     BOOT_PHASE_SELFTEST PH_IDT_ST, ST_IDT    ; int3 round-trip proves the IDT works
@@ -1183,6 +1203,7 @@ efi_entry:
     ;     principal/data prerequisites, then is cleared on return. ---
     lea  rdi, [rel job_receipt_selftest]
     BOOT_SELFTEST ST_NODE_ID_CONSUMER
+    call node_identity_store_activate ; KAT cleared synthetic identity; import only authenticated durable handoff
 
     ; --- L1 core (1075, qemu rung): SMP lock-SITE RETRO-AUDIT of the pre-C3
     ;     subsystems (bus/hal 1005 + net/netdev 1009). Each retro-declared lock
@@ -1280,6 +1301,7 @@ efi_entry:
     call memcon_declare                  ; common headless/GUI OWNER MUTATE declaration
     call app_bundle_declare              ; APP (EXTENSION) + APPKEY (SOVEREIGN_CONTROL), enrolled-owner trust
     call app_install_declare             ; owner console APPINSTALL, opens the decision card only
+    call app_isolation_declare
     call app_ingress_declare             ; owner console APPSCRIPT, signed script staging only
     ; --- M-usb (1031): xHCI controller bring-up + USB device-enumeration seam. Needs
     ;     PCI(pci_selftest)+HAL(hal_init) above + DMA(dma_selftest) + command registry.
@@ -1477,6 +1499,7 @@ efi_entry:
     call hook_classifier_edge_declare   ; typed native classifier lifecycle, no new authority
     call hook_forms_edge_declare        ; read-only current native FORMLIST inventory
     call hook_forminfo_edge_declare     ; native FORMINFO read-only chunks
+    call hook_formload_edge_declare     ; native FORMLOAD open, original mutation gate
     call hook_display_edge_declare      ; native RESINFO/RESMODES read-only observations
     call card_declare                   ; RCQ-40 J2a: CARDPROPOSE/CARDSTAT/CARDCANCEL/AITAINT (+ lab CARDPROBE)
 %if !PAOS_PUBLIC_BUILD
@@ -1827,13 +1850,19 @@ IDLE_PROF_OWNERS equ 48
     IDLE_PROF_MARK 27
     call card_surface_tick               ; RCQ-40 J2b: the owner's Confirm/Deny of an action card acts here, at depth 0
     call app_package_card_tick           ; close stale disclosure, bounded page navigation
+    call adopt_confirm_tick
+    call format_confirm_tick
     call app_confirm_tick               ; frozen guest approval, after input frames unwind
+    call terminal_consent_tick          ; Terminal consent effects after input unwinds
     call gbr_tick                        ; owner-armed guest bundle lines, one compare unarmed
     call app_install_tick                ; offer read, idle decision effects
+    call account_local_tick              ; bounded native account decision at depth0
+    call app_isolation_tick
     call app_ingress_tick                ; bounded signed publication before desktop intent
     call app_launcher_tick              ; spend desktop launch intent at depth0 only
     call app_widget_tick                 ; guest widget SET budget for this tick
     call app_launch_flow_tick            ; sole original appVM bounded idle turn
+    call app_remove_tick                 ; one confirmed removal phase at depth0
     IDLE_PROF_MARK 28
     call power_events_tick               ; RCQ-27: EC battery/AC + fixed power button (one compare without a descriptor)
     IDLE_PROF_MARK 29

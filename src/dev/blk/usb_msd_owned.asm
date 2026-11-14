@@ -57,6 +57,9 @@ usb_msd_owned_query:
     xor eax,eax
     jmp msd_owned_observe
 usb_msd_owned_prepare:
+    lea rax,[rel msd_owned_prepare_active]
+    jmp msd_io_enter
+msd_owned_prepare_active:
     mov eax,1
 msd_owned_observe:
     push rbx
@@ -91,7 +94,10 @@ msd_owned_observe:
     cmp dword [rax+dev.health],HEALTH_OK
     jne .fail
     xor ebx,ebx
+    mov ebp,64                    ; original block registry bounded to 64 members
 .member:
+    dec ebp
+    js .fail
     mov rdi,rbx
     mov esi,BLKCAP_READ
     xor edx,edx
@@ -268,6 +274,16 @@ msd_owned_topology:
 ; One offer after prepare. Bad/missing/uncertain evidence consumes it too.
 ; Original caller owns power; this helper neither repeats retirement nor cycles.
 usb_msd_owned_reprobe:
+    lea rax,[rel msd_owned_reprobe_active]
+    sub rsp,8
+    call msd_io_enter
+    add rsp,8
+    test rax,rax
+    jns .out
+    xor eax,eax                       ; original recovery failure ABI is zero
+.out:
+    ret
+msd_owned_reprobe_active:
     push rbx
     push r12
     push r13
@@ -393,13 +409,13 @@ usb_msd_owned_reprobe:
     call msd_configure_ep
     test rax,rax
     jnz .dead
-    call msd_inquiry
+    call msd_inquiry_active
     test eax,eax
     jnz .dead
-    call msd_tur_ready
+    call msd_tur_ready_active
     test eax,eax
     jnz .dead
-    call msd_read_capacity
+    call msd_read_capacity_active
     test eax,eax
     jnz .dead
     mov rax,[rel msd_lba_max]

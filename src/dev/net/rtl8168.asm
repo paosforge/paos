@@ -1,10 +1,11 @@
 ;; MODULE dev/net/rtl8168
 ;; LAYER 3
-;; EXPORTS rtl8168_create, rtl8168_hw_bringup, rtl8168_boot_bringup, rtl8168_status_line, rtl8168_bootlog_line, rtl8168_rx_diag_emit, rtl8168_frame_stats, rtl8168_dev
-;; IMPORTS boot/native_driver_gate, net/netdev, bus/pci, core/dma, core/heap, boot/serial, dev/net/e1000e, net/dns, core/lib/mem, bus/pci_claim
+;; EXPORTS rtl8168_link_rearm_counts, rtl8168_witness, rtl8168_terminal_quiesce, rtl8168_create, rtl8168_hw_bringup, rtl8168_boot_bringup, rtl8168_status_line, rtl8168_bootlog_line, rtl8168_rx_diag_emit, rtl8168_frame_stats, rtl8168_dev, rtl8168_carrier_ready, rtl8168_carrier_read, rtl8168_carrier_write, rtl8168_carrier_link
+;; IMPORTS core/time, boot/native_driver_gate, net/netdev, bus/pci, core/dma, core/heap, boot/serial, dev/net/e1000e, net/dns, core/lib/mem, bus/pci_claim, hv/pci_assign
 ;; CAPS mmio dma
 ;; OWNER saga:net
 %include "boot/native_driver_gate.inc"
+%include "dev/net/realtek_link_rearm.inc"
 %include "core/abi/pci_claim.inc" ; RCQ-29 hardware report: bind outcome ids/states
 ; ============================================================================
 ; dev/net/rtl8168.asm — bee004: the REAL Realtek RTL8168H (r8169, MAC_VER_46)
@@ -91,8 +92,26 @@ RTL_MAC_VER_46_VALUE equ 0x54100000
 ;   native wins) the e1000e stand-in stays primary; on the Beelink e1000e is
 ;   absent/degraded and this backend is selected.
 ; ============================================================================
+; One software producer at a time; terminal state2 is irreversible. The
+; wrapper retains all argument and return registers except volatile R11/RAX.
+%macro RTL8168_PRODUCER 2
+    xor eax,eax
+    mov r11d,1
+    lock cmpxchg [rel rtl8168_terminal_gate],r11d
+    jne %%refuse
+    call .producer_body
+    mov dword [rel rtl8168_terminal_gate],0
+    ret
+%%refuse:
+    mov rax,%2
+    ret
+%endmacro
+
 rtl8168_create:
+    RTL8168_PRODUCER rtl8168_create,-1
+.producer_body:
     NATIVE_DRIVER_REFUSE 6
+    PCIA_NATIVE_COLD_REFUSE                        ; before first probe or upstream effect
     lea  rdi, [rel rtl8168_ops]
     lea  rax, [rel rtl8168_init]
     mov  [rdi + netdev_ops.init], rax
@@ -134,10 +153,12 @@ rtl8168_create:
 ;   or absent chip remains degraded, so egress-select skips it. Never fatal.
 ; ============================================================================
 rtl8168_boot_bringup:
+    RTL8168_PRODUCER rtl8168_boot_bringup,-1
+.producer_body:
     NATIVE_DRIVER_REFUSE 6
-    call rtl8168_rx_wipe_kat               ; w046: in-image ring only, before register/bind
-    call rtl8168_create                    ; register fail-closed/degraded
-    call rtl8168_hw_bringup                 ; strict runtime-discovered bind
+    call rtl8168_rx_wipe_kat.producer_body               ; w046: in-image ring only, before register/bind
+    call rtl8168_create.producer_body                    ; register fail-closed/degraded
+    call rtl8168_hw_bringup.producer_body                 ; strict runtime-discovered bind
     cmp  byte [rel rtl8168_bound], 1
     jne  .degrade                           ; absent / wrong identity / bad BAR
     mov  dword [rel rtl8168_dev + dev.health], HEALTH_OK
@@ -149,10 +170,11 @@ rtl8168_boot_bringup:
 ; ============================================================================
 ; rtl8168_rx_wipe_kat — w046 boot KAT [net.rtl8168.rxwipe.kat]. Drives the REAL
 ;   rtl8168_rx_poll (same code the bound Beelink runs) over a private one-slot
-;   ring in this image's WDATA, with a scratch page standing in for BAR2: no
+;   RX/TX rings in this image's WDATA and RAM standing in for BAR2: no
 ;   MMIO, no PCI, no DMA. Runs from rtl8168_boot_bringup BEFORE rtl8168_create
 ;   and rtl8168_hw_bringup (single-threaded P8, nothing registered or bound),
-;   snapshots every driver global it touches and restores them byte-for-byte.
+;   snapshots every driver global it touches (including link rearm) and restores
+;   them byte-for-byte. Private TX stays idle and the private PHY reads up.
 ;   Cases (each fails on the pre-w046 rx_poll logic, see the katred control):
 ;     A  delivered frame: content exact; slot dword0 == DEADBEEF and bytes
 ;        [4, len+4) zero as re-read from RAM after clflush; tail untouched;
@@ -169,6 +191,8 @@ RTL_KAT_CAP_C  equ 64
 RTL_KAT_DESC   equ (1 << 29) | (1 << 28)   ; FirstFrag|LastFrag, OWN clear
 
 rtl8168_rx_wipe_kat:
+    RTL8168_PRODUCER rtl8168_rx_wipe_kat,-1
+.producer_body:
     push rbx
     push r12
     push r13
@@ -197,6 +221,28 @@ rtl8168_rx_wipe_kat:
     lea  rsi, [rel rtl8168_bar2]
     mov  edx, RTL_STATE_BYTES
     call memcpy
+    ; Ordinary RX also samples link-rearm state. Borrow only private state
+    ; for this KAT, then restore the complete original transition/counters.
+    lea  rdi, [rel rtl_kat_rearm_save]
+    lea  rsi, [rel rtl8168_link_rearm_state]
+    mov  edx, REALTEK_LR_SIZE
+    call memcpy
+    lea  rdi, [rel rtl8168_link_rearm_state]
+    xor  esi, esi
+    mov  edx, REALTEK_LR_SIZE
+    call memset
+    lea  rdi, [rel rtl_kat_tx_ring]
+    xor  esi, esi
+    mov  edx, 64
+    call memset
+    mov  dword [rel rtl_kat_tx_ring], (1 << 30) ; idle private TX, OWN clear
+    lea  rax, [rel rtl_kat_tx_ring]
+    mov  [rel rtl8168_tx_ring], rax
+    lea  rdi, [rel rtl_kat_bar]
+    xor  esi, esi
+    mov  edx, 256
+    call memset                   ; no stale private ISR/RDU or controller bits
+    mov  byte [rel rtl_kat_bar + RTL_PHYSTS], 2 ; private known-up PHY sample
     lea  rax, [rel rtl_kat_bar]
     mov  [rel rtl8168_bar2], rax
     lea  rax, [rel rtl_kat_ring]
@@ -215,7 +261,7 @@ rtl8168_rx_wipe_kat:
     lea  rdi, [rel rtl8168_dev]
     lea  rsi, [rel rtl_kat_rx]
     mov  edx, RTL_RX_BUF_SIZE
-    call rtl8168_rx_poll
+    call rtl8168_rx_poll.producer_body
     cmp  rax, RTL_KAT_LEN_A
     jne  .fail
     lea  r13, [rel str_rtl_kat_r_content]
@@ -260,7 +306,7 @@ rtl8168_rx_wipe_kat:
     lea  rdi, [rel rtl8168_dev]
     lea  rsi, [rel rtl_kat_rx]
     mov  edx, RTL_RX_BUF_SIZE
-    call rtl8168_rx_poll
+    call rtl8168_rx_poll.producer_body
     lea  r13, [rel str_rtl_kat_r_stale]
     test rax, rax
     jnz  .fail                              ; stale frame re-delivered
@@ -284,7 +330,7 @@ rtl8168_rx_wipe_kat:
     lea  rdi, [rel rtl8168_dev]
     lea  rsi, [rel rtl_kat_rx]
     mov  edx, RTL_KAT_CAP_C
-    call rtl8168_rx_poll
+    call rtl8168_rx_poll.producer_body
     cmp  rax, RTL_KAT_LEN_C
     jne  .fail
     lea  r13, [rel str_rtl_kat_r_content]
@@ -424,6 +470,10 @@ rtl_kat_restore:
     lea  rsi, [rel rtl_kat_save]
     mov  edx, RTL_STATE_BYTES
     call memcpy
+    lea  rdi, [rel rtl8168_link_rearm_state]
+    lea  rsi, [rel rtl_kat_rearm_save]
+    mov  edx, REALTEK_LR_SIZE
+    call memcpy
     lea  rdi, [rel rtl_kat_ring]
     xor  esi, esi
     mov  edx, RTL_KAT_SCRATCH_BYTES
@@ -460,7 +510,10 @@ rtl8168_pci_claim:
 ;   or stuck poll degrades (no marker, no hang). Preserves callee-saved.
 ; ============================================================================
 rtl8168_hw_bringup:
+    RTL8168_PRODUCER rtl8168_hw_bringup,-1
+.producer_body:
     NATIVE_DRIVER_REFUSE 6
+    PCIA_NATIVE_COLD_REFUSE                        ; before probe and upstream bridge effects
     push rbx
     push r12
     push r13
@@ -899,17 +952,646 @@ rtl8168_hw_bringup:
     mfence
     jmp  .out
 
+; BEGIN RTL8168 TERMINAL QUIESCE
+; Terminal BSP/IF0-only leaf, RDI=trusted64B report; preserves callee-saved.
+; Separate from recoverable stop. EAX0 proven never-owned,1 completed,
+; -1 no controller effect,-2 irreversible/attempted/uncertain. Report ABI and
+; pinned BSD hardware facts: gauntlet_v2/docs/RTL8168_TERMINAL_QUIESCE.md.
+; This never releases/reuses DMA memory, enters D3 or alters an upstream bridge.
+rtl8168_terminal_quiesce:
+    cld
+    test rdi,rdi
+    jz .null
+    push rbx
+    push rbp
+    push r12
+    push r13
+    push r14
+    push r15
+    sub rsp,40
+    mov rbx,rdi
+    xor eax,eax
+    mov ecx,8
+    rep stosq
+    cmp dword [rel rtl8168_terminal_latched],0
+    jne .replay
+    xor eax,eax
+    mov edx,1
+    lock cmpxchg [rel rtl8168_terminal_gate],edx
+    jne .busy
+    cmp byte [rel rtl8168_bound],1
+    je .owned
+    ; Passive original inactive operand snapshot, under the already-held gate.
+    ; Bit9 alone selects this alternate 64B shape; no addresses escape.
+    movzx eax,byte [rel rtl8168_bound]
+    mov [rbx+12],eax
+    movzx eax,byte [rel rtl8168_claim_found]
+    mov [rbx+16],eax
+    xor edx,edx
+    cmp qword [rel rtl8168_bar2],0
+    setne dl
+    lea rsi,[rel rtl8168_tx_ring]
+    mov ecx,4
+    mov r8d,2
+.inactive_observe_dma:
+    cmp qword [rsi],0
+    je .inactive_observe_next
+    or edx,r8d
+.inactive_observe_next:
+    add rsi,8
+    shl r8d,1
+    loop .inactive_observe_dma
+    cmp qword [rel rtl8168_tx_busy],0 ; same qword predicate as original below
+    je .inactive_observe_busy_done
+    or edx,32
+.inactive_observe_busy_done:
+    ; Original storage order is TXring/RXring/RXbuffers/TXbuffer. Export the
+    ; documented semantic bit order TXring/RXring/TXbuffer/RXbuffers.
+    mov eax,edx
+    and edx,~24
+    mov ecx,eax
+    and eax,8
+    shl eax,1
+    and ecx,16
+    shr ecx,1
+    or edx,eax
+    or edx,ecx
+    mov [rbx+20],edx
+    mov eax,[rel rtl8168_dev+dev.class]
+    mov [rbx+24],eax
+    xor edx,edx
+    mov rax,[rel rtl8168_dev+dev.ops]
+    test rax,rax
+    setnz dl
+    lea rcx,[rel rtl8168_ops]
+    cmp rax,rcx
+    jne .inactive_observe_ops_done
+    or edx,2
+.inactive_observe_ops_done:
+    mov [rbx+28],edx
+    mov eax,[rel rtl8168_dev+dev.health]
+    mov [rbx+32],eax
+    mov eax,[rel rtl8168_dev+dev.flags]
+    mov [rbx+36],eax
+    or dword [rbx+8],512             ; all RAM operands actually observed
+    ; Cached absence alone is insufficient: no retained binding, rings,
+    ; buffers, BAR or healthy native state, plus a complete claim census.
+    cmp byte [rel rtl8168_claim_found],0
+    jne .refused
+    cmp qword [rel rtl8168_bar2],0
+    jne .refused
+    lea rsi,[rel rtl8168_tx_ring]
+    mov ecx,4
+.inactive_dma:
+    cmp qword [rsi],0
+    jne .refused
+    add rsi,8
+    loop .inactive_dma
+    cmp dword [rel rtl8168_dev+dev.class],0
+    jne .inactive_registered
+    cmp qword [rel rtl8168_dev+dev.ops],0
+    jne .refused
+    jmp .inactive_class_ok
+.inactive_registered:
+    cmp dword [rel rtl8168_dev+dev.class],CLASS_NET
+    jne .refused
+    lea rax,[rel rtl8168_ops]
+    cmp [rel rtl8168_dev+dev.ops],rax
+    jne .refused
+    cmp dword [rel rtl8168_dev+dev.health],HEALTH_DEGRADED
+    jne .refused
+    test dword [rel rtl8168_dev+dev.flags],NETDEV_F_ABSENT
+    jz .refused
+.inactive_class_ok:
+    cmp qword [rel rtl8168_tx_busy],0
+    jne .refused
+    xor edi,edi
+    xor esi,esi
+    call rtl8168_terminal_claims
+    mov [rbx+40],eax                 ; actual original helper result, not inferred
+    mov [rbx+44],r9d                 ; actual bounded snapshot count
+    mov [rbx+48],r8d                 ; actual snapshot overflow bits
+    or dword [rbx+8],1024            ; original census actually attempted
+    test eax,eax
+    jnz .refused
+    mov dword [rel rtl8168_terminal_gate],0
+    xor eax,eax
+    jmp .out
+.owned:
+    mov dword [rbx+52],1              ; ownership/preflight reason
+    cmp byte [rel rtl8168_claim_found],1
+    jne .refused
+    cmp byte [rel rtl8168_mac_ok],1
+    jne .refused
+    cmp byte [rel rtl8168_mac_ver46],1
+    jne .refused
+    cmp qword [rel rtl8168_tx_busy],0
+    jne .refused
+    cmp dword [rel rtl8168_pci_bus],255
+    ja .refused
+    cmp dword [rel rtl8168_pci_dev],31
+    ja .refused
+    cmp dword [rel rtl8168_pci_fn],7
+    ja .refused
+    mov eax,[rel rtl8168_pci_bus]
+    shl eax,8
+    mov edx,[rel rtl8168_pci_dev]
+    shl edx,3
+    or eax,edx
+    or eax,[rel rtl8168_pci_fn]
+    mov [rbx+12],eax
+    mov edi,eax
+    mov esi,1
+    call rtl8168_terminal_claims
+    test eax,eax
+    jnz .refused
+    mov [rsp+24],edx                 ; exact current BOUND claim sequence
+    or dword [rbx+8],4
+    lea rdi,[rel rtl8168_dev]
+    lea rsi,[rel rtl8168_ops]
+    call netdev_power_member
+    test rax,rax
+    jz .refused
+    mov [rsp],rax
+    mov [rsp+8],rdx
+    mov [rbx+56],rdx
+    or dword [rbx+8],2
+    ; Exact-width physical configuration; no guessed virtual bus.
+    xor ecx,ecx
+    call rtl8168_terminal_pci
+    mov [rbx+16],eax
+    cmp eax,0x816810ec
+    jne .refused
+    mov ecx,8
+    call rtl8168_terminal_pci
+    and eax,0xffff00ff
+    cmp eax,0x02000015
+    jne .refused
+    mov ecx,0x18
+    call rtl8168_terminal_pci
+    mov r13d,eax
+    and eax,15
+    cmp eax,0
+    je .bar32
+    cmp eax,4
+    jne .refused
+    mov ecx,0x1c
+    call rtl8168_terminal_pci
+    test eax,eax                     ; driver admits sub4G DMA/MMIO only
+    jnz .refused
+.bar32:
+    and r13d,0xfffffff0
+    mov r12,[rel rtl8168_bar2]
+    test r12,r12
+    jz .refused
+    cmp r12,r13
+    jne .refused
+    or dword [rbx+8],1
+    mov ecx,4
+    call rtl8168_terminal_pci
+    cmp eax,-1
+    je .refused
+    movzx eax,ax
+    mov [rbx+20],eax
+    and eax,6
+    cmp eax,6
+    jne .refused
+    ; Nonzero, aligned, disjoint, sub4G buffers with no MMIO overlap.
+    lea r13,[rel rtl8168_tx_ring]
+    xor r14d,r14d
+.spans:
+    mov rax,[r13+r14*8]
+    test rax,rax
+    jz .refused
+    test eax,63
+    jnz .refused
+    lea rsi,[rel rtl8168_terminal_spans]
+    mov edx,[rsi+r14*4]
+    add rdx,rax
+    jc .refused
+    mov rcx,rdx
+    shr rcx,32
+    jnz .refused
+    lea rcx,[r12+256]
+    cmp rax,rcx
+    jae .no_mmio_overlap
+    cmp rdx,r12
+    ja .refused
+.no_mmio_overlap:
+    xor ecx,ecx
+.prior:
+    cmp ecx,r14d
+    jae .span_next
+    mov rdi,[r13+rcx*8]
+    mov r8d,[rsi+rcx*4]
+    add r8,rdi
+    cmp rax,r8
+    jae .disjoint
+    cmp rdx,rdi
+    ja .refused
+.disjoint:
+    inc ecx
+    jmp .prior
+.span_next:
+    inc r14d
+    cmp r14d,4
+    jb .spans
+    mov esi,RTL_TCR
+    call rtl8168_terminal_rd32
+    jc .refused
+    mov [rbx+36],eax
+    and eax,RTL_MAC_VER_46_MASK
+    cmp eax,RTL_MAC_VER_46_VALUE
+    jne .refused
+    mov esi,RTL_IMR
+    call rtl8168_terminal_rd16
+    jc .refused
+    mov [rbx+32],eax
+    test eax,eax                     ; polling ownership, no native IRQ user
+    jnz .refused
+    mov esi,RTL_CMD
+    call rtl8168_terminal_rd8
+    jc .refused
+    mov [rbx+28],eax
+    and eax,0x9c
+    cmp eax,RTL_CMD_TE|RTL_CMD_RE
+    jne .refused
+    ; Verify actual programmed ring addresses before any controller write.
+    mov esi,RTL_TNPDS
+    call rtl8168_terminal_rd32
+    jc .refused
+    cmp eax,[rel rtl8168_tx_ring]
+    jne .refused
+    mov esi,RTL_TNPDS_HI
+    call rtl8168_terminal_rd32
+    jc .refused
+    test eax,eax
+    jnz .refused
+    mov esi,RTL_RDSAR
+    call rtl8168_terminal_rd32
+    jc .refused
+    cmp eax,[rel rtl8168_rx_ring]
+    jne .refused
+    mov esi,RTL_RDSAR_HI
+    call rtl8168_terminal_rd32
+    jc .refused
+    test eax,eax
+    jnz .refused
+    mov esi,RTL_RCR
+    call rtl8168_terminal_rd32
+    jc .refused
+    mov [rsp+16],eax
+    mov esi,RTL_MISC
+    call rtl8168_terminal_rd32
+    jc .refused
+    mov [rsp+20],eax
+    or dword [rbx+8],8
+    ; Final current claim and class epoch under producer exclusion. Native
+    ; assignment refuses BOUND/FAILED claims and cannot unbind this backend.
+    mov ecx,4
+    call rtl8168_terminal_pci
+    movzx eax,ax
+    cmp eax,[rbx+20]
+    jne .refused
+    mov edi,[rbx+12]
+    mov esi,1
+    call rtl8168_terminal_claims
+    test eax,eax
+    jnz .refused
+    cmp edx,[rsp+24]
+    jne .refused
+    lea rdi,[rel rtl8168_dev]
+    lea rsi,[rel rtl8168_ops]
+    call netdev_power_member
+    cmp rax,[rsp]
+    jne .refused
+    test rax,rax
+    jz .refused
+    cmp rdx,[rsp+8]
+    jne .refused
+    ; Terminal latch precedes the first hardware effect. No rollback, no
+    ; native producer or recovery can ever reopen the gate after this point.
+    mov dword [rel rtl8168_terminal_latched],1
+    mov dword [rel rtl8168_terminal_gate],2
+    mov dword [rbx+4],1
+    mov dword [rbx+52],2              ; RX gating/readback
+    mov esi,RTL_RCR
+    mov edx,[rsp+16]
+    and edx,~15
+    call rtl8168_terminal_wr32
+    mov esi,RTL_RCR
+    call rtl8168_terminal_rd32
+    jc .uncertain
+    mov edx,[rsp+16]
+    and edx,~15
+    cmp eax,edx
+    jne .uncertain
+    mov esi,RTL_MISC
+    mov edx,[rsp+20]
+    or edx,RTL_MISC_RXDV_GATE
+    call rtl8168_terminal_wr32
+    mov esi,RTL_MISC
+    call rtl8168_terminal_rd32
+    jc .uncertain
+    mov edx,[rsp+20]
+    or edx,RTL_MISC_RXDV_GATE
+    cmp eax,edx
+    jne .uncertain
+    mov dword [rbx+4],2
+    mov edi,2000
+    call tsc_delay_us
+    mov dword [rbx+52],3              ; TX queue drain
+    mov ebp,1000
+.tx_wait:
+    inc dword [rbx+48]
+    mov esi,RTL_TCR
+    call rtl8168_terminal_rd32
+    jc .uncertain
+    mov [rbx+36],eax
+    test eax,0x800
+    jnz .tx_empty
+    mov edi,100
+    call tsc_delay_us
+    dec ebp
+    jnz .tx_wait
+    jmp .uncertain
+.tx_empty:
+    or dword [rbx+8],16
+    mov dword [rbx+4],3
+    ; MAC46: TE/RE clear AFTER TXQ, BEFORE FIFO empty. STOPREQ is invalid.
+    mov esi,RTL_CMD
+    mov edx,[rbx+28]
+    and edx,~(RTL_CMD_TE|RTL_CMD_RE)
+    call rtl8168_terminal_wr8
+    mov esi,RTL_CMD
+    call rtl8168_terminal_rd8
+    jc .uncertain
+    mov [rbx+28],eax
+    test eax,0x1c
+    jnz .uncertain
+    mov dword [rbx+52],4              ; on-chip FIFO drain
+    mov ebp,3000
+.fifo_wait:
+    inc dword [rbx+48]
+    mov esi,0xd3
+    call rtl8168_terminal_rd8
+    jc .uncertain
+    mov [rbx+40],eax
+    and eax,0x30
+    cmp eax,0x30
+    je .fifo_empty
+    mov edi,20
+    call tsc_delay_us
+    dec ebp
+    jnz .fifo_wait
+    jmp .uncertain
+.fifo_empty:
+    or dword [rbx+8],32
+    mov dword [rbx+4],4
+    mov edi,1000
+    call tsc_delay_us
+    mov dword [rbx+52],5              ; mask/readback
+    mov esi,RTL_IMR
+    xor edx,edx
+    call rtl8168_terminal_wr16
+    mov esi,RTL_IMR
+    call rtl8168_terminal_rd16
+    jc .uncertain
+    mov [rbx+32],eax
+    test eax,eax
+    jnz .uncertain
+    or dword [rbx+8],128
+    mov dword [rbx+52],6              ; reset/readback
+    mov esi,RTL_CMD
+    mov edx,0x10
+    call rtl8168_terminal_wr8
+    mov ebp,1000
+.reset_wait:
+    inc dword [rbx+44]
+    mov edi,10
+    call tsc_delay_us
+    mov esi,RTL_CMD
+    call rtl8168_terminal_rd8
+    jc .uncertain
+    mov [rbx+28],eax
+    test eax,0x10
+    jz .reset_done
+    dec ebp
+    jnz .reset_wait
+    jmp .uncertain
+.reset_done:
+    test eax,RTL_CMD_TE|RTL_CMD_RE
+    jnz .uncertain
+    or dword [rbx+8],64
+    mov dword [rbx+4],5
+    ; Reset must leave interrupts masked; no stale pre-reset mask proof.
+    mov esi,RTL_IMR
+    call rtl8168_terminal_rd16
+    jc .uncertain
+    mov [rbx+32],eax
+    test eax,eax
+    jnz .uncertain
+    mov dword [rbx+52],7              ; own-function BM clear/readback
+    xor ecx,ecx
+    call rtl8168_terminal_pci
+    cmp eax,0x816810ec
+    jne .uncertain
+    mov ecx,4
+    call rtl8168_terminal_pci
+    cmp eax,-1
+    je .uncertain
+    movzx r8d,ax                      ; upper PCI Status W1C bits always zero
+    and r8d,~4
+    mov edi,[rel rtl8168_pci_bus]
+    mov esi,[rel rtl8168_pci_dev]
+    mov edx,[rel rtl8168_pci_fn]
+    mov ecx,4
+    call pci_cfg_write32
+    mov ecx,4
+    call rtl8168_terminal_pci
+    cmp eax,-1
+    je .uncertain
+    movzx eax,ax
+    mov [rbx+24],eax
+    mov edx,[rbx+20]
+    and edx,~4
+    cmp eax,edx
+    jne .uncertain
+    or dword [rbx+8],256
+    mov dword [rbx+4],6
+    mov dword [rbx+52],0
+    mov eax,1
+    jmp .out
+.refused:
+    mov dword [rel rtl8168_terminal_gate],0
+.busy:
+    cmp dword [rbx+52],0
+    jne .refusal_result
+    mov dword [rbx+52],1
+.refusal_result:
+    mov eax,-1
+    jmp .out
+.replay:
+    mov dword [rbx+4],1
+.uncertain:
+    mov eax,-2
+.out:
+    mov [rbx],eax
+    add rsp,40
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbp
+    pop rbx
+    ret
+.null:
+    mov eax,-1
+    ret
+
+; Complete, duplicate-free locked census; no partial/FAILED/foreign ownership.
+; EDI=packed own BDF, ESI=1 owned /0 never-owned; ->EAX0/-1, EDX claim sequence.
+; Caller-clobbered R8D/R9D also retain raw overflow/count from this same call.
+rtl8168_terminal_claims:
+    push rbx
+    push r12
+    push r13
+    sub rsp,512
+    mov r12d,edi
+    mov r13d,esi
+    mov rdi,rsp
+    call pci_claim_snapshot
+    mov r8d,edx                      ; passive metadata before original validation
+    mov r9d,eax
+    test edx,edx
+    jnz .bad
+    cmp eax,32
+    ja .bad
+    xor r10d,r10d
+    xor r11d,r11d
+    xor ecx,ecx
+.record:
+    cmp ecx,r9d
+    jae .done
+    mov ebx,ecx
+    shl ebx,4
+    add rbx,rsp
+    cmp dword [rbx],0xffff
+    ja .bad
+    mov eax,[rbx+4]
+    cmp eax,1
+    jb .bad
+    cmp eax,PCI_DRV_LAST
+    ja .bad
+    mov edx,[rbx+8]
+    cmp edx,PCI_CLAIM_BOUND
+    jb .bad
+    cmp edx,PCI_CLAIM_FAILED
+    ja .bad
+    cmp dword [rbx+12],0
+    je .bad
+    xor edx,edx
+.duplicate:
+    cmp edx,ecx
+    jae .driver
+    mov eax,edx
+    shl eax,4
+    mov eax,[rsp+rax]
+    cmp eax,[rbx]
+    je .bad
+    inc edx
+    jmp .duplicate
+.driver:
+    cmp dword [rbx+4],PCI_DRV_RTL8168
+    jne .next
+    test r13d,r13d
+    jz .bad
+    cmp [rbx],r12d
+    jne .bad
+    cmp dword [rbx+8],PCI_CLAIM_BOUND
+    jne .bad
+    inc r10d
+    mov r11d,[rbx+12]
+.next:
+    inc ecx
+    jmp .record
+.done:
+    cmp r10d,r13d
+    jne .bad
+    xor eax,eax
+    mov edx,r11d
+    jmp .out
+.bad:
+    mov eax,-1
+.out:
+    add rsp,512
+    pop r13
+    pop r12
+    pop rbx
+    ret
+rtl8168_terminal_pci:
+    mov edi,[rel rtl8168_pci_bus]
+    mov esi,[rel rtl8168_pci_dev]
+    mov edx,[rel rtl8168_pci_fn]
+    jmp pci_cfg_read32
+; Exact-width, volatile device accesses; all-ones is unavailable, never success.
+rtl8168_terminal_rd8:
+    movzx eax,byte [r12+rsi]
+    cmp eax,0xff
+    je .bad
+    clc
+    ret
+.bad: stc
+    ret
+rtl8168_terminal_rd16:
+    movzx eax,word [r12+rsi]
+    cmp eax,0xffff
+    je .bad
+    clc
+    ret
+.bad: stc
+    ret
+rtl8168_terminal_rd32:
+    mov eax,[r12+rsi]
+    cmp eax,-1
+    je .bad
+    clc
+    ret
+.bad: stc
+    ret
+rtl8168_terminal_wr8:
+    mov [r12+rsi],dl
+    mfence
+    ret
+rtl8168_terminal_wr16:
+    mov [r12+rsi],dx
+    mfence
+    ret
+rtl8168_terminal_wr32:
+    mov [r12+rsi],edx
+    mfence
+    ret
+rtl8168_terminal_access_end:
+    ret
+; END RTL8168 TERMINAL QUIESCE
+
 ; ============================================================================
 ; netdev_ops implementations
 ; ============================================================================
 rtl8168_init:
+    RTL8168_PRODUCER rtl8168_init,-1
+.producer_body:
     NATIVE_DRIVER_REFUSE 6
     xor  eax, eax
     ret
 rtl8168_start:
+    RTL8168_PRODUCER rtl8168_start,-1
+.producer_body:
     xor  eax, eax
     ret
 rtl8168_stop:
+    RTL8168_PRODUCER rtl8168_stop,-1
+.producer_body:
     xor  eax, eax
     ret
 
@@ -939,6 +1621,8 @@ rtl8168_frame_stats:
 ; END FRAME STATS
 
 rtl8168_tx:
+    RTL8168_PRODUCER rtl8168_tx,-1
+.producer_body:
     push rbx
     push r12
     push r13
@@ -956,6 +1640,20 @@ rtl8168_tx:
     jc   .tx_unowned_reject
     cmp  byte [rel rtl8168_bound], 1
     jne  .tx_degrade
+    call r68_lr_tick
+    test eax, eax
+    jnz .tx_reject
+    ; Do not hand DMA ownership to a PHY that is down or unreadable. Keep
+    ; this fresh byte read before any descriptor/bounce mutation; cached link
+    ; state can still describe the period before an autonomous carrier pulse.
+    mov  r12, [rel rtl8168_bar2]
+    test r12, r12
+    jz   .tx_reject
+    movzx eax, byte [r12 + RTL_PHYSTS]
+    cmp  eax, 0xff
+    je   .tx_reject
+    test eax, 2
+    jz   .tx_reject
     ; Descriptor zero and its bounce buffer are a single in-flight DMA slot.
     ; Never overwrite either while the chip still owns the previous frame.
     mov  rbx, [rel rtl8168_tx_ring]
@@ -1045,6 +1743,8 @@ rtl8168_tx:
 ;   packet buffer before copying, drop DEADBEEF ghost frames, recycle the
 ;   descriptor (OWN|EOR|size, clflushopt+sfence), and RE-POST the RxPoll doorbell.
 rtl8168_rx_poll:
+    RTL8168_PRODUCER rtl8168_rx_poll,0
+.producer_body:
     push rbx
     push r12
     push r13
@@ -1052,6 +1752,9 @@ rtl8168_rx_poll:
     push r15
     cmp  byte [rel rtl8168_bound], 1
     jne  .rx_none
+    call r68_lr_tick
+    test eax, eax
+    jnz .rx_none
     lock inc qword [rel rtl8168_rx_poll_calls]  ; bee004 telemetry: count idle passes that reach RX drain
     mov  r15, rsi                          ; caller buffer
     mov  r14, rdx                          ; cap
@@ -1380,6 +2083,16 @@ rtl8168_rx_ring_reset:
     mov  rax, [rel rtl8168_rx_ring]
     shr  rax, 32
     mov  [r12 + RTL_RDSAR_HI], eax
+    movzx eax, word [r12 + RTL_ISR]     ; count actual classes at existing W1C
+    or [rel rtl8168_isr_seen], rax
+    test eax, 3
+    jz .no_rx_count
+    inc qword [rel rtl8168_rx_status_acks]
+.no_rx_count:
+    test eax, 12
+    jz .no_tx_count
+    inc qword [rel rtl8168_tx_status_acks]
+.no_tx_count:
     mov  word [r12 + RTL_ISR], 0xFFFF      ; W1C: clear the latched RDU (+ all) status
     mov  byte [r12 + RTL_CMD], RTL_CMD_TE | RTL_CMD_RE  ; re-enable RX
     mfence
@@ -1395,9 +2108,14 @@ rtl8168_rx_ring_reset:
 ;   (header.asm:1710), which runs AFTER command_udp_init has armed the DNS
 ;   bootstrap — so this is the in-scope idle seam that opens the command port.
 rtl8168_link_status:
+    RTL8168_PRODUCER rtl8168_link_status,0
+.producer_body:
     xor  eax, eax
     cmp  byte [rel rtl8168_bound], 1
     jne  .ls_out
+    call r68_lr_tick
+    test eax, eax
+    jnz .ls_unknown
     mov  rdx, [rel rtl8168_bar2]
     movzx ecx, byte [rdx + RTL_PHYSTS]
     test cl, 0x02                          ; LinkSts
@@ -1428,6 +2146,10 @@ rtl8168_link_status:
 .ls_out:
     ret
 
+.ls_unknown:
+    mov rax, -1
+    ret
+
 ; get_mac(self, RSI=out6) -> RAX 0/-1. Only the live IDR MAC is valid. There is
 ; no target-specific compiled fallback in the common payload.
 rtl8168_get_mac:
@@ -1446,6 +2168,8 @@ rtl8168_get_mac:
 ; recover(self) -> RAX 0. The r8169 reset rung: re-post the RxPoll doorbell (the
 ;   non-coherent-RX re-arm). Structural OK when unbound.
 rtl8168_recover:
+    RTL8168_PRODUCER rtl8168_recover,-1
+.producer_body:
     NATIVE_DRIVER_REFUSE 6
     cmp  byte [rel rtl8168_bound], 1
     jne  .rec_out
@@ -1588,6 +2312,206 @@ rtl_mac_ocp_write:
     mov  [r12 + 0xB0], eax
     ret
 ; rtl_gphy_ocp_read(EDI=MII reg) -> AX. OCP addr 0xA400+reg*2 at GPHY_OCP 0xB8.
+
+; Trusted BSP observation: RDI exact selected handle, RSI 20-qword output.
+; EAX=0 complete, -1 unavailable (output may be partial; caller keeps validity
+; separate). Existing terminal/policy admission; no waits, PHY/OCP transactions,
+; MMIO writes, interrupt clears, DMA ownership writes or readiness decisions.
+; Schema: family, software TX cursor, tail(-1 unavailable), active TX slots,
+; OWN bitmap, RX cursor, current RX status, live PHY, ISR, IMR, TX/RX frames,
+; RX/TX status-ACK class counts (poll mode, NOT delivered IRQs), command,
+; service-derived new ISR bits, ACK ISR OR, TX timeouts, owner mismatches, RX polls.
+; RTL8168 allocates256 TX slots but synchronous TX uses only descriptor0.
+rtl8168_witness:
+    RTL8168_PRODUCER rtl8168_witness,-1
+.producer_body:
+    jmp rtl8168_witness_active
+rtl8168_witness_active:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r13, rsi
+    call rtl8168_carrier_ready
+    cmp eax, 1
+    jne .bad
+    mov r12, [rel rtl8168_tx_ring]
+    test r12, r12
+    jz .bad
+    mov r14, [rel rtl8168_rx_ring]
+    test r14, r14
+    jz .bad
+    mov eax, [rel rtl8168_tx_idx]
+    cmp eax, 1
+    jae .bad
+    mov [r13 + 8], rax
+    mov eax, [rel rtl8168_rx_idx]
+    cmp eax, 256
+    jae .bad
+    mov [r13 + 40], rax
+    shl rax, 4
+    add r14, rax
+    clflush [r14]
+    mfence
+    mov eax, [r14 + 0]
+    mov [r13 + 48], rax
+    xor r15d, r15d
+    xor ecx, ecx
+.own:
+    clflush [r12]
+    mfence
+    mov eax, [r12]
+    test eax, 0x80000000
+    jz .next
+    bts r15, rcx
+.next:
+    add r12, 16
+    inc ecx
+    cmp ecx, 1
+    jb .own
+    mov [r13 + 32], r15
+    mov qword [r13 + 16], -1
+    mov qword [r13 + 24], 1
+    mov r12, [rel rtl8168_bar2]
+    movzx eax, byte [r12 + RTL_PHYSTS]
+    mov [r13 + 56], rax
+    movzx eax, word [r12 + RTL_ISR]
+    mov [r13 + 64], rax
+    movzx eax, word [r12 + RTL_IMR]
+    mov [r13 + 72], rax
+    movzx eax, byte [r12 + RTL_CMD]
+    mov [r13 + 112], rax
+    mov rax, [rel rtl8168_stat_tx_frames]
+    mov [r13 + 80], rax
+    mov rax, [rel rtl8168_rx_frames]
+    mov [r13 + 88], rax
+    mov rax, [rel rtl8168_rx_status_acks]
+    mov [r13 + 96], rax
+    mov rax, [rel rtl8168_tx_status_acks]
+    mov [r13 + 104], rax
+    mov qword [r13 + 120], -1          ; service derives 8168 new ISR bits
+    mov rax, [rel rtl8168_isr_seen]
+    mov [r13 + 128], rax
+    mov qword [r13 + 136], -1           ; no existing TX timeout counter
+    mov qword [r13 + 144], -1           ; no existing owner mismatch counter
+    mov rax, [rel rtl8168_rx_poll_calls]
+    mov [r13 + 152], rax
+    mov qword [r13], 8168
+    xor eax, eax
+    jmp .out
+.bad:
+    mov rax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; BEGIN CARRIER_DRILL_LEAVES
+; RTL8168H/8111H only (the driver's admitted MAC_VER46). Fixed BMCR0
+; through the existing GPHY OCP path; separate checked transactions so legacy
+; callers keep their contracts. 10000 polls + mandatory 5000 PAUSE quiet gap.
+rtl8168_carrier_ready:
+    cmp dword [rel rtl8168_terminal_latched],0
+    jne .bad
+    NATIVE_DRIVER_REFUSE 6
+    lea rax, [rel rtl8168_dev]
+    cmp rdi, rax
+    jne .bad
+    cmp byte [rel rtl8168_bound], 1
+    jne .bad
+    cmp byte [rel rtl8168_mac_ok], 1
+    jne .bad
+    cmp qword [rel rtl8168_bar2], 0
+    je .bad
+    cmp qword [rel rtl8168_tx_ring], 0
+    je .bad
+    cmp qword [rel rtl8168_rx_ring], 0
+    je .bad
+    mov eax, 1
+    ret
+.bad:
+    xor eax, eax
+    ret
+rtl8168_carrier_read:
+    RTL8168_PRODUCER rtl8168_carrier_read,-1
+.producer_body:
+    call rtl8168_carrier_ready
+    cmp eax, 1
+    jne rtl8168_carrier_bad
+    mov edx, (0xa400 << 15)
+    xor r8d, r8d
+    jmp rtl8168_carrier_ocp
+rtl8168_carrier_write:
+    RTL8168_PRODUCER rtl8168_carrier_write,-1
+.producer_body:
+    call rtl8168_carrier_ready
+    cmp eax, 1
+    jne rtl8168_carrier_bad
+    test esi, 0xffff0000
+    jnz rtl8168_carrier_bad
+    mov edx, esi
+    or edx, (0xa400 << 15) | 0x80000000
+    mov r8d, 1
+rtl8168_carrier_ocp:
+    mov r9, [rel rtl8168_bar2]
+    mov [r9 + 0xb8], edx
+    mov ecx, 10000
+.poll:
+    mov eax, [r9 + 0xb8]
+    cmp eax, -1
+    je .fail
+    test eax, 0x80000000
+    jz .clear
+    test r8d, r8d
+    jz .read
+    jmp .wait
+.clear:
+    test r8d, r8d
+    jnz .write
+.wait:
+    pause
+    dec ecx
+    jnz .poll
+.fail:
+    mov rax, -1
+    jmp .quiet
+.read:
+    and eax, 0xffff
+    jmp .quiet
+.write:
+    xor eax, eax
+.quiet:
+    mov ecx, 5000
+.delay:
+    pause
+    dec ecx
+    jnz .delay
+    ret
+rtl8168_carrier_link:
+    RTL8168_PRODUCER rtl8168_carrier_link,-1
+.producer_body:
+    call rtl8168_carrier_ready
+    cmp eax, 1
+    jne .bad
+    mov r9, [rel rtl8168_bar2]
+    movzx edx, byte [r9 + 0x6c]
+    cmp edx, 0xff
+    je .bad
+    mov eax, edx
+    shr eax, 1
+    and eax, 1
+    ret
+.bad:
+    mov rdx, -1
+rtl8168_carrier_bad:
+    mov rax, -1
+    ret
+; END CARRIER_DRILL_LEAVES
+
 rtl_gphy_ocp_read:
     push rcx
     movzx eax, di
@@ -1885,6 +2809,9 @@ rtl8168_rx_diag_emit:
 rtl8168_dev:        times dev_size db 0
 rtl8168_ops:        times netdev_ops_size db 0
 align 8
+rtl8168_terminal_gate: dd 0       ; 0 idle,1 producer/preflight,2 terminal
+rtl8168_terminal_latched: dd 0
+rtl8168_terminal_spans: dd 4096,4096,524288,2048
 rtl8168_tx_busy:    dq 0                  ; bit0: synchronous TX software owner
 rtl8168_bar2:       dq 0
 rtl8168_tx_ring:    dq 0
@@ -1892,6 +2819,9 @@ rtl8168_rx_ring:    dq 0
 rtl8168_rx_buffers: dq 0
 rtl8168_tx_buffer:  dq 0
 rtl8168_stat_tx_frames: dq 0
+rtl8168_isr_seen: dq 0                  ; OR of actual existing ACK observations
+rtl8168_rx_status_acks: dq 0             ; latched ISR classes observed at existing W1C
+rtl8168_tx_status_acks: dq 0             ; not hardware delivered interrupt counts
 rtl8168_tx_frames:  dq 0
 rtl8168_rx_frames:  dq 0
 rtl8168_rx_ghost_rejects: dq 0            ; completed desc, DEADBEEF buffer sentinel survives clflush
@@ -1968,11 +2898,236 @@ str_rtl_bl_addr:      db " rtl_rx_addr_mismatch=", 0
 %macro WDATA_dev_net_rtl8168_0 0
 alignb 64
 rtl_kat_ring:       resb 64                 ; one 16-byte descriptor (+ pad)
+rtl_kat_tx_ring:    resb 64                 ; private idle TX for ordinary RX link sampling
 rtl_kat_bar:        resb 256                ; BAR2 stand-in: TPPOLL/ISR land here
-rtl_kat_slot:       resb RTL_RX_BUF_SIZE       ; 64-aligned (block start + 320)
+rtl_kat_slot:       resb RTL_RX_BUF_SIZE       ; 64-aligned (block start + 384)
 rtl_kat_rx:         resb RTL_RX_BUF_SIZE       ; caller buffer
+rtl_kat_rearm_save: resb REALTEK_LR_SIZE       ; restored before the whole scratch scrub
 rtl_kat_scratch_end:
 rtl_kat_save:       resb RTL_STATE_BYTES
 %endmacro
 WDATA_BSS_DEFER WDATA_dev_net_rtl8168_0
 RTL_KAT_SCRATCH_BYTES equ rtl_kat_scratch_end - rtl_kat_ring
+
+; Ordinary producer paths hold RTL8168_PRODUCER, including RX (the common
+; UDP poll does not call link_status for this backend).
+r68_lr_tick:
+    NATIVE_DRIVER_REFUSE 6
+    lea rax, [rel rtl8168_link_rearm_state]
+    REALTEK_LINK_REARM_BODY r68
+r68_lr_sample:
+    cmp byte [rel rtl8168_bound], 1
+    jne .bad
+    cmp qword [rel rtl8168_tx_ring], 0
+    je .bad
+    mov r9, [rel rtl8168_bar2]
+    movzx eax, byte [r9+RTL_PHYSTS]
+    cmp eax, 0xff
+    je .bad
+    shr eax, 1
+    and eax, 1
+    ret
+.bad:
+    mov rax, -1
+    ret
+r68_lr_own:
+    ; This driver publishes only synchronous descriptor zero, with EOR on it.
+    mov r8, [rel rtl8168_tx_ring]
+    clflush [r8]
+    mfence
+    mov eax, [r8]
+    shr eax, 31
+    ret
+r68_lr_phy_read:
+    mov edx, edi
+    shl edx, 15
+    xor r8d, r8d
+    jmp rtl8168_carrier_ocp
+r68_lr_phy_write:
+    shl edi, 15
+    or edx, edi
+    or edx, 0x80000000
+    mov r8d, 1
+    jmp rtl8168_carrier_ocp
+r68_lr_advertise:
+    ; The backend's own full PHY bring-up advertisement order (ANAR, GBCR),
+    ; now using checked OCP completion, before the checked BMCR restart.
+    mov edi, 0xa408
+    mov edx, 0x01e1
+    call r68_lr_phy_write
+    test eax, eax
+    jnz .bad
+    mov edi, 0xa412
+    mov edx, 0x0200
+    jmp r68_lr_phy_write
+.bad:
+    mov rax, -1
+    ret
+r68_lr_wake:
+    REALTEK_PHY_WAKE_BODY r68
+r68_lr_ready:
+    REALTEK_PHY_READY_BODY r68
+r68_lr_close:
+    mov byte [rel rtl8168_bound], 0
+    mov byte [rel rtl8168_link_up], 0
+    ret
+rtl8168_link_rearm_counts:
+    lea r8, [rel rtl8168_link_rearm_state+16]
+    xor ecx, ecx
+.copy:
+    mov rax, [r8+rcx*8]
+    mov [rdi+rcx*8], rax
+    inc ecx
+    cmp ecx, 5
+    jb .copy
+    ret
+align 8
+rtl8168_link_rearm_state: times REALTEK_LR_SIZE db 0
+
+; Reset/re-arm only the already bound MAC_VER46 and retained DMA allocation.
+; Called with the existing producer gate held, never by a private dispatcher.
+; MAC reset completion (including TE/RE clear) precedes EVERY ring rewrite.
+r68_lr_reset:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, [rel rtl8168_bar2]
+    mov r13, [rel rtl8168_tx_ring]
+    mov r14, [rel rtl8168_rx_ring]
+    mov r15, [rel rtl8168_rx_buffers]
+    test r12, r12
+    jz .bad
+    test r13, r13
+    jz .bad
+    test r14, r14
+    jz .bad
+    test r15, r15
+    jz .bad
+    cmp qword [rel rtl8168_tx_buffer], 0
+    je .bad
+    mov eax, [r12+RTL_TCR]
+    and eax, RTL_MAC_VER_46_MASK
+    cmp eax, RTL_MAC_VER_46_VALUE
+    jne .bad
+    mov byte [rel rtl8168_bound], 0
+    mov byte [rel rtl8168_link_up], 0
+    mov word [r12+RTL_IMR], 0
+    mov eax, [r12+RTL_RCR]
+    and eax, ~0x3f
+    mov [r12+RTL_RCR], eax
+    mov eax, [r12+RTL_MISC]
+    or eax, RTL_MISC_RXDV_GATE
+    mov [r12+RTL_MISC], eax
+    mfence
+    mov byte [r12+RTL_CMD], 0x10   ; BSD RE_CMD_RESET / chip soft reset
+    mfence
+    mov ebx, 1000
+.wait_reset:
+    movzx eax, byte [r12+RTL_CMD]
+    cmp eax, 0xff
+    je .bad
+    test eax, 0x1c                ; reset + both DMA enables must clear
+    jz .reset_done
+    mov edi, 100
+    call tsc_delay_us
+    dec ebx
+    jnz .wait_reset
+    jmp .bad
+.reset_done:
+    mov eax, [r12+RTL_IDR0]
+    cmp eax, [rel rtl8168_mac]
+    jne .bad
+    mov ax, [r12+RTL_IDR4]
+    cmp ax, [rel rtl8168_mac+4]
+    jne .bad
+    mov byte [r12+RTL_CFG9346], RTL_CFG9346_UNLOCK
+    mov word [r12+RTL_ISR], RTL_ISR_ALL
+    ; Pinned buffers stay at their original addresses; no allocation/free or
+    ; packet replay. Ring zeroing is safe only after the checked idle reset.
+    mov rdi, r13
+    mov ecx, RTL_NUM_TX_DESC*RTL_DESC_SIZE/8
+    xor eax, eax
+    cld
+    rep stosq
+    mov dword [r13+(RTL_NUM_TX_DESC-1)*RTL_DESC_SIZE], 1<<30
+    mov rdi, r14
+    mov rdx, r15
+    xor ecx, ecx
+.rx_arm:
+    mov dword [rdi+4], 0
+    mov [rdi+8], rdx
+    mov eax, (1<<31)|RTL_RX_BUF_SIZE
+    cmp ecx, RTL_NUM_RX_DESC-1
+    jne .not_last
+    or eax, 1<<30
+.not_last:
+    sfence
+    mov [rdi], eax
+    clflush [rdi]
+    add rdi, RTL_DESC_SIZE
+    add rdx, RTL_RX_BUF_SIZE
+    inc ecx
+    cmp ecx, RTL_NUM_RX_DESC
+    jb .rx_arm
+    mov rdi, r13
+    mov ecx, RTL_NUM_TX_DESC*RTL_DESC_SIZE/64
+.tx_flush:
+    clflush [rdi]
+    add rdi, 64
+    dec ecx
+    jnz .tx_flush
+    mfence
+    mov [r12+RTL_TNPDS], r13d
+    mov rax, r13
+    shr rax, 32
+    mov [r12+RTL_TNPDS_HI], eax
+    mov [r12+RTL_RDSAR], r14d
+    mov rax, r14
+    shr rax, 32
+    mov [r12+RTL_RDSAR_HI], eax
+    mov dword [rel rtl8168_tx_idx], 0
+    mov dword [rel rtl8168_rx_idx], 0
+    mov eax, [r12+RTL_MISC]
+    and eax, ~RTL_MISC_RXDV_GATE
+    mov [r12+RTL_MISC], eax
+    mov dword [r12+RTL_TCR], RTL_TCR_VAL
+    mov dword [r12+RTL_RCR], RTL_RCR_VAL
+    mov word [r12+RTL_RMS], RTL_RX_BUF_SIZE
+    mov word [r12+0xe0], 0         ; checksum/offload disabled, retained 64-bit desc
+    mfence
+    mov byte [r12+RTL_CMD], RTL_CMD_TE|RTL_CMD_RE
+    mfence
+    mov byte [r12+RTL_CFG9346], RTL_CFG9346_LOCKED
+    mov ecx, 10000
+.enable:
+    movzx eax, byte [r12+RTL_CMD]
+    cmp eax, 0xff
+    je .bad
+    and eax, RTL_CMD_TE|RTL_CMD_RE
+    cmp eax, RTL_CMD_TE|RTL_CMD_RE
+    je .armed
+    pause
+    dec ecx
+    jnz .enable
+    jmp .bad
+.armed:
+    mov byte [r12+RTL_TPPOLL], 1
+    mfence
+    mov byte [rel rtl8168_first_poll_reset_done], 1
+    mov byte [rel rtl8168_bound], 1
+    xor eax, eax
+    jmp .out
+.bad:
+    ; A failed reset leaves DMA memory pinned and the driver closed; it never
+    ; zeroes an OWN descriptor to manufacture recovery or recycles a buffer.
+    mov byte [rel rtl8168_bound], 0
+    mov rax, -1
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret

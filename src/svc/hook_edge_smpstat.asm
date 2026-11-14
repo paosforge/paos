@@ -471,7 +471,24 @@ hsm_cpu_observations:
     jz   .yes
     lea  rsi, [rel hsm_uc_fields]
     call hsm_fields
+    test eax, eax
+    jz   .out
+    ; New AP records append an all-or-none local cost observation. Older AP
+    ; records omit it; BSP records never carry an AP cost block. Validate the
+    ; version, dense CPU and widths, without interpreting timing as success.
+    mov  rbx, rdi
+    lea  rsi, [rel hsm_uc_cost_header]
+    call hsm_literal
+    test eax, eax
+    jz   .no_cost
+    cmp  dword [rel hsm_uc_bsp], 0
+    jne  .bad
+    lea  rsi, [rel hsm_uc_cost_fields]
+    call hsm_fields
     jmp  .out
+.no_cost:
+    mov  rdi, rbx
+    jmp  .yes
 .absent:
     mov  dword [rel hsm_uc_bsp], -1      ; no section: nothing for the state to contradict
     mov  rdi, rbx
@@ -981,6 +998,24 @@ hsm_uc_post_ctrl_valid: db " uc_post_ctrl_valid=",0
 hsm_uc_post_ctrl: db " uc_post_ctrl=",0
 hsm_uc_post_arch_valid: db " uc_post_arch_valid=",0
 hsm_uc_post_arch: db " uc_post_arch=",0
+hsm_uc_cost_header: db " uc_cost_v=",0
+hsm_uc_cost_version: db "1",0
+hsm_uc_cost_cpu: db " uc_cost_cpu=",0
+hsm_uc_cost_profile: db " uc_cost_profile=",0
+hsm_uc_cost_op: db " uc_cost_op=",0
+hsm_uc_cost_valid: db " uc_cost_valid=",0
+hsm_uc_cost_start: db " uc_cost_start=",0
+hsm_uc_cost_end: db " uc_cost_end=",0
+align 8
+hsm_uc_cost_fields:
+    dq hsm_uc_cost_version - $, 0, 0
+    dq hsm_uc_cost_cpu - $, 3, 31
+    dq hsm_uc_cost_profile - $, 1, 2
+    dq hsm_uc_cost_op - $, 1, 2
+    dq hsm_uc_cost_valid - $, 1, 1
+    dq hsm_uc_cost_start - $, 1, 18446744073709551615
+    dq hsm_uc_cost_end - $, 1, 18446744073709551615
+    dq 0
 align 8
 hsm_sec_fields:
     dq hsm_sec_vendor - $, 1, 2

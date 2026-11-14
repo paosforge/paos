@@ -1,8 +1,8 @@
 ;; MODULE gui/netmon_form
 %include "core/abi/build_profile.inc"
 ;; LAYER 6
-;; EXPORTS netmon_form_declare, netmon_members_text, netmon_address_text, netmon_check_click_init
-;; IMPORTS gui/form_loader, svc/command, svc/command_udp, net/dns, net/netdev, dev/net/e1000e, boot/serial, boot/pmod_loader, core/lib/fmt, gui/widget, svc/command_netcheck
+;; EXPORTS netmon_form_declare, netmon_members_text, netmon_address_text, netmon_check_click_init, netmon_observe_widget
+;; IMPORTS gui/form_loader, svc/command, svc/command_udp, net/dns, net/netdev, dev/net/e1000e, boot/serial, boot/pmod_loader, core/lib/fmt, gui/widget, svc/command_netcheck, gui/window_mgmt, gui/chat_app, sec/session, boot/header, hv/nd_isolation
 ;; CAPS
 ;; OWNER saga:pmod_first
 
@@ -538,6 +538,8 @@ netmon_check_click:
     call netcheck_collect
     call netcheck_classify
     movzx eax, byte [rel nc_check]
+    cmp eax, NC_ISO_REFUSED
+    je .isolation
     cmp eax, NC_HEALTHY
     je .age
     cmp eax, NM_CHECK_CODES
@@ -560,8 +562,22 @@ netmon_check_click:
 .pick:
     movsxd rsi, dword [rcx+rax*4]
     add rsi, rcx
+    jmp .show
+.isolation:
+    lea rsi, [rel ndiso_short_text]       ; AMD's one producer owns these words
+.show:
     mov edi, ebx
-    call wgt_set_text
+    ; The result is a label with a 40-byte inline value. Keep all age/error
+    ; words (up to 34 bytes); the legacy 31-byte setter truncates them.
+    mov edx, WGI_SEL_LO-WGI_VAL-1       ; 39 bytes plus NUL, before selection
+    call wgt_set_text_cap
+    ; Passive completed-Check generation on its existing result widget. This
+    ; records the actual handler path; no action or authority is added.
+    mov edi, ebx
+    call wgt_slot_ptr
+    cmp qword [rax+WGI_INTENT_SEQ], -1
+    je .chain                         ; saturated evidence never wraps
+    inc qword [rax+WGI_INTENT_SEQ]
 .chain:
     mov edi, r12d
     mov rax, [rel nm_check_prev]
@@ -573,6 +589,9 @@ netmon_check_click:
     jmp rax
 .out:
     ret
+
+netmon_observe_widget:
+%include "gui/netmon_observation.inc"
 
 ; Generic seam adapters only: all NETMON_STAT/live-view literals and formatting
 ; live in PMOD. The netmon.members rows (RCQ-35 slice 2) are keep-owned GUI text,
@@ -673,56 +692,341 @@ netmon_snapshot:
     pop rbx
     ret
 
-; netmon_details_text -> RAX = the existing provider counters in two rows plus
-; two effective-address rows. Fits the existing five-row panel without moving
-; widgets. The provider's normal observation remains separate from the read-only
-; address tuple: no atomic cross-subsystem snapshot is claimed.
+; GUI presentation only. The provider observation and native address reader
+; retain their existing authority/selection guards; NETMON_STAT is unchanged.
+; Seven bounded stock rows; counters are successful frames, never bytes.
 netmon_details_text:
     push rbx
     push r12
     push r13
+    sub rsp, 16
+    lea rax, [rel nm_details_buf]
+    mov [rsp], rax                       ; stock rows start here if no record
+    lea rdi, [rel nm_iso_buf]
+    mov esi, NM_ISO_TEXT_MAX
+    call ndiso_render
+    test eax, eax
+    jz .stock
+    js .short
+    mov edx, eax
+    lea rsi, [rel nm_iso_buf]
+    lea rdi, [rel nm_details_buf]
+    call nm_iso_rows
+    test eax, eax
+    jle .short                           ; never turn a refusal into stock text
+    lea rbx, [rel nm_details_buf]
+    add rbx, rax
+    jmp .prefix
+.short:
+    lea rbx, [rel nm_details_buf]
+    lea rsi, [rel ndiso_short_text]
+    call nm_cat
+.prefix:
+    mov byte [rbx], ','
+    inc rbx
+    mov [rsp], rbx
+.stock:
 %if !PAOS_PUBLIC_BUILD
     mov edi, 1
     xor esi, esi
     call pmod_netmon_query
 %else
-    xor eax, eax                      ; native address inventory below remains available
+    xor eax, eax
 %endif
     mov r12, rax
-    lea rbx, [rel nm_details_buf]
-    xor r13d, r13d
+    mov r13d, NETDEV_LINK_UNPROBED
     test r12, r12
-    jz .address
-    mov ecx, 144                       ; provider rows are bounded even if malformed
-.copy:
-    mov al, [r12]
-    test al, al
-    jz .separator
-    cmp al, ','
-    jne .put
-    inc r13d
-    cmp r13d, 2                        ; NIC/rx first; tx/drops/link second (<=63 chars)
-    je .put
-    mov al, ' '
-.put:
-    mov [rbx], al
-    inc rbx
-    inc r12
-    dec ecx
-    jnz .copy
-.separator:
-    mov byte [rbx], ','
-    inc rbx
-.address:
+    jz .start
+    call netdev_select_peek
+    test rax, rax
+    jz .unavailable
+    cmp rax, [rel nm_sel_handle]
+    jne .unavailable
+    mov r13d, [rel nm_sel_link]
+    jmp .start
+.unavailable:
+    xor r12d, r12d
+.start:
+    mov rbx, [rsp]
+    lea rsi, [rel nm_gui_link]
+    call nm_cat
+    lea rsi, [rel nm_gui_unknown]
+    cmp r13d, NETDEV_LINK_UNPROBED
+    je .link
+    cmp r13d, NETDEV_LINK_ERROR
+    je .link
+    lea rsi, [rel nm_gui_down]
+    test r13d, 1
+    jz .link
+    lea rsi, [rel nm_gui_up]
+.link:
+    call nm_cat
+    lea rsi, [rel nm_gui_speed]
+    call nm_cat
+    cmp r13d, NETDEV_LINK_UNPROBED
+    je .no_speed
+    cmp r13d, NETDEV_LINK_ERROR
+    je .no_speed
+    test r13d, 1
+    jz .no_speed
+    mov edi, r13d
+    shr edi, 8
+    test edi, edi
+    jz .no_speed
+    mov rsi, rbx
+    call fmt_dec
+    add rbx, rax
+    lea rsi, [rel nm_gui_mbps]
+    jmp .speed
+.no_speed:
+    lea rsi, [rel nm_gui_unknown]
+.speed:
+    call nm_cat
     call netmon_address_text
-    mov rsi, rax
-    call nm_cat                        ; <=95 bytes, total <256 including NUL
+    mov r13, rax
+    lea rsi, [rel nm_gui_ip]
+    call nm_cat
+    mov rdi, r13
+    lea rsi, [rel nm_gui_key_ip]
+    call nm_gui_address
+    lea rsi, [rel nm_gui_gateway]
+    call nm_cat
+    mov rdi, r13
+    lea rsi, [rel nm_gui_key_gateway]
+    call nm_gui_address
+    lea rsi, [rel nm_gui_dns]
+    call nm_cat
+    mov rdi, r13
+    lea rsi, [rel nm_gui_key_dns]
+    call nm_gui_address
+    lea rsi, [rel nm_gui_sent]
+    call nm_cat
+    mov rdi, r12
+    lea rsi, [rel nm_gui_key_tx]
+    call nm_gui_counter
+    lea rsi, [rel nm_gui_received]
+    call nm_cat
+    mov rdi, r12
+    lea rsi, [rel nm_gui_key_rx]
+    call nm_gui_counter
     mov byte [rbx], 0
     lea rax, [rel nm_details_buf]
+    add rsp, 16
     pop r13
     pop r12
     pop rbx
     ret
+
+; NM_ISO_TEXT_MAX is AMD's bounded render contract, checked by the composed
+; HOST row. The Connection listview has seven rows of 58 glyphs and treats a
+; comma as a row delimiter. Keep all punctuation; replace only word/line
+; boundaries. A violated contract uses the producer's short form, never a
+; clipped reason or a hidden line 2. No driver, network or classifier call.
+NM_ISO_TEXT_MAX equ 412
+NM_ISO_GLYPHS equ 58
+NM_ISO_ROWS equ 7
+; nm_iso_rows(RSI=text, EDX=length, RDI=output) -> EAX bytes or -1.
+; Output needs NM_ISO_TEXT_MAX+1; clobbers RCX, RDX, RSI, RDI, R8-R11.
+nm_iso_rows:
+    cmp edx, NM_ISO_TEXT_MAX
+    ja .bad
+    xor eax, eax
+    xor r8d, r8d                        ; open row glyphs
+    xor r9d, r9d                        ; rows opened
+    xor r10d, r10d                      ; source offset
+.next:
+    cmp r10d, edx
+    jae .done
+    cmp byte [rsi+r10], ' '
+    je .space
+    cmp byte [rsi+r10], 10
+    je .line
+    mov r11d, r10d
+    xor ecx, ecx
+.word:
+    cmp r11d, edx
+    jae .place
+    cmp byte [rsi+r11], ' '
+    je .place
+    cmp byte [rsi+r11], 10
+    je .place
+    cmp byte [rsi+r11], 33
+    jb .bad
+    cmp byte [rsi+r11], 126
+    ja .bad
+    cmp byte [rsi+r11], ','
+    je .bad
+    inc r11d
+    inc ecx
+    cmp ecx, NM_ISO_GLYPHS
+    ja .bad                             ; never split a word mid-row
+    jmp .word
+.place:
+    test r8d, r8d
+    jz .new_row
+    lea r11d, [r8+rcx+1]
+    cmp r11d, NM_ISO_GLYPHS
+    ja .new_row
+    mov byte [rdi+rax], ' '
+    inc eax
+    inc r8d
+    jmp .copy_word
+.new_row:
+    cmp r9d, NM_ISO_ROWS
+    jae .bad
+    test r9d, r9d
+    jz .first
+    mov byte [rdi+rax], ','
+    inc eax
+.first:
+    inc r9d
+    xor r8d, r8d
+.copy_word:
+    add r8d, ecx
+.copy:
+    mov r11b, [rsi+r10]
+    mov [rdi+rax], r11b
+    inc eax
+    inc r10d
+    dec ecx
+    jnz .copy
+    jmp .next
+.line:
+    xor r8d, r8d
+.space:
+    inc r10d
+    jmp .next
+.done:
+    mov byte [rdi+rax], 0
+    ret
+.bad:
+    mov eax, -1
+    ret
+
+; RDI=source, RSI=literal separator+key -> RAX=value or0. Source bound144.
+nm_gui_find:
+    test rdi, rdi
+    jz .none
+    xor ecx, ecx
+.next:
+    cmp ecx, 144
+    jae .none
+    cmp byte [rdi+rcx], 0
+    je .none
+    xor edx, edx
+.match:
+    mov r8b, [rsi+rdx]
+    test r8b, r8b
+    jz .found
+    lea r9, [rcx+rdx]
+    cmp r9d, 144
+    jae .none
+    cmp r8b, [rdi+r9]
+    jne .advance
+    inc edx
+    jmp .match
+.advance:
+    inc ecx
+    jmp .next
+.found:
+    lea rax, [rdi+rcx]
+    add rax, rdx
+    ret
+.none:
+    xor eax, eax
+    ret
+
+; Validate the entire bounded u64 token before painting anything. Missing,
+; overflow, UINT64_MAX sentinel and nondecimal values stay Unavailable.
+nm_gui_counter:
+    call nm_gui_find
+    test rax, rax
+    jz .unknown
+    mov r9, rax
+    xor r10d, r10d
+    xor r11d, r11d
+.digit:
+    movzx r8d, byte [r9+r10]
+    cmp r8b, 0
+    je .end
+    cmp r8b, ','
+    je .end
+    cmp r8b, '0'
+    jb .unknown
+    cmp r8b, '9'
+    ja .unknown
+    cmp r10d, 20
+    jae .unknown
+    sub r8d, '0'
+    mov rax, r11
+    mov ecx, 10
+    mul rcx
+    test rdx, rdx
+    jnz .unknown
+    add rax, r8
+    jc .unknown
+    mov r11, rax
+    inc r10d
+    jmp .digit
+.end:
+    test r10d, r10d
+    jz .unknown
+    cmp r11, -1
+    je .unknown
+    mov rdi, r11
+    mov rsi, rbx
+    call fmt_dec
+    add rbx, rax
+    lea rsi, [rel nm_gui_frames]
+    jmp nm_cat
+.unknown:
+    lea rsi, [rel nm_gui_unknown]
+    jmp nm_cat
+
+; Native address reader above is the sole source. Only selected transport
+; tuples can say Not set; absent/other owners remain explicitly Unavailable.
+nm_gui_address:
+    cmp byte [rdi+8], 's'
+    jne .unknown
+    call nm_gui_find
+    test rax, rax
+    jz .unknown
+    cmp byte [rax], 'u'                 ; native reader's canonical unset
+    je .unset
+    xor ecx, ecx
+.check:
+    mov dl, [rax+rcx]
+    test dl, dl
+    jz .copy
+    cmp dl, ','
+    je .copy
+    cmp dl, ' '
+    je .copy
+    cmp ecx, 15
+    jae .unknown
+    cmp dl, '.'
+    je .valid
+    cmp dl, '0'
+    jb .unknown
+    cmp dl, '9'
+    ja .unknown
+.valid:
+    inc ecx
+    jmp .check
+.copy:
+    test ecx, ecx
+    jz .unknown
+    mov rsi, rax
+    mov rdi, rbx
+    add rbx, rcx
+    rep movsb
+    ret
+.unset:
+    lea rsi, [rel nm_gui_unset]
+    jmp nm_cat
+.unknown:
+    lea rsi, [rel nm_gui_unknown]
+    jmp nm_cat
 
 ; netmon_address_text -> RAX = two comma-separated GUI rows, <= 95 bytes.
 ; Uses the command NIC's effective address only if that NIC is selected. The
@@ -1027,6 +1331,24 @@ nm_addr_ip: db " ip=",0
 nm_addr_gateway: db ",gateway=",0
 nm_addr_dns: db " dns=",0
 nm_addr_unset: db "unset",0
+nm_gui_link: db "Link: ",0
+nm_gui_speed: db ",Speed: ",0
+nm_gui_ip: db ",IPv4 address: ",0
+nm_gui_gateway: db ",Gateway: ",0
+nm_gui_dns: db ",DNS: ",0
+nm_gui_sent: db ",Sent: ",0
+nm_gui_received: db ",Received: ",0
+nm_gui_key_rx: db ",rx=",0
+nm_gui_key_tx: db ",tx=",0
+nm_gui_key_ip: db " ip=",0
+nm_gui_key_gateway: db ",gateway=",0
+nm_gui_key_dns: db " dns=",0
+nm_gui_up: db "Connected",0
+nm_gui_down: db "Disconnected",0
+nm_gui_unknown: db "Unavailable",0
+nm_gui_unset: db "Not set",0
+nm_gui_frames: db " frames",0
+nm_gui_mbps: db " Mb/s",0
 %include "core/abi/wdata.inc"
 %macro WDATA_gui_netmon_form_0 0
 align 8
@@ -1065,7 +1387,8 @@ nm_check_button_id: db "network_check",0
 nm_check_result_id: db "network_check_result",0
 nm_members_buf: times NM_MEMBER_MAX * NM_ROW_MAX + 1 db 0
 nm_address_buf: times 128 db 0
-nm_details_buf: times 256 db 0
+nm_details_buf: times NM_ISO_TEXT_MAX + 256 + 1 db 0
+nm_iso_buf: times NM_ISO_TEXT_MAX db 0
 %endmacro
 WDATA_DEFER WDATA_gui_netmon_form_0
 %endif

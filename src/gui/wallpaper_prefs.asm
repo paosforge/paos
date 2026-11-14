@@ -1,21 +1,22 @@
 ;; MODULE gui/wallpaper_prefs
 ;; LAYER 6
 ;; EXPORTS wallpaper_prefs_scan, wallpaper_prefs_click, wallpaper_prefs_key, wallpaper_prefs_tick, wallpaper_stock_import, wallpaper_stock_choice, wp_ids, wp_live
-;; IMPORTS dev/ps2, gui/start_programs, gui/form_loader, gui/widget, gui/window, gui/widget_image, gui/img/img_source, gui/img/img_cache, gui/config_prefs, sec/session, sec/principal, svc/command, svc/command_auth, boot/boot_esp_guid, fs/vfs
+;; IMPORTS dev/ps2, gui/start_programs, gui/form_loader, gui/widget, gui/window, gui/widget_image, gui/img/img_core, gui/img/img_source, gui/img/img_cache, gui/config_prefs, sec/session, sec/principal, svc/command, svc/command_auth, boot/boot_esp_guid, fs/vfs
 ;; CAPS CAP_GUI
 ;; OWNER rc-codex-av
 ;; CONTEXT: bsp_only
-; All nine original-size JPEGs live on the GUID-bound read-only boot ESP.
+; Nine original-size JPEGs use the GUID-bound read-only boot ESP. Choice10
+; uses the fixed immutable embedded BMP; no user path enters PAOS.CFG.
 ; Human native buttons capture local OWNER epoch and exact form/widget identity.
 ; Their work happens on the BSP tick; the same authority is rechecked after IO
 ; and decoding, before publication. Failed loads keep the old pinned image.
 ; A validated PAOS.CFG imports only an ordinal; its first unlocked OWNER tick
 ; restores it once. Missing files never create a repeated per-frame IO loop.
 
-WP_COUNT equ 11                         ; status, Default, nine named buttons
+WP_COUNT equ 12                         ; status, Default, nine JPEGs, fixed BMP
 
 wallpaper_stock_import:                 ; boot-only, already validated record
-    cmp edi, 9
+    cmp edi, 10
     ja .out
     mov [rel wallpaper_stock_choice], dil
     mov byte [rel wp_restore], 1
@@ -52,7 +53,7 @@ wallpaper_prefs_scan:
     mov ecx, [rel wp_slot]
     mov byte [rel wp_live], 1
     ; Establish keyboard focus when a fresh form has none. Leave a user's
-    ; existing focused button alone; all ten are ordinary kit buttons.
+    ; existing focused button alone; all eleven are ordinary kit buttons.
     lea rdx, [rel wgt_focus_by_win]
     cmp dword [rdx+rcx*4], -1
     jne .out
@@ -65,7 +66,7 @@ wallpaper_prefs_scan:
     pop rbx
     ret
 
-; EDI hit widget. Returns1 only for this form's ten choice buttons.
+; EDI hit widget. Returns1 only for this form's eleven choice buttons.
 wallpaper_prefs_click:
     push rbx
     mov ebx, edi
@@ -122,7 +123,7 @@ wallpaper_prefs_key:
     pop rbx
     ret
 
-wp_button:                             ; EDI id -> EAX ordinal0..9 / -1
+wp_button:                             ; EDI id -> EAX ordinal0..10 / -1
     cmp byte [rel wp_live], 1
     jne .no
     xor ecx, ecx
@@ -131,7 +132,7 @@ wp_button:                             ; EDI id -> EAX ordinal0..9 / -1
     cmp edi, [rdx+rcx*4]
     je .found
     inc ecx
-    cmp ecx, 10
+    cmp ecx, 11
     jb .loop
 .no:
     mov eax, -1
@@ -272,10 +273,10 @@ wp_owner_current:
     mov eax, -1
     ret
 
-; r14d ordinal. Uses the existing owned-source/cache contract, never paint IO.
+; r14d ordinal. Uses the existing source/cache contracts, never paint IO.
 wp_load:
     xor r15d, r15d
-    cmp r14d, 9
+    cmp r14d, 10
     ja .bad
     cmp dword [rel fb_width], 0
     je .bad
@@ -287,6 +288,8 @@ wp_load:
     mov [rel wp_target_h], eax
     test r14d, r14d
     jz .default
+    cmp r14d, 10
+    je .embedded
     cmp byte [rel boot_esp_part_guid_ok], 1
     jne .bad
     lea rdi, [rel boot_esp_part_guid]
@@ -304,6 +307,7 @@ wp_load:
     test rax, rax
     jz .bad
     mov r15, rax
+.bind:
     mov rdi, rax
     mov esi, [rel fb_width]
     mov edx, [rel fb_height]
@@ -316,12 +320,15 @@ wp_load:
     pop rdx
     test eax, eax
     jnz .retire
+    cmp r14d, 10
+    je .embedded_current
     push rdx
     mov rdi, r15
     call img_source_current
     pop rdx
     test eax, eax
     jnz .retire
+.dimensions:
     mov eax, [rel fb_width]
     cmp eax, [rel wp_target_w]
     jne .retire
@@ -337,11 +344,29 @@ wp_load:
     mov [rel wallpaper_state+WIS_OUTH], eax
     mov [rel img_cache_pin_h], eax
     jmp .publish
+.embedded:
+    lea rdi, [rel wp_bmp]
+    call img_asset_find
+    test rax, rax
+    jz .bad
+    mov r15, rax
+    jmp .bind
+.embedded_current:
+    ; Embedded rows/bytes are immutable. Re-resolve the one supported name;
+    ; never interpret an embedded row as an owned VFS source descriptor.
+    push rdx
+    lea rdi, [rel wp_bmp]
+    call img_asset_find
+    pop rdx
+    cmp rax, r15
+    jne .retire
+    jmp .dimensions
 .default:
     call wp_owner_current
     test eax, eax
     jnz .bad
 .publish:
+    mov dword [rel wallpaper_state+WIS_FIT], WIMG_FIT_SCALE ; picker/default replaces tile
     mov rdi, [rel wallpaper_state+WIS_SRC]
     mov [rel wallpaper_state+WIS_SRC], r15
     mov [rel img_cache_pin_asset], r15
@@ -369,6 +394,7 @@ wp_load:
 wp_s_saved: db 'Saved',0
 wp_s_runtime: db 'Applied until restart; save failed',0
 wp_s_refused: db 'Unavailable; wallpaper kept',0
+wp_bmp: db 'kat_quad16.bmp',0
 wp_paths:
 %assign wp_i 1
 %rep 9

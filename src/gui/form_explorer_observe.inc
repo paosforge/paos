@@ -16,6 +16,9 @@ form_cmd_verb_explorerobs:
     call session_shell_request_principal
     cmp  rax, PRIN_OWNER
     jne  .refused
+    call form_exp_instance_select_command
+    test eax, eax
+    jz   .refused
     call form_exp_observe_valid
     test eax, eax
     jz   .refused
@@ -51,6 +54,18 @@ form_cmd_verb_explorerobs:
     lea  rdi, [rel str_explorerobs_selected]
     cmp  eax, 1
     je   .phase
+    lea  rdi, [rel str_explorerobs_deleted]
+    cmp  eax, 3
+    je   .phase
+    lea  rdi, [rel str_explorerobs_created]
+    cmp  eax, 5
+    je   .phase
+    lea  rdi, [rel str_explorerobs_moved]
+    cmp  eax, 6
+    je   .phase
+    lea  rdi, [rel str_explorerobs_renamed]
+    cmp  eax, 4
+    je   .phase
     lea  rdi, [rel str_explorerobs_accepted]
 .phase:
     call form_out_put_str
@@ -78,11 +93,22 @@ form_cmd_verb_explorerobs:
     EXP_OBS_DEC str_explorerobs_src_mount, EXP_OBS_SRC_STAMP + 40
     EXP_OBS_HEX str_explorerobs_src_label, EXP_OBS_SRC_STAMP + 80, 15
     EXP_OBS_HEX str_explorerobs_src, EXP_OBS_SRC_PATH, FORM_FS_CWD_MAX - 1
+    cmp  qword [r12 + EXP_OBS_PHASE], 6
+    je   .destination
+    cmp  qword [r12 + EXP_OBS_PHASE], 5
+    je   .destination
+    cmp  qword [r12 + EXP_OBS_PHASE], 4
+    je   .destination
     cmp  qword [r12 + EXP_OBS_PHASE], 2
-    jne  .ready
+    je   .destination
+    cmp  qword [r12 + EXP_OBS_PHASE], 3
+    je   .operation_nonce
+    jmp  .ready
+.destination:
     EXP_OBS_DEC str_explorerobs_dst_mount, EXP_OBS_DST_STAMP + 40
     EXP_OBS_HEX str_explorerobs_dst_label, EXP_OBS_DST_STAMP + 80, 15
     EXP_OBS_HEX str_explorerobs_dst, EXP_OBS_DST_PATH, FORM_FS_CWD_MAX - 1
+.operation_nonce:
     lea  rdi, [rel str_explorerobs_op_nonce]
     call form_out_put_str
     lea  rdi, [r12 + EXP_OBS_NONCE]

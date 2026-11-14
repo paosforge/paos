@@ -1,6 +1,7 @@
 ; Public `guest` builtin: attach to the already running Linux hvc0 shell.
 ; This never starts/stops a VM, assigns hardware or claims guest/Internet proof.
 TERM_GUEST_MODE equ 3
+TERM_GUEST_OFFER_KEY equ 0x0f           ; Ctrl+Shift+O: the router folds Ctrl+letter
 
 term_guest_attach:
     cmp byte [r12 + TI_SSH], 0
@@ -81,14 +82,78 @@ term_guest_key:
     call term_guest_input_ok
     test eax, eax
     jz .out
-    cmp r13d, 0x1d                     ; Ctrl+] leaves console attached guest running
+    cmp r13d, 0x1d                     ; Ctrl+] leaves console attached guest running    cmp r13d, 0x1d                     ; Ctrl+] leaves console attached guest mode
     je term_guest_leave
+    cmp r13d, TERM_GUEST_OFFER_KEY
+    jne .plain
+    test r14d, 1
+    jnz term_guest_offer_key
+.plain:
     call term_encode_key
     test eax, eax
     jz .out
     mov ecx, eax
     lea rdx, [rel term_keybuf]
     jmp term_guest_send
+.out:
+    ret
+
+; hvc0 is the shell's own output, so printed text can never open a card. One key
+; from the owner's hand arms one offer for this attachment, and again disarms it.
+term_guest_offer_key:
+    call keyprov_key_is_human
+    test eax, eax
+    jz .refused
+    call input_modifiers_are_human
+    test eax, eax
+    jz .refused
+    cmp byte [rel term_guest_offer], 1
+    je .disarm
+    mov rdi, r12
+    mov esi, [rel term_guest_generation]
+    call gbr_arm
+    cmp eax, 1
+    jne .refused
+    mov byte [rel term_guest_offer], 1
+    lea rsi, [rel term_guest_offer_armed]
+    jmp term_out_cstr
+.disarm:
+    call gbr_disarm
+    mov byte [rel term_guest_offer], 0
+    lea rsi, [rel term_guest_offer_off]
+    jmp term_out_cstr
+.refused:
+    lea rsi, [rel term_guest_offer_refused]
+    jmp term_out_cstr
+
+; Hash-checked bytes go to the owner's card with the Terminal's origin, native
+; here and never from the guest. The offer copies them; every end scrubs ours.
+term_guest_offer_tick:
+    cmp byte [rel term_guest_offer], 1
+    jne .out
+    call gbr_candidate
+    test rax, rax
+    jnz .candidate
+    cmp byte [rel gbr_state], GBR_S_IDLE
+    jne .out
+    mov byte [rel term_guest_offer], 0
+    lea rsi, [rel term_guest_offer_ended]
+    jmp term_out_cstr
+.candidate:
+    mov rdi, rax
+    mov esi, edx
+    mov edx, AIN_ORIGIN_TERMINAL
+    call app_install_offer
+    push rax
+    call gbr_disarm
+    mov byte [rel term_guest_offer], 0
+    pop rax
+    lea rsi, [rel term_guest_offer_shown]
+    cmp eax, 1
+    je .say
+    lea rsi, [rel term_guest_offer_refused]
+.say:
+    jmp term_out_cstr
 .out:
     ret
 
@@ -197,6 +262,7 @@ term_guest_try_send:
 term_guest_tick:
     cmp r12, [rel term_guest_instance]
     jne .out
+    call term_guest_offer_tick
     mov rdi, r12
     mov esi, [rel term_guest_generation]
     call hv_terminal_status
@@ -294,6 +360,8 @@ term_guest_leave:
 term_guest_forget:
     cmp r12, [rel term_guest_instance]
     jne .out
+    call gbr_disarm
+    mov byte [rel term_guest_offer], 0
     mov rdi, r12
     mov esi, [rel term_guest_generation]
     call hv_terminal_detach
@@ -333,9 +401,14 @@ term_guest_stat:
 
 %include "core/abi/wdata.inc"
 %macro WDATA_gui_terminal_guest 0
-term_guest_connected: db "[guest console attached; Enter for prompt, Ctrl+] to detach]",13,10,0
+term_guest_connected: db "[guest console attached; Enter for prompt, Ctrl+] to detach, Ctrl+Shift+O to take an app]",13,10,0
 term_guest_unavailable: db "guest: no available Linux shell console (running guest, ready transport and exclusive ownership required)",13,10,0
 term_guest_usage: db "usage: guest (attach to the running Linux guest)",13,10,0
+term_guest_offer_armed: db 13,10,"[app offer on for 2 minutes; print an app here. Ctrl+Shift+O cancels]",13,10,0
+term_guest_offer_off: db 13,10,"[app offer off]",13,10,0
+term_guest_offer_ended: db 13,10,"[app offer ended; no app received]",13,10,0
+term_guest_offer_shown: db 13,10,"[app offer ended; see the install card]",13,10,0
+term_guest_offer_refused: db 13,10,"[app offer refused]",13,10,0
 term_guest_pressure: db 7,"[guest input refused; event was not queued]",13,10,0
 term_guest_paste_limit: db 7,"[guest paste refused; maximum 244 bytes]",13,10,0
 term_guest_ended: db 13,10,"[guest console ended or output overflowed; detached]",13,10,0
@@ -351,6 +424,8 @@ term_guest_instance: resq 1
 term_guest_rx: resq 1
 term_guest_tx: resq 1
 term_guest_generation: resd 1
+term_guest_offer: resb 1
+alignb 4
 term_guest_chunk: resb 256
 term_guest_paste_buf: resb 256
 %endmacro

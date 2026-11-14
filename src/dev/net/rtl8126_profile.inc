@@ -31,15 +31,18 @@
     %undef e5000b_hw_bringup
 e5000b_create:
     NATIVE_DRIVER_REFUSE 6
+    PCIA_NATIVE_COLD_REFUSE
     jmp ndp_lab_e5000b_create
 e5000b_init:
     NATIVE_DRIVER_REFUSE 6
+    PCIA_NATIVE_COLD_REFUSE
     jmp ndp_lab_e5000b_init
 e5000b_recover:
     NATIVE_DRIVER_REFUSE 6
     jmp ndp_lab_e5000b_recover
 e5000b_hw_bringup:
     NATIVE_DRIVER_REFUSE 6
+    PCIA_NATIVE_COLD_REFUSE
     jmp ndp_lab_e5000b_hw_bringup
 %endif
     %include "private-lab/rtl8126_204.marker.inc"

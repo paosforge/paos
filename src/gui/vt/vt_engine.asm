@@ -2931,16 +2931,16 @@ vt_sgr_rbx:
 ;; ---------------------------------------------------------------------------
 ;; Strings (OSC / DCS / SOS / PM / APC)
 vt_string_byte_rbx:
+    cmp  edi, 0x18                      ; CAN cancels even after a pending ESC
+    je   .abort
+    cmp  edi, 0x1a                      ; SUB
+    je   .abort
     cmp  byte [rbx + VT.str_esc], 0
     jne  .after_esc
     cmp  edi, 0x07
     je   .bel
     cmp  edi, 0x1b
     je   .esc
-    cmp  edi, 0x18
-    je   .abort
-    cmp  edi, 0x1a
-    je   .abort
     mov  eax, [rbx + VT.strlen]
     cmp  eax, VT_STRMAX
     jae  .full
@@ -2973,6 +2973,7 @@ vt_string_byte_rbx:
     je   vt_dcs_dispatch_rbx
     ret
 .abort:
+    mov  byte [rbx + VT.str_esc], 0
     mov  byte [rbx + VT.state], VTS_GROUND
     ret
 

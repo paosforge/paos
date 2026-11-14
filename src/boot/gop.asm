@@ -1,6 +1,6 @@
 ;; MODULE boot/gop
 ;; LAYER 0
-;; EXPORTS gop_hp_live_consumed, gop_census_pci, gop_proto, gop_census_path_state, gop_census_root_hid, gop_census_root_uid, gop_census_path_n, gop_census_path, gop_setmode_attempts, gop_scan_flags, gop_scan_queries, gop_scan_valid, gop_scan_releases, gop_scan_complete, gop_scan_max_modes, gop_scan_query_status, gop_scan_free_status, gop_pci_discovery, gop_pci_locate_status, gop_pci_handles, gop_pci_scanned, gop_pci_protocol_failures, gop_pci_protocol_nulls, gop_pci_protocol_error, gop_pci_read_failures, gop_pci_read_error, gop_pci_non_display, gop_discrete, gop_selected_pci_nodes, gop_query, gop_connect_display_controllers, gop_locate_initial_status, gop_locate_retry_status, gop_connect_attempts, gop_connect_successes, gop_connect_last_status, gop_blt_calibrate, gop_revalidate_record, gop_health_evaluate, gop_fb_memtype_probe, gop_reval_remodeset, gop_native_mode, gop_calib_status, gop_calib_reason, gop_calib_pitch, gop_calib_meta_pitch, gop_calib_format, gop_calib_rows, gop_reval_status, gop_reval_changes, gop_setmode_forced, gop_fb_memtype, gop_fb_pages_2m, gop_fb_pages_4k, gop_fb_range_exact, gop_health_state, gop_reg_status, gop_reg_stride64, gop_reg_size, gop_reg_srcsz, gop_edid_clear, gop_edid_validate_publish, gop_edid_raw, gop_edid_bytes, gop_edid_blocks, gop_edid_checksum_ok, gop_edid_present, gop_plane_dump, gop_plane_geom, gop_pipe_probe, gop_ddi_mask, gop_output_ptr, gop_output_count, gop_outputs, gop_last_ddisel, gop_disp_tier, gop_disp_repairs, gop_disp_id, gop_fill, fb_base, fb_width, fb_height, fb_stride, fb_pixel_format, fb_bpp, fb_size, gop_mode_list, gop_mode_count, res_native_w, res_native_h, res_src, res_dpi, fb_out_width, fb_out_height, fb_out_stride, fb_scale
+;; EXPORTS gop_hp_live_consumed, gop_census_pci, gop_proto, gop_census_path_state, gop_census_root_hid, gop_census_root_uid, gop_census_path_n, gop_census_path, gop_setmode_attempts, gop_scan_flags, gop_scan_queries, gop_scan_valid, gop_scan_releases, gop_scan_complete, gop_scan_max_modes, gop_scan_query_status, gop_scan_free_status, gop_pci_discovery, gop_pci_locate_status, gop_pci_handles, gop_pci_scanned, gop_pci_protocol_failures, gop_pci_protocol_nulls, gop_pci_protocol_error, gop_pci_read_failures, gop_pci_read_error, gop_pci_non_display, gop_discrete, gop_selected_pci_nodes, gop_query, gop_connect_display_controllers, gop_locate_initial_status, gop_locate_retry_status, gop_connect_attempts, gop_connect_successes, gop_connect_last_status, gop_blt_calibrate, gop_revalidate_record, gop_health_evaluate, gop_fb_memtype_probe, gop_reval_remodeset, gop_native_mode, gop_calib_status, gop_calib_reason, gop_calib_pitch, gop_calib_meta_pitch, gop_calib_format, gop_calib_rows, gop_reval_status, gop_reval_changes, gop_setmode_forced, gop_fb_memtype, gop_fb_pages_2m, gop_fb_pages_4k, gop_fb_range_exact, gop_health_state, gop_reg_status, gop_reg_stride64, gop_reg_size, gop_reg_srcsz, gop_edid_clear, gop_edid_validate_publish, gop_edid_raw, gop_edid_bytes, gop_edid_blocks, gop_edid_checksum_ok, gop_edid_present, gop_plane_dump, gop_plane_geom, gop_pipe_probe, gop_ddi_mask, gop_output_ptr, gop_output_count, gop_outputs, gop_last_ddisel, gop_disp_tier, gop_disp_repairs, gop_disp_id, gop_fill, fb_base, gop_fb_reported, fb_width, fb_height, fb_stride, fb_pixel_format, fb_bpp, fb_size, gop_mode_list, gop_mode_count, res_native_w, res_native_h, res_src, res_dpi, fb_out_width, fb_out_height, fb_out_stride, fb_scale
 ;; IMPORTS boot/serial, boot/header, boot/smbios, boot/boot_menu
 ;; CAPS
 ;; OWNER saga:boot
@@ -99,8 +99,10 @@ gop_query:
     jb   .none
     mov  rax, [rsi + 0x18]          ; FrameBufferBase
     mov  [rel fb_base], rax
+    mov  [rel gop_fb_reported], rax ; retained: never repointed or zeroed (SEC 106852)
     mov  rax, [rsi + 0x20]          ; FrameBufferSize (firmware measurement)
     mov  [rel fb_size], rax
+    mov  [rel gop_fb_reported+8], rax
     mov  eax, [rdi + 4]
     mov  [rel fb_width], eax
     mov  eax, [rdi + 8]
@@ -1641,6 +1643,8 @@ gop_revalidate_record:
 .adopt:
     mov  [rel fb_base], rax
     mov  [rel fb_size], rcx
+    mov  [rel gop_fb_reported+16], rax ; retained adopted record (SEC 106852)
+    mov  [rel gop_fb_reported+24], rcx
     mov  [rel fb_width], r8d
     mov  [rel fb_height], r9d
     mov  [rel fb_pixel_format], r10d
@@ -2257,6 +2261,9 @@ gop_last_ddisel:  dd 0              ; DDI select of the last pipe probed
 fb_pixel_format:  dd 0              ; UEFI Info->PixelFormat, retained pre-EBS
 fb_bpp:           dd 0              ; 32 for the three UEFI linear pixel formats
 fb_size:          dq 0              ; UEFI Mode->FrameBufferSize, retained pre-EBS
+; Every GOP-reported framebuffer {base,size}: [0] gop_query, [1] revalidation
+; adopt. Only those two writers; never repointed by the shadow or zeroed headless.
+gop_fb_reported:  times 4 dq 0
 ; RCQ-16 VQ-01 (2026-10-16): with fb_scale=2 the GUI composes a logical surface of half the mode in
 ; fb_width/fb_height/fb_stride and the present replicates every pixel 2x2; the scanout keeps this geometry.
 fb_out_width:     dd 0              ; scanout mode while fb_scale=2 (else fb_* is the scanout)

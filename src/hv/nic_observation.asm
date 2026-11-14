@@ -99,6 +99,7 @@ nd_command_nics:
     ; A new capture invalidates prior success even if selection refuses or
     ; the sequence exhausts. Never expose the untouched output on refusal.
     mov dword [rel nics_valid],0
+    mov dword [rel nics_refusal_bytes],0
     cmp dword [rel nics_sequence],0xffffffff
     je .cache_error
     inc dword [rel nics_sequence]
@@ -115,6 +116,30 @@ nd_command_nics:
     cmp eax,14
     ja .cache_error
     mov [rel nics_status],eax
+    cmp eax,7
+    jne .captured
+    cmp edx,272
+    jne .captured
+    test rcx,rcx
+    jz .captured
+    ; Copy immediately, before another producer can change BSP scratch.
+    ; Builder only initializes used records: canonicalize unused tail to zero.
+    mov rsi,rcx
+    movzx r8d,byte [rsi+3]
+    test r8d,r8d
+    jz .cache_error
+    cmp r8d,32
+    ja .cache_error
+    lea rdi,[rel nics_cache]
+    mov ecx,272/8
+    xor eax,eax
+    cld
+    rep stosq
+    lea rdi,[rel nics_cache]
+    lea ecx,[r8d+2]
+    rep movsq
+    mov dword [rel nics_refusal_bytes],272
+.captured:
     mov dword [rel nics_next_page],1
     mov dword [rel nics_valid],1
     jmp .emit
@@ -128,7 +153,14 @@ nd_command_nics:
     cmp r13d,[rel nics_bdf]
     jne .cache_error
     cmp dword [rel nics_status],0
+    je .identity
+    cmp dword [rel nics_status],7
     jne .cache_error
+    cmp dword [rel nics_refusal_bytes],272
+    jne .cache_error
+    cmp ebx,1
+    jne .cache_error
+.identity:
     cmp ebx,[rel nics_next_page]
     jne .cache_error
     lea rdi,[rel nics_arg_probe]
@@ -153,11 +185,21 @@ nd_command_nics:
     call nd_info_number
     xor r14d,r14d
     cmp dword [rel nics_status],0
-    jne .length
+    jne .refusal_length
     mov r14d,256
     cmp ebx,2
     jne .length
     mov r14d,80
+    jmp .length
+.refusal_length:
+    cmp dword [rel nics_status],7
+    jne .length
+    cmp dword [rel nics_refusal_bytes],272
+    jne .length
+    mov r14d,256
+    test ebx,ebx
+    jz .length
+    mov r14d,16
 .length:
     mov edi,r14d
     call nd_info_number
@@ -250,6 +292,7 @@ nics_sequence: dq 0
 nics_valid: dd 0
 nics_bdf: dd 0
 nics_status: dd 0
+nics_refusal_bytes: dd 0
 nics_next_page: dd 0
 nics_probe: times 17 db 0
 nics_arg_bdf: times 5 db 0

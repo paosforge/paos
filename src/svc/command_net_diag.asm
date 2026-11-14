@@ -1,7 +1,7 @@
 ;; MODULE svc/command_net_diag
 ;; LAYER 5
-;; EXPORTS command_net_diag_init, tcpdiag_stage_snapshot, tcpdiag_out_ready, tcpdiag_out_buf, tcpdiag_out_cur
-;; IMPORTS boot/header, core/lib/mem, dev/net/ax_lifetime_observation, dev/net/ax88179, core/lib/fmt, net/tcp, svc/command
+;; EXPORTS command_net_diag_init, tcpdiag_stage_snapshot, tcpdiag_out_ready, tcpdiag_out_buf, tcpdiag_out_cur, tcpprobe_link_tick
+;; IMPORTS boot/serial, dev/net/rtl8168, dev/net/rtl8125, dev/net/rtl8126, net/carrier_drill, net/netdev, core/time, boot/header, core/lib/mem, dev/net/ax_lifetime_observation, dev/net/ax88179, core/lib/fmt, net/tcp, svc/command
 ;; CAPS
 ;; OWNER saga:ssh_server
 ; Read-only TCP lifecycle projection. The L4 module owns all TCP state and
@@ -9,6 +9,10 @@
 ; remains owner-authorized under the central fail-closed public-name policy;
 ; public STATUS uses the same renderer from command_udp's existing STATUS
 ; projection, so no transport-side access-control exception is introduced.
+
+%ifndef PAOS_LAB_RTL8126_204
+%define PAOS_LAB_RTL8126_204 0
+%endif
 
 command_net_diag_init:
     lea  rdi, [rel str_verb_tcpstat]
@@ -129,7 +133,85 @@ tcpdiag_stage_snapshot:
     lea  rdi, [rel str_tcpstat_syn_reaps]
     mov  esi, TCPD_SYN_REAPS
     call tcpdiag_out_field
+    mov dword [rel tcpdiag_realtek_omitted], 0
+    lea rdi, [rel tcpdiag_realtek_counts]
+    call rtl8125_link_rearm_counts
+    lea rdi, [rel str_tcpstat_rtl8125]
+    mov esi, 1
+    call tcpdiag_out_rearm_group
+%if PAOS_LAB_RTL8126_204
+    ; The selectable legacy backend has no counters; do not invent zeros.
+    or dword [rel tcpdiag_realtek_omitted], 2
+%else
+    lea rdi, [rel tcpdiag_realtek_counts]
+    call rtl8126_link_rearm_counts
+    lea rdi, [rel str_tcpstat_rtl8126]
+    mov esi, 2
+    call tcpdiag_out_rearm_group
+%endif
+    lea rdi, [rel tcpdiag_realtek_counts]
+    call rtl8168_link_rearm_counts
+    lea rdi, [rel str_tcpstat_rtl8168]
+    mov esi, 4
+    call tcpdiag_out_rearm_group
+    cmp dword [rel tcpdiag_realtek_omitted], 0
+    je .counts_done
+    lea rdi, [rel str_tcpstat_rearm_omitted]
+    call tcpdiag_out_text
+    mov edi, [rel tcpdiag_realtek_omitted]
+    call tcpdiag_out_u64
+.counts_done:
     mov  byte [rel tcpdiag_out_ready], 1
+    ret
+
+; Stage one complete decimal tuple before appending. Retain the existing
+; 640-byte typed TCPSTAT receipt ABI, including at full-u64 counter values.
+; Keep 20 bytes for an explicit omitted-family bitmask; never clip a number.
+; RDI label, ESI family bit, five diagnostic qwords in scratch.
+tcpdiag_out_rearm_group:
+    push rbx
+    push r12
+    push r13
+    mov ebx, esi
+    mov r12, [rel tcpdiag_out_cur]
+    lea rax, [rel tcpdiag_realtek_group]
+    mov [rel tcpdiag_out_cur], rax
+    call tcpdiag_out_text
+    mov rdi, [rel tcpdiag_realtek_counts+0]
+    call tcpdiag_out_u64
+    lea rdi, [rel str_tcpstat_rearm_comma]
+    call tcpdiag_out_text
+    mov rdi, [rel tcpdiag_realtek_counts+8]
+    call tcpdiag_out_u64
+    lea rdi, [rel str_tcpstat_rearm_comma]
+    call tcpdiag_out_text
+    mov rdi, [rel tcpdiag_realtek_counts+16]
+    call tcpdiag_out_u64
+    lea rdi, [rel str_tcpstat_rearm_comma]
+    call tcpdiag_out_text
+    mov rdi, [rel tcpdiag_realtek_counts+24]
+    call tcpdiag_out_u64
+    lea rdi, [rel str_tcpstat_rearm_comma]
+    call tcpdiag_out_text
+    mov rdi, [rel tcpdiag_realtek_counts+32]
+    call tcpdiag_out_u64
+    mov r13, [rel tcpdiag_out_cur]
+    lea rax, [rel tcpdiag_realtek_group]
+    sub r13, rax
+    mov [rel tcpdiag_out_cur], r12
+    add r13, r12
+    lea rax, [rel tcpdiag_out_buf+620]
+    cmp r13, rax
+    ja .omit
+    lea rdi, [rel tcpdiag_realtek_group]
+    call tcpdiag_out_text
+    jmp .done
+.omit:
+    or [rel tcpdiag_realtek_omitted], ebx
+.done:
+    pop r13
+    pop r12
+    pop rbx
     ret
 
 cmd_verb_tcpstat:
@@ -146,6 +228,9 @@ tcpdiag_out_ready: db 0
 align 8
 tcpdiag_out_cur:   dq 0
 tcpdiag_snapshot:  times TCPD_SIZE db 0
+tcpdiag_realtek_counts: times 5 dq 0
+tcpdiag_realtek_group: times 128 db 0
+tcpdiag_realtek_omitted: dd 0
 tcpdiag_out_buf:   times 640 db 0
 
 str_verb_tcpstat:        db "TCPSTAT", 0
@@ -172,3 +257,9 @@ str_tcpstat_syn_reaps:   db " syn_reaps=", 0
 %include "svc/command_axstat.inc"
 %include "svc/command_axlife.inc"
 %include "svc/command_tcpprobe.inc"
+
+str_tcpstat_rtl8125: db " r25lr=", 0
+str_tcpstat_rtl8126: db " r26lr=", 0
+str_tcpstat_rtl8168: db " r68lr=", 0
+str_tcpstat_rearm_comma: db ",", 0
+str_tcpstat_rearm_omitted: db " lr_omitted=", 0

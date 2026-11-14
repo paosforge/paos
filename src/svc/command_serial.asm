@@ -82,8 +82,12 @@ command_serial_beacon:
 ;   read a byte and hand it to the line assembler. Non-blocking (returns as soon
 ;   as the RBR is empty). The idle loop calls this so the command channel is live
 ;   post-boot. Degrades to a no-op if no UART. clobbers: RAX,RCX,RDX,RDI
+;   A public build has no COM1 command surface: output stays, input is never read.
 ; ---------------------------------------------------------------------------
 command_serial_poll:
+%if PAOS_PUBLIC_BUILD != 0
+    ret
+%else
     push rax
     push rdx
     push rdi
@@ -113,6 +117,7 @@ command_serial_poll:
     pop  rdx
     pop  rax
     ret
+%endif
 
 ; ---------------------------------------------------------------------------
 ; command_serial_rx_byte(DIL=byte) — assemble a CR/LF-terminated line. On a
@@ -188,10 +193,19 @@ command_serial_dispatch_line:
     push r13
     push r14
     call command_udp_gres_reply_retire       ; even an early refusal owns no previous diagnostic
+    ; This ingress always owns SERIAL attribution. Clear the previous request's
+    ; principal before unwrap, including unsigned and early-refused lines.
+    mov  qword [rel cmd_serial_req + REQ_SOURCE], CMD_SOURCE_SERIAL
+    mov  qword [rel cmd_serial_req + REQ_PRINCIPAL], CMD_PRINCIPAL_NONE
     lea  r12, [rel cmd_serial_line]
     mov  rdi, r12
     lea  rsi, [rel cmd_serial_auth_ticket]
     call command_auth_unwrap_line
+    cmp  eax, AUTH_TS_VALID
+    jne  .auth_attributed
+    mov  rcx, [rel cmd_serial_auth_ticket + AUTH_T_PRINCIPAL]
+    mov  [rel cmd_serial_req + REQ_PRINCIPAL], rcx
+.auth_attributed:
     cmp  eax, AUTH_TS_MALFORMED
     je   .auth_malformed
     cmp  eax, AUTH_TS_WRONG_KEY
@@ -243,7 +257,7 @@ command_serial_dispatch_line:
     ; --- build the typed request envelope (marshal arg by ARGT self-description) ---
     lea  rdi, [rel cmd_serial_req]
     mov  [rdi + REQ_VERB], r14
-    mov  qword [rdi + REQ_CAP], 0            ; public read; AUTH1 owns remote mutation cap
+    mov  qword [rdi + REQ_CAP], 0            ; remote authority stays in this AUTH2 ticket
     mov  qword [rdi + REQ_IDEM], 0
     mov  qword [rdi + REQ_SEL], 0
     mov  rdi, r14

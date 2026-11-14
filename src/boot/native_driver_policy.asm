@@ -14,23 +14,25 @@
 ; decide: RDI policy, RSI class, RDX candidate packed PCI BDF,
 ;         RCX verified boot-storage packed PCI BDF; RAX 0 allow / -1 deny.
 ; Both BDFs are uint64 inputs, valid only in [0,65535]. There is no wildcard or
-; missing-binding sentinel. Caller must establish the firmware-selected storage
-; route before requesting STORAGE; equality cannot establish its provenance.
+; missing-binding sentinel in boot_only. Its caller must establish the firmware
+; storage route before requesting STORAGE; equality cannot establish provenance.
 ; These two functions touch no hardware, allocate no state, preserve nonvolatile
 ; registers and accept full-width arguments (no truncation into valid values).
 
 NDP_NORMAL          equ 0
 NDP_BOOT_ONLY       equ 1
+NDP_NETWORK_GUEST   equ 2            ; build selector, not A1 R2.MODE's enum
 NDP_PLATFORM        equ 0            ; timers, PCI/IOMMU/VM substrate
 NDP_FIRMWARE_GOP    equ 1
 NDP_USB_CONTROLLER  equ 2
 NDP_USB_HID         equ 3
 NDP_DOMAIN_NET      equ 4            ; guest-backed, never native fallback
 NDP_BOOT_STORAGE    equ 5
-NDP_NATIVE_NET      equ 6            ; PCI and USB Ethernet
+NDP_NATIVE_NET      equ 6            ; native PCI Ethernet / unclassified backend
 NDP_NATIVE_SOUND    equ 7
 NDP_ACCEL_DISPLAY   equ 8
 NDP_OTHER_USB       equ 9
+NDP_USB_NET         equ 10           ; exact USB Ethernet backends, HC owns DMA
 
 native_driver_policy_parse:
     test rdi, rdi
@@ -38,7 +40,20 @@ native_driver_policy_parse:
     cmp rsi, 6
     je .normal
     cmp rsi, 9
+    je .boot_only
+    cmp rsi, 13
     jne .invalid
+    cmp dword [rdi], 'netw'
+    jne .invalid
+    cmp dword [rdi + 4], 'ork_'
+    jne .invalid
+    cmp dword [rdi + 8], 'gues'
+    jne .invalid
+    cmp byte [rdi + 12], 't'
+    jne .invalid
+    mov eax, NDP_NETWORK_GUEST
+    ret
+.boot_only:
     cmp dword [rdi], 'boot'
     jne .invalid
     cmp dword [rdi + 4], '_onl'
@@ -61,6 +76,8 @@ native_driver_policy_parse:
 native_driver_policy_decide:
     cmp rdi, NDP_NORMAL
     je .allow                       ; ordinary boot keeps its existing choices
+    cmp rdi, NDP_NETWORK_GUEST
+    je .network_guest
     cmp rdi, NDP_BOOT_ONLY
     jne .deny
     cmp rsi, NDP_DOMAIN_NET
@@ -73,6 +90,15 @@ native_driver_policy_decide:
     ja .deny
     cmp rdx, rcx
     jne .deny
+    jmp .allow
+.network_guest:
+    ; This suppresses native probes; it grants no assignment, reset method,
+    ; IOMMU group, signed guest policy or return authority. USB NIC requesters
+    ; remain the already witnessed host controllers. Unknown classes refuse.
+    cmp rsi, NDP_USB_NET
+    ja .deny
+    cmp rsi, NDP_NATIVE_NET
+    je .deny
 .allow:
     xor eax, eax
     ret

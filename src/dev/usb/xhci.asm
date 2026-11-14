@@ -1,6 +1,6 @@
 ;; MODULE dev/usb/xhci
 ;; LAYER 3
-;; EXPORTS xhci_storage_bdf, xhci_device_root_power_cycle, xhci_device_root_retire, xhci_readiness_snapshot, xhci_iso_fs_stop, xhci_iso_fs_error_scalar, xhci_iso_fs_stream_queue, xhci_iso_fs_stream_poll, xhci_iso_fs_stream_close, xhci_iso_fs_burst_queue, xhci_iso_fs_burst_poll, xhci_iso_fs_configure, xhci_iso_fs_queue, xhci_iso_fs_poll, xhci_hub_port_available, xhci_hc_generation, xhci_hid_child_connected, xhci_get_init_receipt, xhci_hid_root_retire, xhci_usb_selftest, xhci_get_maxports, xhci_read_portsc, xhci_hub_child_last, xhci_airlock_fault, xhci_airlock_status, xhci_interrupt_set_reset_hook, xhci_found, xhci_preservation_snapshot
+;; EXPORTS xhci_legacy_observations, xhci_terminal_firmware_observations, xhci_terminal_quiesce, xhci_terminal_observations, xhci_discard_owner_at, xhci_power_iso_guard, xhci_power_iso_observations, xhci_power_command_guard, xhci_power_command_observations, xhci_storage_bdf, xhci_device_root_power_cycle, xhci_device_root_retire, xhci_readiness_snapshot, xhci_iso_fs_stop, xhci_iso_fs_error_scalar, xhci_iso_fs_stream_queue, xhci_iso_fs_stream_poll, xhci_iso_fs_stream_close, xhci_iso_fs_burst_queue, xhci_iso_fs_burst_poll, xhci_iso_fs_configure, xhci_iso_fs_queue, xhci_iso_fs_poll, xhci_hub_port_available, xhci_hc_generation, xhci_hid_child_connected, xhci_get_init_receipt, xhci_hid_root_retire, xhci_usb_selftest, xhci_get_maxports, xhci_read_portsc, xhci_hub_child_last, xhci_airlock_fault, xhci_airlock_status, xhci_interrupt_set_reset_hook, xhci_found, xhci_preservation_snapshot
 ;; IMPORTS usb/enum, bus/pci, bus/hal, core/dma, core/heap, core/time, boot/serial, boot/paging, bus/pci_claim
 ;; CAPS mmio dma
 ;; OWNER saga:usb
@@ -190,6 +190,7 @@ XHCI_XFER_PER_SLOT    equ (XHCI_INTR_PER_SLOT + XHCI_BULK_PER_SLOT + XHCI_ISO_PE
 XHCI_INTR_STATE_COUNT equ (XHCI_MAX_SLOTS_EN * XHCI_XFER_PER_SLOT)
 XHCI_INTR_RING_TRBS   equ 64         ; usbnic-late-bind: 2048-byte TD @ full-speed mps=64 = 32 TRBs (+link)
 XHCI_INTR_RING_BYTES  equ (XHCI_INTR_RING_TRBS * 16)
+XHCI_INTR_RING_ALIGN  equ 64         ; native ring contract; independent of bounce alignment
 XHCI_BULK_LARGE_BYTES equ 49152      ; AX88179B bounded RX aggregate (fits u16 exact_len)
 XHCI_BULK_LARGE_ALIGN equ 65536      ; one Normal TRB never crosses a 64KiB boundary
 XHCI_INTR_REPORT_BYTES equ 2048       ; usbnic-late-bind: was 1024 -> a 1514-byte Ethernet frame (STATUS reply) was REFUSED on bulk OUT
@@ -247,18 +248,19 @@ xh_wr:
     lea  rdi, [rel xhci_region]
     call hal_mmio_write32
 %if PAOS_LAB_HP_USBCMD_PROVENANCE
-    pushfq                          ; preserve HAL acceptance/refusal exactly
+    ; CF is xh_wr's only result its callers read (flag census, SEC109398 (2)):
+    ; a refusal returns CF=1 untouched, an accepted write records and returns CF=0.
     jc .lab_done
     call xhci_lab_usbcmd_record
+    clc
 .lab_done:
-    popfq
 %endif
     ret
 
 %if PAOS_LAB_HP_USBCMD_PROVENANCE
 ; Accepted 32-bit USBCMD writes only. No additional MMIO, IF change or serial.
-; xh_wr's saved flags and call frame put its caller at [rsp+16]. RDX/RSI and
-; every register outside xh_wr's declared clobbers remain unchanged.
+; xh_wr's call frame puts its caller at [rsp+8]. RDX/RSI and every register
+; outside xh_wr's declared clobbers remain unchanged; flags are not preserved.
 xhci_lab_usbcmd_record:
     mov eax,[rel xhci_op]
     cmp rsi,rax
@@ -279,7 +281,7 @@ xhci_lab_usbcmd_record:
     shl rdx,32
     or rax,rdx
     mov [rdi],rax
-    mov rax,[rsp+24]
+    mov rax,[rsp+16]                ; caller, above saved RDX and xh_wr's return
     mov [rdi+8],rax
     pop rdx
     mov rax,[rel xhci_region]
@@ -797,7 +799,7 @@ xhci_usb_selftest:
     mov  ecx, PCI_DRV_XHCI
     mov  r8d, PCI_CLAIM_FAILED
     call pci_claim_bdf3
-    call xhci_discard_live           ; unregistered hardware must own no active DMA
+    call xhci_discard_live           ; retain actual outcome before registry count drops
     mov  dword [rel xhci_inst_n], 0
     mov  byte [rel xhci_m_up], 0
     jmp  .no_controller              ; full registry cannot admit another candidate
@@ -806,7 +808,10 @@ xhci_usb_selftest:
     mov  ecx, PCI_DRV_XHCI
     mov  r8d, PCI_CLAIM_FAILED
     call pci_claim_bdf3
-    call xhci_discard_live               ; the failed selection owns no live backend
+    cmp  dword [rel xhci_firmware_ready], 1
+    jne  .first_unacquired              ; firmware was never handed to this driver
+    call xhci_discard_live               ; retain acquired failure before fallback overwrites it
+.first_unacquired:
     mov  dword [rel xhci_inst_n], 0
     call xhci_bring_up_others            ; a failed first choice must not hide healthy HCs
     cmp  dword [rel xhci_inst_n], 0
@@ -864,6 +869,7 @@ xhci_bringup:
     push rbx
     push r12
     mov  r12d, edi
+    mov  dword [rel xhci_firmware_ready], 0
     mov  dword [rel xhci_init_phase], 1 ; BAR reachability
     mov  dword [rel xhci_init_hcs2], 0
     mov  dword [rel xhci_init_hcs2_valid], 0
@@ -911,7 +917,9 @@ xhci_bringup:
     mov  edx, [rel xhci_fn]
     mov  ecx, 0x04
     call pci_cfg_read32
-    and  eax, ~0x02                  ; clear Memory Space Enable
+    cmp  eax, -1
+    je   .fail                       ; no Command or BAR write from an unavailable read
+    and  eax, 0xFFFD                 ; clear MEM, preserve known BME; no Status RW1C request
     mov  r8d, eax
     mov  edi, [rel xhci_bus]
     mov  esi, [rel xhci_dev]
@@ -942,7 +950,10 @@ xhci_bringup:
     mov  edx, [rel xhci_fn]
     mov  ecx, 0x04
     call pci_cfg_read32
-    or   eax, 0x06                   ; Memory Space + Bus Master
+    cmp  eax, -1
+    je   .fail                       ; unavailable Command is not permission to enable DMA
+    and  eax, 0xFFFF                 ; Command only; no PCI Status RW1C request
+    or   eax, 0x02                   ; Memory Space only; do not enable DMA before custody
     mov  r8d, eax
     mov  edi, [rel xhci_bus]
     mov  esi, [rel xhci_dev]
@@ -1004,9 +1015,8 @@ xhci_bringup:
     mov  rcx, 0x100000000
     cmp  rax, rcx
     ja   .fail                       ; a heap set above 4 GiB is unreachable without AC64
-    ; (this discard runs before xhci_legacy_handoff, so firmware may still own the
-    ; controller; the discard only halts it and drops Bus Master. Unreachable on AMD
-    ; xHCIs, which all report AC64.)
+    ; This failure precedes acquisition: the original caller skips acquired-owner
+    ; discard and retains the existing bump allocation without touching firmware.
 .dma_reach_ok:
     mov  dword [rel xhci_ctxsz], 32
     test ebx, (1 << 2)              ; CSZ: 1 -> 64-byte contexts
@@ -1016,6 +1026,25 @@ xhci_bringup:
     mov  dword [rel xhci_init_phase], 4 ; legacy handoff
     ; --- 5. USB Legacy handoff (xECP cap ID 1): claim OS ownership, kill BIOS SMI ---
     call xhci_legacy_handoff
+    test eax, eax
+    jnz  .fail                       ; no reset or acquired-owner cleanup on refusal
+    mov  dword [rel xhci_firmware_ready], 1
+    ; Enable Bus Master only after the actual native handoff succeeded.
+    mov  edi, [rel xhci_bus]
+    mov  esi, [rel xhci_dev]
+    mov  edx, [rel xhci_fn]
+    mov  ecx, 0x04
+    call pci_cfg_read32
+    cmp  eax, -1
+    je   .fail
+    or   eax, 0x06
+    and  eax, 0xFFFF                 ; no PCI Status RW1C request
+    mov  r8d, eax
+    mov  edi, [rel xhci_bus]
+    mov  esi, [rel xhci_dev]
+    mov  edx, [rel xhci_fn]
+    mov  ecx, 0x04
+    call pci_cfg_write32
 %if PAOS_LAB_HP_PCICMD_PROVENANCE
     call xhci_lab_cfgw_handoff_mark  ; later armed-function writes follow this TSC
 %endif
@@ -1075,8 +1104,10 @@ xhci_bringup:
     ret
 
 ; ---------------------------------------------------------------------------
-; xhci_legacy_handoff — walk xECP for USB Legacy Support (cap 1), set OS-owned,
-;   wait BIOS release (bounded), clear the SMI enables. clobbers: caller-saved.
+; xhci_legacy_handoff -> EAX0 observed acquisition/no-legacy,1 refusal.
+; Original1000ms bound and XHCILEG v1 ten fields remain; field8 stays0 because
+; firmware's BIOS semaphore is never cleared by software. Every unknown refuses.
+; Only actual original request/poll/SMI accesses, no observer reads.
 ; ---------------------------------------------------------------------------
 xhci_legacy_handoff:
     XHCI_POWER_GATE 1
@@ -1084,7 +1115,8 @@ xhci_legacy_handoff:
     push r12
     push r13
     push r14
-    sub  rsp, 80                    ; frozen serial fields, not controller state
+    push r15
+    sub  rsp, 80                    ; original serial fields, unchanged
     xor  eax, eax
     mov  ecx, 10
     mov  rdi, rsp
@@ -1097,83 +1129,216 @@ xhci_legacy_handoff:
     mov  [rsp + 16], rax
     mov  eax, [rel xhci_fn]
     mov  [rsp + 24], rax
-    xor  r12d, r12d                 ; completed 1 ms polling delays
-    xor  r13d, r13d                 ; BIOS-owned still set at 1000 ms
+    ; A passive destination cannot grant custody. Unmatched direct calls use
+    ; scratch, never a guessed candidate slot or an admission side effect.
+    lea  r15, [rel xhci_legacy_scratch]
+    mov  r13d, -1
+    mov  ecx, [rel xhci_cand_n]
+    cmp  ecx, XHCI_CAND_MAX
+    ja   .record
+    xor  ebx, ebx
+    lea  r14, [rel xhci_cand]
+.candidate:
+    cmp  ebx, ecx
+    jae  .record
+    mov  eax, [rsp + 8]
+    cmp  eax, [r14 + XC_BUS]
+    jne  .next_candidate
+    mov  eax, [rsp + 16]
+    cmp  eax, [r14 + XC_DEV]
+    jne  .next_candidate
+    mov  eax, [rsp + 24]
+    cmp  eax, [r14 + XC_FN]
+    jne  .next_candidate
+    mov  r13d, ebx
+    imul eax, ebx, 160
+    lea  r15, [rel xhci_legacy_observations]
+    add  r15, rax
+    jmp  .record
+.next_candidate:
+    inc  ebx
+    add  r14, XHCI_CAND_SZ
+    jmp  .candidate
+.record:
+    mov  rdi, r15
+    xor  eax, eax
+    mov  ecx, 20
+    rep  stosq
+    mov  dword [r15], 3
+    mov  dword [r15 + 4], 5
+    mov  [r15 + 8], r13d
+    mov  dword [r15 + 12], 1        ; default refusal, never unobserved zero success
+    mov  dword [r15 + 16], 1
+    mov  eax, [rsp]
+    mov  [r15 + 20], eax
+    mov  eax, [rel xhci_init_phase]
+    mov  [r15 + 24], eax
+    mov  eax, [rel xhci_generation]
+    mov  [r15 + 28], eax
+    mov  eax, [rsp + 8]
+    mov  [r15 + 32], eax
+    mov  eax, [rsp + 16]
+    mov  [r15 + 36], eax
+    mov  eax, [rsp + 24]
+    mov  [r15 + 40], eax
+    mov  [r15 + 44], r13d
+    mov  rax, [rel xhci_region]
+    mov  [r15 + 48], rax
+    mov  rax, [rel xhci_region + 8]
+    mov  [r15 + 56], rax
+    inc  dword [rel xhci_legacy_sequence]
+    mov  eax, [rel xhci_legacy_sequence]
+    mov  [r15 + 116], eax
+    xor  r12d, r12d                 ; completed1ms delays
+    mov  dword [r15 + 112], 2       ; HCC unavailable
     mov  esi, XHCI_HCCPARAMS1
     call xh_rd
+    mov  [r15 + 64], eax
+    jc   .report
     cmp  eax, -1
     je   .report
+    or   dword [r15 + 16], 2
     shr  eax, 16
     shl  eax, 2
+    mov  [r15 + 68], eax
     mov  ebx, eax
-    mov  r14d, 50                   ; malformed capability chain is bounded
+    test ebx, ebx
+    jz   .none
+    mov  r14d, 50
+    mov  dword [r15 + 112], 3       ; chain unavailable/malformed/exhausted
 .walk:
     cmp  ebx, 0x20
     jb   .report
-    lea  rax, [rbx + 8]
-    cmp  rax, [rel xhci_region + HAL_R_BAR_SIZE]
-    ja   .report
+    mov  [r15 + 72], ebx
+    inc  dword [r15 + 80]
+    and  dword [r15 + 16], ~4
     mov  esi, ebx
     call xh_rd
+    mov  [r15 + 76], eax
+    jc   .report
     cmp  eax, -1
     je   .report
+    or   dword [r15 + 16], 4
     mov  ecx, eax
-    and  ecx, 0xFF
+    and  ecx, 255
+    test ecx, ecx
+    jz   .report
     cmp  ecx, 1
     je   .found
     shr  eax, 8
-    and  eax, 0xFF
+    and  eax, 255
     test eax, eax
-    jz   .report
+    jz   .none
     shl  eax, 2
     add  ebx, eax
     dec  r14d
     jnz  .walk
     jmp  .report
 .found:
-    mov  [rsp + 32], rbx            ; exact legacy capability BAR offset
-    mov  qword [rsp + 72], 1        ; present; zero data otherwise means absent
-    or   eax, (1 << 24)             ; retain all USBLEGSUP bits, claim OS ownership
+    or   dword [r15 + 16], 8
+    lea  rdx, [rbx + 8]
+    cmp  rdx, [rel xhci_region + HAL_R_BAR_SIZE]
+    ja   .report
+    mov  [rsp + 32], rbx
+    mov  qword [rsp + 72], 1
+    mov  dword [r15 + 112], 4       ; OS request unavailable
+    or   eax, 1 << 24              ; preserve BIOS-owned, never force it clear
+    mov  [r15 + 92], eax
     mov  edx, eax
     mov  esi, ebx
     call xh_wr
+    mov  [r15 + 124], eax           ; actual HAL return, MOV preserves CF
+    jc   .report
+    or   dword [r15 + 16], 16
 .wait_bios:
+    mov  dword [r15 + 112], 5       ; poll unavailable, not raw hardware absence
+    inc  dword [r15 + 84]
+    and  dword [r15 + 16], ~4096
     mov  esi, ebx
     call xh_rd
-    test eax, (1 << 16)
-    jz   .smi
+    mov  [r15 + 120], eax           ; last poll distinct from final readback
+    jc   .report
+    cmp  eax, -1
+    je   .report
+    or   dword [r15 + 16], 4096
+    mov  ecx, eax
+    and  ecx, 255
+    cmp  ecx, 1
+    jne  .report
+    test eax, 1 << 16
+    jz   .os_observed
+    mov  dword [r15 + 112], 6       ; BIOS still owns it at the original deadline
     cmp  r12d, 1000
-    jae  .force_owner
+    jae  .report
     mov  edi, 1000
     call tsc_delay_us
     inc  r12d
     jmp  .wait_bios
-.force_owner:
-    mov  r13d, 1
-    and  eax, ~(1 << 16)            ; BIOS failed to release: take ownership
-    or   eax, (1 << 24)             ; OS-owned must remain asserted
-    mov  edx, eax
-    mov  esi, ebx
-    call xh_wr
-.smi:
+.os_observed:
+    mov  dword [r15 + 112], 7
+    test eax, 1 << 24
+    jz   .report
+    or   dword [r15 + 16], 32
+    mov  dword [r15 + 112], 8       ; original SMI operand unavailable
     lea  esi, [ebx + 4]
     call xh_rd
-    ; Linux XHCI_LEGACY_DISABLE_SMI: preserve RsvdP 1-3,5-12,17-19.
+    mov  [r15 + 100], eax
+    jc   .report
+    cmp  eax, -1
+    je   .report
+    or   dword [r15 + 16], 64
     and  eax, 0x000E1FEE
-    or   eax, 0xE0000000            ; RW1C SMI events 29-31; disable SMI enables
+    or   eax, 0xE0000000            ; original RsvdP/RW1C image, no change
+    mov  [r15 + 104], eax
     mov  edx, eax
     lea  esi, [ebx + 4]
+    mov  dword [r15 + 112], 9
     call xh_wr
-    ; Read back before serial output; these are observations, not write images.
+    mov  [r15 + 128], eax           ; actual HAL return, separate from MMIO data
+    jc   .report
+    or   dword [r15 + 16], 128
+    mov  dword [r15 + 112], 10      ; final actual readbacks unavailable
     mov  esi, ebx
     call xh_rd
+    mov  [r15 + 96], eax
+    jc   .report
+    cmp  eax, -1
+    je   .report
+    or   dword [r15 + 16], 256
     mov  [rsp + 40], rax
     lea  esi, [ebx + 4]
     call xh_rd
+    mov  [r15 + 108], eax
+    jc   .report
+    cmp  eax, -1
+    je   .report
+    or   dword [r15 + 16], 512
     mov  [rsp + 48], rax
+    mov  dword [r15 + 112], 11
+    mov  eax, [r15 + 96]
+    mov  ecx, eax
+    and  ecx, 255
+    cmp  ecx, 1
+    jne  .report
+    test eax, 1 << 16
+    jnz  .report
+    test eax, 1 << 24
+    jz   .report
+    mov  dword [r15 + 112], 12
+    test dword [r15 + 108], 0x0000E011 ; RW SMI enables 0/4/13/14/15; bit16 is the RO EINT shadow
+    jnz  .report
+    mov  dword [r15 + 112], 1       ; observed completed legacy acquisition
+    jmp  .ready
+.none:
+    or   dword [r15 + 16], 1024
+    mov  dword [r15 + 112], 0       ; actual observed no-legacy, never physicalabsence
+.ready:
+    or   dword [r15 + 16], 2048
+    mov  dword [r15 + 12], 0
 .report:
+    mov  [r15 + 88], r12d
     mov  [rsp + 56], r12
-    mov  [rsp + 64], r13
+    ; Original forced field8 remains0. A timeout is a refusal, not a force.
     lea  rdi, [rel str_xhci_legacy_handoff]
     call serial_string
     xor  r14d, r14d
@@ -1186,7 +1351,9 @@ xhci_legacy_handoff:
     cmp  r14d, 10
     jb   .fields
     call serial_newline
+    mov  eax, [r15 + 12]            ; serial output cannot substitute an admission
     add  rsp, 80
+    pop  r15
     pop  r14
     pop  r13
     pop  r12
@@ -1931,6 +2098,335 @@ XT_TOPOLOGY          equ 10
 XT_SS_CONFIGURE      equ 11
 XHCI_THUNK_OPS       equ 12
 
+; Original terminal command-lifetime inhibitor. EAX0 = these observed command
+; operands quiet, 2 = outstanding command, 3 = unavailable/quarantined. This is
+; not controller halt, physical absence, or a DMA/Flush completion assertion.
+; Read only original bounded LIVE/parked RAM; never switch/copy-in or touch MMIO.
+; Family9: four64B records, explicit observed prefix; see exact ABI doc.
+xhci_power_command_guard:
+    pushfq
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    cld
+    lea rdi,[rel xhci_power_command_observations]
+    xor eax,eax
+    mov ecx,32
+    rep stosq
+    mov r11d,[rel xhci_inst_n]
+    mov r14d,[rel xhci_inst_cur]
+    xor r9d,r9d
+    cmp qword [rel reinit_power_xhci_context],0
+    setne r9b
+    lea rdi,[rel xhci_power_command_observations]
+    mov dword [rdi],1
+    mov dword [rdi+8],3
+    mov dword [rdi+12],1
+    mov [rdi+16],r11d
+    mov [rdi+20],r14d
+    mov [rdi+24],r9d
+    mov r12d,3
+    test r9d,r9d
+    jnz .done                           ; owned profile is not this terminal rail
+    cmp r11d,XHCI_INST_MAX
+    ja .done
+    mov r13d,r11d
+    test r13d,r13d
+    jnz .registered
+    test r14d,r14d
+    jnz .done
+    inc r13d                            ; inspect actual partial LIVE even n0
+    jmp .bounded
+.registered:
+    cmp r14d,r13d
+    jae .done
+.bounded:
+    xor r12d,r12d
+    xor ebx,ebx
+.image:
+    mov edi,ebx
+    shl rdi,6
+    lea rax,[rel xhci_power_command_observations]
+    add rdi,rax
+    mov dword [rdi],1
+    mov [rdi+4],ebx
+    mov dword [rdi+8],3
+    mov dword [rdi+12],1
+    mov [rdi+16],r11d
+    mov [rdi+20],r14d
+    mov [rdi+24],r9d
+    lea r8,[rel xhci_generation]
+    lea rdx,[rel xhci_cmd_ring_dead]
+    lea rsi,[rel xhci_cmd_out_trb]
+    cmp ebx,r14d
+    je .operands
+    imul eax,ebx,XHCI_INST_BYTES
+    lea rcx,[rel xhci_inst_save]
+    add rcx,rax
+    lea r8,[rcx+xhci_generation-xhci_inst_r1]
+    lea rdx,[rcx+(xhci_inst_r1_end-xhci_inst_r1)+xhci_cmd_ring_dead-xhci_inst_r2]
+    lea rsi,[rcx+xhci_cmd_out_trb-xhci_inst_r1]
+.operands:
+    mov eax,[r8]
+    mov [rdi+28],eax
+    mov dword [rdi+12],3
+    test r11d,r11d
+    jz .dead
+    test eax,eax
+    jz .unknown                         ; registered lifetime must have generation
+.dead:
+    movzx eax,byte [rdx]
+    mov [rdi+32],eax
+    mov dword [rdi+12],7
+    test eax,eax
+    jnz .unknown                        ; pending has not been observed here
+    cmp qword [rsi],0                    ; full64 original command predicate
+    setne al
+    movzx eax,al
+    mov [rdi+36],eax
+    mov dword [rdi+12],15
+    mov [rdi+8],eax                      ; zero quiet; nonzero mapped to busy2
+    test eax,eax
+    jz .next
+    mov dword [rdi+8],2
+    test r12d,r12d
+    jnz .next                           ; unknown3 dominates busy2
+    mov r12d,2
+    jmp .next
+.unknown:
+    mov r12d,3
+.next:
+    inc ebx
+    cmp ebx,r13d
+    jb .image
+.done:
+    mov eax,r12d
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    popfq
+    ret
+
+; Original ISO packet-work inhibitor. RAM only; no endpoint/controller action.
+; EAX0 observed quiet,2 known work,3 unavailable/retained uncertain lifetime.
+; Four160B family10 records; explicit header/generation/complete-scan masks.
+xhci_power_iso_guard:
+    pushfq
+    push rbx
+    push rbp
+    push r12
+    push r13
+    push r14
+    push r15
+    cld
+    lea rdi,[rel xhci_power_iso_observations]
+    xor eax,eax
+    mov ecx,80
+    rep stosq
+    mov r11d,[rel xhci_inst_n]
+    mov r14d,[rel xhci_inst_cur]
+    xor r9d,r9d
+    cmp qword [rel reinit_power_xhci_context],0
+    setne r9b
+    lea rdi,[rel xhci_power_iso_observations]
+    mov dword [rdi],1
+    mov dword [rdi+8],3
+    mov dword [rdi+12],1
+    mov [rdi+16],r11d
+    mov [rdi+20],r14d
+    mov [rdi+24],r9d
+    mov r12d,3
+    test r9d,r9d
+    jnz .done
+    cmp r11d,XHCI_INST_MAX
+    ja .done
+    mov r13d,r11d
+    test r13d,r13d
+    jnz .registered
+    test r14d,r14d
+    jnz .done
+    inc r13d                         ; actual partial LIVE, never infer absence
+    jmp .bounded
+.registered:
+    cmp r14d,r13d
+    jae .done
+.bounded:
+    xor r12d,r12d
+    xor ebx,ebx
+.image:
+    imul edi,ebx,160
+    lea rax,[rel xhci_power_iso_observations]
+    add rdi,rax
+    mov dword [rdi],1
+    mov [rdi+4],ebx
+    mov dword [rdi+8],3
+    mov dword [rdi+12],1
+    mov [rdi+16],r11d
+    mov [rdi+20],r14d
+    mov [rdi+24],r9d
+    lea r8,[rel xhci_intr_states]
+    lea rdx,[rel xhci_generation]
+    cmp ebx,r14d
+    je .generation
+    imul eax,ebx,XHCI_INST_BYTES
+    lea rcx,[rel xhci_inst_save]
+    add rcx,rax
+    lea rdx,[rcx+xhci_generation-xhci_inst_r1]
+    lea r8,[rcx+(xhci_inst_r1_end-xhci_inst_r1)+(xhci_inst_r2_end-xhci_inst_r2)+(xhci_inst_r3_end-xhci_inst_r3)+xhci_intr_states-xhci_inst_r4]
+.generation:
+    mov ebp,[rdx]
+    mov [rdi+28],ebp
+    mov dword [rdi+12],3
+    test r11d,r11d
+    jz .endpoints
+    test ebp,ebp
+    jz .unknown_image
+.endpoints:
+    mov dword [rdi+32],XHCI_INTR_STATE_COUNT
+    cmp dword [rdi+32],64
+    ja .unknown_image                ; bitmap/access bound before endpoint reads
+    mov dword [rdi+8],0
+    xor r10d,r10d
+.endpoint:
+    cmp r10d,XHCI_INTR_STATE_COUNT
+    jae .scanned
+    movzx eax,byte [r8+xhci_intr_ep.active]
+    test eax,eax
+    jz .class
+    bts qword [rdi+48],r10
+    cmp eax,1
+    je .class
+    bts qword [rdi+56],r10
+    mov dword [rdi+8],3
+.class:
+    cmp byte [r8+xhci_intr_ep.attributes],1 ; original ISO class, even retained0
+    jne .next_endpoint
+    bts qword [rdi+64],r10
+    bts qword [rdi+72],r10             ; all ISO operands below actually read
+    xor r15d,r15d                     ; bit0 work,bit1 malformed/uncertain
+    cmp byte [r8+xhci_intr_ep.active],1
+    je .iso_generation
+    or r15d,2
+.iso_generation:
+    mov eax,[r8+xhci_intr_ep.generation]
+    test eax,eax
+    jz .bad_generation
+    cmp eax,ebp
+    jne .bad_generation
+    bts qword [rdi+80],r10
+    jmp .configured
+.bad_generation:
+    or r15d,2
+.configured:
+    movzx eax,byte [r8+xhci_intr_ep.configured]
+    cmp eax,1
+    jne .stopped
+    bts qword [rdi+88],r10
+    jmp .pending
+.stopped:
+    cmp eax,3
+    jne .bad_config
+    bts qword [rdi+96],r10
+    jmp .pending
+.bad_config:
+    or r15d,2
+.pending:
+    movzx eax,byte [r8+xhci_intr_ep.pending]
+    test eax,eax
+    jz .completed
+    bts qword [rdi+104],r10
+    or r15d,1
+    cmp eax,1
+    jbe .completed
+    or r15d,2
+.completed:
+    movzx eax,byte [r8+xhci_intr_ep.completed]
+    test eax,eax
+    jz .count
+    bts qword [rdi+112],r10
+    or r15d,1
+    cmp eax,1
+    jbe .count
+    or r15d,2
+.count:
+    movzx eax,word [r8+XHCI_ISOB_COUNT]
+    test eax,0x8000
+    jz .count_low
+    bts qword [rdi+144],r10            ; rolling mode alone is not packet work
+.count_low:
+    and eax,0x7fff
+    test eax,eax
+    jz .left
+    bts qword [rdi+120],r10
+    or r15d,1
+    cmp eax,8
+    jbe .left
+    or r15d,2
+.left:
+    movzx eax,word [r8+XHCI_ISOB_LEFT]
+    test eax,eax
+    jz .decide
+    bts qword [rdi+128],r10
+    or r15d,1
+    cmp eax,8
+    jbe .decide
+    or r15d,2
+.decide:
+    test r15d,1
+    jz .validity
+    cmp byte [r8+xhci_intr_ep.configured],3
+    jne .validity
+    or r15d,2                        ; stopped + work is contradictory
+.validity:
+    test r15d,2
+    jz .work
+    bts qword [rdi+136],r10
+    mov dword [rdi+8],3
+    jmp .next_endpoint
+.work:
+    test r15d,1
+    jz .next_endpoint
+    cmp dword [rdi+8],3
+    je .next_endpoint
+    mov dword [rdi+8],2
+.next_endpoint:
+    inc r10d
+    add r8,xhci_intr_ep_size
+    mov [rdi+36],r10d
+    jmp .endpoint
+.scanned:
+    mov dword [rdi+12],7
+    cmp dword [rdi+8],3
+    je .unknown_image
+    cmp dword [rdi+8],2
+    jne .next_image
+    test r12d,r12d
+    jnz .next_image
+    mov r12d,2
+    jmp .next_image
+.unknown_image:
+    mov r12d,3
+.next_image:
+    inc ebx
+    cmp ebx,r13d
+    jb .image
+.done:
+    mov eax,r12d
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbp
+    pop rbx
+    popfq
+    ret
+
+%include "dev/usb/xhci_terminal.inc"
+
 ; xhci_inst_copy_out(RDI = destination image). clobbers RCX, RSI, RDI.
 xhci_inst_copy_out:
     cld
@@ -2062,7 +2558,7 @@ xhci_bring_up_others:
     add  rax, 4095
     and  rax, -4096
     mov  r13, rax                    ; this controller's DMA set
-    mov  r15, rax                    ; (bump heap: never freed; the discard stops its DMA)
+    mov  r15, rax                    ; bump heap: never freed, including uncertain discard
     mov  r14d, [rel xhci_inst_cur]   ; park the live controller
     mov  eax, r14d
     imul eax, eax, XHCI_INST_BYTES
@@ -2108,7 +2604,10 @@ xhci_bring_up_others:
     mov  ecx, PCI_DRV_XHCI
     mov  r8d, PCI_CLAIM_FAILED
     call pci_claim_bdf3
-    call xhci_discard_live           ; never left running/DMA-capable into the abandoned set
+    cmp  dword [rel xhci_firmware_ready], 1
+    jne  .restore_unacquired
+    call xhci_discard_live           ; retain acquired failure before restoring healthy image
+.restore_unacquired:
     mov  eax, r14d
     imul eax, eax, XHCI_INST_BYTES
     lea  rsi, [rel xhci_inst_save]
@@ -2126,67 +2625,297 @@ xhci_bring_up_others:
     pop  rbx
     ret
 
-; xhci_discard_live — the live image is a later controller that failed bring-up
-;   or registration: clear USBCMD.R/S+INTE and wait (bounded, 200 ms) for HCH
-;   when its registers were reached, clear interrupter 0's IMAN.IE once the
-;   runtime base is known, then clear PCI Bus Master and set INTx Disable so it
-;   can neither DMA into its abandoned set nor raise an interrupt. Its heap DMA
-;   set and scratchpad pages stay allocated (bump heap, no free): a bounded
-;   leak of at most XHCI_CAND_MAX-1 sets per boot, inert once Bus Master is off.
-;   clobbers: caller-saved.
+; Failed-init custody belongs to the original attempt, not the current LIVE
+; image or registry count. No entry is recycled, including across selftest calls.
+XHCI_DISCARD_BYTES equ 160
+; xhci_discard_owner_at(EDI=index) -> RAX immutable original160B entry or0,
+; EDX retained count, ECX sticky overflow/invalid header. Pure RAM, no authority.
+; Incomplete entry also returns0. ABI/validity bits: XHCI_DISCARD_OWNER.md.
+xhci_discard_owner_at:
+    mov edx, [rel xhci_discard_n]
+    mov ecx, [rel xhci_discard_overflow]
+    xor eax, eax
+    cmp edx, XHCI_CAND_MAX
+    ja .bad_header
+    cmp edi, edx
+    jae .out
+    imul edi, XHCI_DISCARD_BYTES
+    lea rax, [rel xhci_discard_owners]
+    add rax, rdi
+    cmp dword [rax], 1
+    je .out
+    xor eax, eax
+    ret
+.bad_header:
+    mov ecx, 1
+.out:
+    ret
+
+; Original failed-init cleanup: same halt/IRQ/BME requests and200poll bound.
+; Capture BEFORE every caller drops n or restores an image. Every claimed read
+; has actual acceptance, HCH timeout is distinct, PCI requested != observed.
+; RAX reports BME result only (0 observed off,2 observed on,3 unavailable).
+; This historical result never asserts a general terminal halt/current safety.
 xhci_discard_live:
     XHCI_POWER_GATE 1
     push rbx
-    cmp  qword [rel xhci_region + HAL_R_BAR_BASE], 0
-    je   .bus_master                 ; failed before its BAR was mapped
-    cmp  dword [rel xhci_op], 0
-    je   .bus_master                 ; failed before the capability layout was read
-    mov  esi, [rel xhci_op]
-    add  esi, XHCI_USBCMD
-    mov  [rel xhci_scr_off], esi
+    push r12
+    push r13
+    mov eax, [rel xhci_discard_n]
+    lea r12, [rel xhci_discard_scratch]
+    cmp eax, XHCI_CAND_MAX
+    jae .overflow
+    imul eax, XHCI_DISCARD_BYTES
+    lea r12, [rel xhci_discard_owners]
+    add r12, rax
+    inc dword [rel xhci_discard_n] ; reserve unpublished original owner
+    jmp .capture
+.overflow:
+    mov dword [rel xhci_discard_overflow], 1 ; never overwrite a retained owner
+.capture:
+    mov rdi, r12
+    mov ecx, XHCI_DISCARD_BYTES / 8
+    xor eax, eax
+    rep stosq
+    mov dword [r12 + 4], -1       ; no authenticated original candidate yet
+    mov dword [r12 + 96], 3       ; halt unavailable, not zero-filled success
+    mov dword [r12 + 100], 3      ; PCI BME unavailable
+    mov eax, [rel xhci_bus]
+    mov [r12 + 8], eax
+    mov eax, [rel xhci_dev]
+    mov [r12 + 12], eax
+    mov eax, [rel xhci_fn]
+    mov [r12 + 16], eax
+    mov eax, [rel xhci_generation]
+    mov [r12 + 24], eax
+    mov eax, [rel xhci_init_phase]
+    mov [r12 + 28], eax
+    mov rax, [rel xhci_region + HAL_R_BAR_BASE]
+    mov [r12 + 32], rax
+    mov rax, [rel xhci_region + HAL_R_BAR_SIZE]
+    mov [r12 + 40], rax
+    mov rax, [rel xhci_dma_set]
+    mov [r12 + 48], rax
+    mov rax, [rel xhci_xfer_dma]
+    mov [r12 + 56], rax
+    mov eax, [rel xhci_inst_cur]
+    mov [r12 + 104], eax
+    mov eax, [rel xhci_inst_n]
+    mov [r12 + 108], eax
+    cmp dword [r12 + 8], 255
+    ja .owner_unknown
+    cmp dword [r12 + 12], 31
+    ja .owner_unknown
+    cmp dword [r12 + 16], 7
+    ja .owner_unknown
+    mov ecx, [rel xhci_cand_n]
+    cmp ecx, XHCI_CAND_MAX
+    ja .owner_unknown
+    xor ebx, ebx
+    lea r13, [rel xhci_cand]
+.candidate:
+    cmp ebx, ecx
+    jae .owner_unknown
+    mov eax, [r12 + 8]
+    cmp eax, [r13 + XC_BUS]
+    jne .next_candidate
+    mov eax, [r12 + 12]
+    cmp eax, [r13 + XC_DEV]
+    jne .next_candidate
+    mov eax, [r12 + 16]
+    cmp eax, [r13 + XC_FN]
+    jne .next_candidate
+    mov [r12 + 4], ebx
+    mov eax, [r13 + XC_VENDEV]
+    mov [r12 + 20], eax
+    mov rax, [r13 + XC_BAR]
+    mov [r12 + 112], rax
+    call .identity
+    jc .pci_unknown
+    or dword [r12 + 64], 1
+    mov ecx, 4
+    call .pci_read
+    cmp eax, -1
+    je .pci_unknown
+    mov [r12 + 84], eax
+    or dword [r12 + 64], 1 << 9
+    test eax, 2                    ; MMIO requires current Memory Space Enable
+    jz .bus_master
+    cmp qword [r12 + 32], 0
+    je .bus_master                 ; original attempt failed before mapping
+    mov ecx, 0x10
+    call .pci_read
+    mov [r12 + 136], eax
+    and eax, 15
+    cmp eax, 4                     ; native mapped64-bit memory BAR, never IO
+    jne .bar_unknown
+    mov ecx, 0x14
+    call .pci_read
+    mov [r12 + 140], eax
+    shl rax, 32
+    mov edx, [r12 + 136]
+    and edx, ~15
+    or rax, rdx
+    mov [r12 + 120], rax
+    cmp rax, [r12 + 32]
+    jne .bar_unknown
+    mov rdx, [r12 + 40]
+    test rdx, rdx
+    jz .bar_unknown
+    add rax, rdx
+    jc .bar_unknown
+    or dword [r12 + 64], 1 << 1
+    mov esi, [rel xhci_op]
+    cmp esi, 0x20
+    jb .bus_master
+    cmp esi, 0xFC
+    ja .bus_master
+    test esi, 3
+    jnz .bus_master
+    lea rax, [rsi + XHCI_USBSTS + 4]
+    cmp rax, [r12 + 40]
+    ja .bus_master
     call xh_rd
+    jc .hal_command_unknown
+    cmp eax, -1
+    je .hal_command_unknown
+    mov [r12 + 72], eax
+    or dword [r12 + 64], 1 << 2
     and  eax, ~(XHCI_USBCMD_RS | XHCI_USBCMD_INTE)
-    mov  edx, eax
-    mov  esi, [rel xhci_scr_off]
+    mov edx, eax
+    mov esi, [rel xhci_op]
     call xh_wr
-    mov  ebx, 200
+    jc .hal_command_unknown
+    or dword [r12 + 64], 1 << 3
+    mov ebx, 200
 .wait_halt:
-    mov  esi, [rel xhci_op]
-    add  esi, XHCI_USBSTS
+    mov esi, [rel xhci_op]
+    add esi, XHCI_USBSTS
+    inc dword [r12 + 68]            ; actual bounded attempted status reads
     call xh_rd
+    jc .hal_command_unknown
+    cmp eax, -1
+    je .hal_command_unknown
+    mov [r12 + 76], eax
+    or dword [r12 + 64], 1 << 4
     test eax, XHCI_USBSTS_HCH
-    jnz  .halted
-    mov  edi, 1000
+    jnz .halt_observed
+    mov edi, 1000
     call tsc_delay_us
-    dec  ebx
-    jnz  .wait_halt
-.halted:
-    cmp  dword [rel xhci_rt], 0
-    je   .bus_master                 ; failed before the runtime base was read
-    mov  esi, [rel xhci_rt]
-    add  esi, XHCI_IMAN
+    dec ebx
+    jnz .wait_halt
+    or dword [r12 + 64], 1 << 6
+    mov dword [r12 + 96], 2         ; all200 accepted reads lacked HCH
+    jmp .irq
+.halt_observed:
+    or dword [r12 + 64], 1 << 5
+    mov dword [r12 + 96], 0         ; only an accepted actual HCH read
+    jmp .irq
+.hal_command_unknown:
+    or dword [r12 + 64], 1 << 13
+.irq:
+    mov esi, [rel xhci_rt]
+    test esi, esi
+    jz .bus_master
+    test esi, 31
+    jnz .bus_master
+    add rsi, XHCI_IMAN
+    lea rax, [rsi + 4]
+    cmp rax, [r12 + 40]
+    ja .bus_master
     call xh_rd
+    jc .hal_irq_unknown
+    cmp eax, -1
+    je .hal_irq_unknown
+    mov [r12 + 80], eax
+    or dword [r12 + 64], 1 << 7
     and  eax, ~((1 << 1) | 1)        ; IE off; IP (RW1C) written as 0 is left alone
-    mov  edx, eax
-    mov  esi, [rel xhci_rt]
-    add  esi, XHCI_IMAN
+    mov edx, eax
+    mov esi, [rel xhci_rt]
+    add rsi, XHCI_IMAN
     call xh_wr
+    jc .hal_irq_unknown
+    or dword [r12 + 64], 1 << 8
+    jmp .bus_master
+.hal_irq_unknown:
+    or dword [r12 + 64], 1 << 13
+    jmp .bus_master
+.next_candidate:
+    inc ebx
+    add r13, XHCI_CAND_SZ
+    jmp .candidate
+.bar_unknown:
+    or dword [r12 + 64], 1 << 16 ; BAR conflict: no unqualified MMIO
 .bus_master:
-    mov  edi, [rel xhci_bus]
-    mov  esi, [rel xhci_dev]
-    mov  edx, [rel xhci_fn]
-    mov  ecx, 0x04
-    call pci_cfg_read32
+    call .identity                  ; refuse a changed/unavailable PCI owner
+    jc .pci_unknown
+    mov ecx, 4
+    call .pci_read
+    cmp eax, -1
+    je .pci_unknown
     and  eax, ~0x04                  ; Bus Master Enable off (memory decode untouched)
     or   eax, 0x400                  ; INTx Disable
     and  eax, 0xFFFF                 ; Command only: a zero Status half clears no RW1C bit
-    mov  r8d, eax
-    mov  edi, [rel xhci_bus]
-    mov  esi, [rel xhci_dev]
-    mov  edx, [rel xhci_fn]
-    mov  ecx, 0x04
+    mov [r12 + 88], eax
+    mov r8d, eax
+    mov edi, [r12 + 8]
+    mov esi, [r12 + 12]
+    mov edx, [r12 + 16]
+    mov ecx, 4
     call pci_cfg_write32
-    pop  rbx
+    or dword [r12 + 64], 1 << 10 ; request issued, not an acknowledgement
+    mov ecx, 4
+    call .pci_read
+    mov [r12 + 92], eax
+    cmp eax, -1
+    je .pci_unknown
+    or dword [r12 + 64], 1 << 11
+    call .identity
+    jc .pci_unknown
+    or dword [r12 + 64], 1 << 12
+    mov dword [r12 + 100], 2
+    test dword [r12 + 92], 4
+    jnz .publish
+    mov dword [r12 + 100], 0         ; observed original BME off, separate from HCH
+    jmp .publish
+.owner_unknown:
+    or dword [r12 + 64], 1 << 15
+    jmp .publish
+.pci_unknown:
+    or dword [r12 + 64], 1 << 14
+.publish:
+    mov dword [r12], 1              ; complete before original caller can erase LIVE
+    mov eax, [r12 + 100]
+    pop r13
+    pop r12
+    pop rbx
+    ret
+.identity:
+    xor ecx, ecx
+    call .pci_read
+    mov [r12 + 128], eax
+    cmp ax, 0xFFFF
+    je .identity_unknown
+    test ax, ax
+    jz .identity_unknown
+    cmp eax, [r12 + 20]
+    jne .identity_unknown
+    mov ecx, 8
+    call .pci_read
+    mov [r12 + 132], eax
+    shr eax, 8
+    cmp eax, 0x0C0330
+    jne .identity_unknown
+    clc
+    ret
+.identity_unknown:
+    stc
+    ret
+.pci_read:
+    mov edi, [r12 + 8]
+    mov esi, [r12 + 12]
+    mov edx, [r12 + 16]
+    call pci_cfg_read32
     ret
 
 ; xhci_conn_of(EAX = candidate index) -> EAX its probed connected-port count,
@@ -8228,18 +8957,18 @@ xhci_interrupt_in_kat:
     mov  rax, [r15 + xhci_intr_ep.ring]
     cmp  rax, [rbx + xhci_intr_ep.ring]
     je   .fail
-    test al, XHCI_INTR_DMA_ALIGN - 1
+    test eax, XHCI_INTR_RING_ALIGN - 1
     jnz  .fail
     mov  rax, [rbx + xhci_intr_ep.ring]
-    test al, XHCI_INTR_DMA_ALIGN - 1
+    test eax, XHCI_INTR_RING_ALIGN - 1
     jnz  .fail
     mov  rdx, [r15 + xhci_intr_ep.report]
     cmp  rdx, [rbx + xhci_intr_ep.report]
     je   .fail
-    test dl, XHCI_INTR_DMA_ALIGN - 1
+    test edx, XHCI_INTR_DMA_ALIGN - 1
     jnz  .fail
     mov  rdx, [rbx + xhci_intr_ep.report]
-    test dl, XHCI_INTR_DMA_ALIGN - 1
+    test edx, XHCI_INTR_DMA_ALIGN - 1
     jnz  .fail
     mov  rcx, [rel xhci_ep0_base]
     mov  eax, r12d
@@ -8630,9 +9359,9 @@ xhci_bulk_kat_disjoint:
     jz   .fail
     test r15, r15
     jz   .fail
-    test r14b, XHCI_INTR_DMA_ALIGN - 1
+    test r14d, XHCI_INTR_RING_ALIGN - 1
     jnz  .fail
-    test r15b, XHCI_INTR_DMA_ALIGN - 1
+    test r15d, XHCI_INTR_DMA_ALIGN - 1
     jnz  .fail
     cmp  r14, r10
     jb   .fail
@@ -9306,6 +10035,8 @@ xhci_inst_r1:                     ; RCQ-09 slice 2: per-controller state (swappe
 xhci_init_hcs2:       dd 0
 xhci_init_hcs2_valid: dd 0
 xhci_init_phase:      dd 0
+; Former alignment padding: every switched image keeps the same byte extent.
+xhci_firmware_ready:  dd 0           ; set only by bring-up after actual handoff result0
 align 8
 xhci_region:     dq 0, 0            ; HAL region { bar_base, bar_size }
 xhci_bus:        dd 0
@@ -9473,8 +10204,20 @@ xhci_park_retry:      db 0           ; this attach already retried Enable Slot o
 align 8
 xhci_inst_r1_end:
 ; ---- not per controller ----
+align 8
+; Actual failed-init owners/outcomes are outside ALL r1/r2/r3/r4 swapped images.
+; Capacity is the original candidate bound. Sticky overflow never means absence.
+xhci_discard_n: dd 0
+xhci_discard_overflow: dd 0
+xhci_discard_owners: times (XHCI_CAND_MAX * XHCI_DISCARD_BYTES) db 0
+xhci_discard_scratch: times XHCI_DISCARD_BYTES db 0 ; overflow effect scratch, never a retained slot
 ; Original selected initialization survives later candidates and runtime swaps.
 xhci_init_receipt: times 10 dd 0
+; Passive latest original handoff per candidate, outside every switched image.
+xhci_legacy_sequence: dd 0
+align 8
+xhci_legacy_observations: times (XHCI_CAND_MAX * 160) db 0
+xhci_legacy_scratch: times 160 db 0  ; unmatched direct call, never candidate evidence
 xhci_found:      dd 0
 xhci_preferred_51ed: dd 0
 xhci_cand_n:     dd 0
@@ -9497,6 +10240,9 @@ xhci_interrupt_reset_hook: dq 0     ; ONE hook for every controller (not per ins
                                     ; any controller (e.g. an airlock re-init of XHC0) releases ALL
                                     ; HID states, including the GLKVM's on XHC3 (known limit, RCQ-09)
 xhci_bring_conn: dd -1              ; probed connected ports of the controller being brought up
+; Passive original per-call command operands; outside every swapped image.
+xhci_power_command_observations: times 256 db 0
+xhci_power_iso_observations: times 640 db 0
 xhci_inst_n:     dd 0            ; registered controllers
 xhci_inst_cur:   dd 0            ; the live controller
 xhci_sel_chosen: dd 0            ; original selection; stable even if backend zero is a fallback

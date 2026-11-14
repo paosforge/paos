@@ -16,6 +16,13 @@
 ;   DATA   (0x02): type(1) + offset(4 LE) + chunk(<=1024)       = 5+N bytes
 ;   COMMIT (0x03): type(1) + checksum(4 LE, additive byte sum)  = 5 bytes
 ;
+; Additive pregranted full capture: "SCREEN2 NONCE <32lowerhex>\n".
+; Every capture packet has type|0x80 and a48-byte trailer: original ASCII nonce32,
+; capture_seq u32, geometry_epoch u32, capture_tsc u64. Existing SCREEN/SCREEN2
+; and RECT bytes remain unchanged. The nonce is copied after admission/busy
+; checks and erased with the retained route on every terminal path. This binds
+; captures and epochs, not cryptographic sender identity (active L2 residual).
+;
 ; Rework-seam differences from the monolith (earned, not drift):
 ;   - The rework paints straight into the GOP fb (no full back buffer), so the
 ;     pixel source is fb_base and rows are re-PACKED during copy: the wire image
@@ -373,7 +380,7 @@ scap_on_screen2:
     ; Exact full-frame request: "SCREEN2\n". The dispatcher recognizes this
     ; shape too; repeat the lint here so no future caller can bypass it.
     cmp  r13d, 8
-    jne  .parse_rect
+    jne  .parse_nonce
     cmp  dword [r12], 'SCRE'
     jne  .bad_rect
     cmp  word [r12 + 4], 'EN'
@@ -382,6 +389,42 @@ scap_on_screen2:
     jne  .bad_rect
     cmp  byte [r12 + 7], 10
     jne  .bad_rect
+    xor  r14d, r14d
+    xor  r15d, r15d
+    mov  ebx, [rel fb_width]
+    mov  ebp, [rel fb_height]
+    jmp  .lint_done
+
+.parse_nonce:
+    ; Additive full-frame challenge, no authority: exact lowercase128-bit nonce.
+    ; Validate in borrowed RX bytes; never overwrite an active capture on busy.
+    cmp  r13d, 47
+    jne  .parse_rect
+    cmp  dword [r12], 'SCRE'
+    jne  .parse_rect
+    cmp  dword [r12 + 4], 'EN2 '
+    jne  .parse_rect
+    cmp  dword [r12 + 8], 'NONC'
+    jne  .parse_rect
+    cmp  word [r12 + 12], 'E '
+    jne  .bad_rect
+    cmp  byte [r12 + 46], 10
+    jne  .bad_rect
+    mov  ecx, 32
+    lea  rsi, [r12 + 14]
+    cld
+.nonce_hex:
+    lodsb
+    cmp  al, '0'
+    jb   .bad_rect
+    cmp  al, '9'
+    jbe  .nonce_next
+    cmp  al, 'a'
+    jb   .bad_rect
+    cmp  al, 'f'
+    ja   .bad_rect
+.nonce_next:
+    loop .nonce_hex
     xor  r14d, r14d
     xor  r15d, r15d
     mov  ebx, [rel fb_width]
@@ -462,6 +505,19 @@ scap_on_screen2:
     cmp  byte [rel scap_sending], 0
     jne  .busy
     mov  byte [rel scap_sending], 1
+    mov  byte [rel scap_challenged], 0
+    cmp  r13d, 47
+    jne  .nonce_saved
+    ; NONCE is47 bytes; distinguish RECT before retaining the challenge.
+    cmp  dword [r12 + 8], 'NONC'
+    jne  .nonce_saved
+    mov  byte [rel scap_challenged], 1
+    lea  rsi, [r12 + 14]
+    lea  rdi, [rel scap_challenge]
+    mov  ecx, 32
+    cld
+    rep  movsb
+.nonce_saved:
     mov  [rel scap_cap_x], r14d
     mov  [rel scap_cap_y], r15d
     mov  [rel scap_cap_w], ebx
@@ -538,6 +594,7 @@ scap_on_screen:
     mov  eax, [rel fb_height]
     mov  [rel scap_cap_h], eax
     mov  byte [rel scap_stream_v2], 0
+    mov  byte [rel scap_challenged], 0
     call scap_queue_begin
 .done:
     pop  r15
@@ -804,7 +861,7 @@ scap_poll:
 .start_ready:
     mov  byte [rel scap_phase], 2
 .send:
-    call scap_tx
+    call scap_capture_tx
     test rax, rax
     jnz  .cancel
     call time_monotonic_now_us
@@ -818,13 +875,16 @@ scap_poll:
     mov  eax, [rel scap_sum]
     mov  [rbx + 1], eax
     mov  edi, 5
-    call scap_tx
+    call scap_capture_tx
     jmp  .cancel
 .mode_changed:
     cmp  byte [rel scap_stream_v2], 0
     je   .cancel                         ; V1 has no mode-change token
-    mov  edi, SCAP_RF_MODE_CHANGED
-    call scap_send_refuse
+    lea  rax, [rel scap_frame + 42]
+    mov  byte [rax], SCAP_PKT_REFUSE
+    mov  byte [rax + 1], SCAP_RF_MODE_CHANGED
+    mov  edi, 2
+    call scap_capture_tx
 .cancel:
     call scap_cancel
 .out:
@@ -904,6 +964,33 @@ scap_parse_u16:
 .fail:
     stc
     ret
+
+; Only pending capture packets use this wrapper. Request/busy refusals never
+; borrow or expose the active capture challenge. Legacy wire bytes unchanged.
+; Trailer: nonce ASCII32, sequenceu32, geometry_epochu32, capture_tscu64.
+; Correlation only: this is not a MAC/signature against an active L2 attacker.
+scap_capture_tx:
+    cmp  byte [rel scap_challenged], 0
+    je   scap_tx
+    lea  rax, [rel scap_frame + 42]
+    or   byte [rax], 0x80
+    add  rax, rdi
+    mov  rdx, [rel scap_challenge]
+    mov  [rax], rdx
+    mov  rdx, [rel scap_challenge + 8]
+    mov  [rax + 8], rdx
+    mov  rdx, [rel scap_challenge + 16]
+    mov  [rax + 16], rdx
+    mov  rdx, [rel scap_challenge + 24]
+    mov  [rax + 24], rdx
+    mov  edx, [rel scap_capture_seq]
+    mov  [rax + 32], edx
+    mov  edx, [rel scap_geom_epoch]
+    mov  [rax + 36], edx
+    mov  rdx, [rel scap_capture_tsc]
+    mov  [rax + 40], rdx
+    add  edi, 48
+    jmp  scap_tx
 
 scap_send_refuse:
     lea  rax, [rel scap_frame + 42]
@@ -1031,6 +1118,9 @@ scap_cap_h:     dd 0
 scap_capture_tsc: dq 0
 align 8
 scap_active_state:
+scap_challenged: db 0
+scap_challenge: times 32 db 0
+align 8
 scap_active_route: times (scap_peer_handle - scap_peer_mac) db 0
 scap_active_handle: dq 0
 scap_active_ops: dq 0
@@ -1050,7 +1140,7 @@ scap_next_us: dq 0
 scap_deadline_us: dq 0
 SCAP_ACTIVE_SIZE equ $ - scap_active_state
 ; one TX frame: eth(14) + ip(20) + udp(8) + type(1)+offset(4)+chunk(1024)
-scap_frame:     times (42 + 5 + SCAP_CHUNK + 16) db 0
+scap_frame:     times (42 + 5 + SCAP_CHUNK + 64) db 0
 
 str_scap_ready: db "[PAOS64] L5 svc: screenshot server bound UDP :9996 (GOP fb dump, SCREEN -> START/DATA/COMMIT) [scap.server.ready]", 13, 10, 0
 str_scap_v2_ready: db "[PAOS64] M6 scap: protocol v2 ready (SCREEN2 seq/epoch/tsc + RECT, refuse tokens) [gui.scap.v2]", 13, 10, 0

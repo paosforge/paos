@@ -20,7 +20,7 @@ Website: https://paosforge.com · Simulator: https://paosforge.com/simulator/
 
 ## What this repository is
 
-- A **one-way snapshot** of the source, copied from our private development system. This is snapshot 5: source version 0.0.300, an engineering build of 2026-11-01.
+- A **one-way snapshot** of the source, copied from our private development system. This is snapshot 6: source version 0.0.324, an engineering build of 2026-11-13.
 - It has **no development history**. Each new snapshot is added as one new commit on top of the last.
 - It contains the OS source, the programs that run inside the Linux virtual machines, the SDK, the generators for the font, Unicode, text and input-method tables, the third-party sources those use, and the license files.
 - It does **not** contain our test lab tools, internal notes, prebuilt boot files or signing keys.

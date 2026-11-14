@@ -1182,6 +1182,7 @@ sched_preempt_irq:
     jne  .out
     cmp  byte [rel usched_job_mode], USCHED_MODE_PREEMPT
     jne  .out
+    call sched_request_local_revoke       ; T5-15.4: invalidate saved grants too
     mov  edi, ebx
     call sched_unified_run_one
     test eax, eax
@@ -1221,6 +1222,7 @@ sched_resched_ipi_irq:
     cmp  byte [rel usched_job_mode], USCHED_MODE_PREEMPT
     jne  .result
     mov  edi, ebx
+    call sched_request_local_revoke       ; same lifetime as timer preemption
     call sched_unified_run_one
     test eax, eax
     jz   .result
@@ -1241,6 +1243,7 @@ sched_idle_wake_ipi_irq:
     cmp  byte [rel usched_job_mode], USCHED_MODE_PREEMPT
     jne  .out
     mov  edi, ebx
+    call sched_request_local_revoke       ; same lifetime as timer preemption
     call sched_unified_run_one
     test eax, eax
     jz   .out
@@ -1389,6 +1392,22 @@ sched_watchdog_safe_frame:
 .done:
     ret
 
+; Revoke current AND saved local tokens, even when a nested frame has no grant.
+; All CPUs share the monotone generation. Saturate before wrap: the terminal even
+; generation is permanently refused by storage_access_request_local. RAX/RDX/flags
+; are volatile; IRQ wrappers saved them, and yield calls only after saving its frame.
+sched_request_local_revoke:
+    mov  rax, [rel sched_request_local_epoch]
+.again:
+    cmp  rax, -2
+    je   .clear
+    lea  rdx, [rax + 2]
+    lock cmpxchg [rel sched_request_local_epoch], rdx
+    jne  .again
+.clear:
+    mov  qword [rel sched_request_local], 0
+    ret
+
 ; sched_yield — complete cooperative context switch. pushfq MUST precede cli.
 sched_yield:
     pushfq
@@ -1408,6 +1427,7 @@ sched_yield:
     push r13
     push r14
     push r15
+    call sched_request_local_revoke       ; registers and incoming flags are saved
     mov  r12d, [rel sched_cur]             ; old slot survives until RSP switches
     mov  eax, r12d
     imul eax, task_size
@@ -4126,6 +4146,9 @@ sched_kat_arm_guard:
 %macro WDATA_sched 0
 align 64
 sched_cur:    dd 0
+align 8
+sched_request_local: dq 0               ; T5-15.4: generation plus low authority bit
+sched_request_local_epoch: dq 0         ; even monotone revocation generation
 sched_flag_a: db 0
 sched_flag_b: db 0
 sched_context_leaks: db 0

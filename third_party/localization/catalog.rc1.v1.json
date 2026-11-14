@@ -112,6 +112,21 @@
       "lock.card.signin": "Sign in",
       "lock.card.stage": "Stage owner",
       "lock.card.staged": "Owner staged; restart to apply",
+      "power.failure.active": "Guest or assigned device active",
+      "power.failure.domain": "Driver could not retire safely",
+      "power.failure.flush": "Disk flush incomplete",
+      "power.failure.guest": "Guest did not stop",
+      "power.failure.nic": "Network device could not stop",
+      "power.failure.offline": "Disk offline until restart",
+      "power.failure.ownership": "Driver ownership not ready",
+      "power.failure.pending": "Shut down in progress",
+      "power.failure.reset": "Restart failed; still running",
+      "power.failure.shutdown": "Power-off failed; still on",
+      "power.failure.storage": "Guest or disk flush incomplete",
+      "power.failure.target": "Boot target may still be set",
+      "power.failure.unknown": "Power action did not finish",
+      "power.failure.windows": "No Windows entry could be armed",
+      "power.failure.work": "Storage work active; try later",
       "site.06197d2365cd5ac8064db72e": "ssh: every TCP connection slot is in use (close a session and retry)",
       "site.0a9cb8753f6f0ad4b4db8340": "Shut down refused: a disk could not be flushed, so power was left on (try again)",
       "site.0ee246c32f069172fef83fd1": "backlight held off by the lid (closed, or its restore waits for a valid PWM)",
@@ -1382,9 +1397,129 @@
       "key": "boot.notice.rescue_check_failed",
       "notes": "Machine-authored translations of the accepted read-only fallback notice. Safe and Rescue retain the product mode names; no cause beyond the accepted boot reason is asserted. Renderer and native-language evaluation remain open.",
       "params": {}
+    },
+    {
+      "critical": true,
+      "english": "No Windows entry could be armed",
+      "id": 4610,
+      "key": "power.failure.windows",
+      "notes": "Bounded public desktop failure cause. English fallback only; non-English coverage and actual localized widget consumer remain open. Raw wire reason is never translated.",
+      "params": {}
+    },
+    {
+      "critical": true,
+      "english": "Power-off failed; still on",
+      "id": 4611,
+      "key": "power.failure.shutdown",
+      "notes": "Bounded public desktop failure cause. English fallback only; non-English coverage and actual localized widget consumer remain open. Raw wire reason is never translated.",
+      "params": {}
+    },
+    {
+      "critical": true,
+      "english": "Restart failed; still running",
+      "id": 4612,
+      "key": "power.failure.reset",
+      "notes": "Bounded public desktop failure cause. English fallback only; non-English coverage and actual localized widget consumer remain open. Raw wire reason is never translated.",
+      "params": {}
+    },
+    {
+      "critical": true,
+      "english": "Disk flush incomplete",
+      "id": 4613,
+      "key": "power.failure.flush",
+      "notes": "Bounded public desktop failure cause. English fallback only; non-English coverage and actual localized widget consumer remain open. Raw wire reason is never translated.",
+      "params": {}
+    },
+    {
+      "critical": true,
+      "english": "Disk offline until restart",
+      "id": 4614,
+      "key": "power.failure.offline",
+      "notes": "Bounded public desktop failure cause. English fallback only; non-English coverage and actual localized widget consumer remain open. Raw wire reason is never translated.",
+      "params": {}
+    },
+    {
+      "critical": true,
+      "english": "Guest or assigned device active",
+      "id": 4615,
+      "key": "power.failure.active",
+      "notes": "Bounded public desktop failure cause. English fallback only; non-English coverage and actual localized widget consumer remain open. Raw wire reason is never translated.",
+      "params": {}
+    },
+    {
+      "critical": true,
+      "english": "Driver could not retire safely",
+      "id": 4616,
+      "key": "power.failure.domain",
+      "notes": "Bounded public desktop failure cause. English fallback only; non-English coverage and actual localized widget consumer remain open. Raw wire reason is never translated.",
+      "params": {}
+    },
+    {
+      "critical": true,
+      "english": "Guest did not stop",
+      "id": 4617,
+      "key": "power.failure.guest",
+      "notes": "Bounded public desktop failure cause. English fallback only; non-English coverage and actual localized widget consumer remain open. Raw wire reason is never translated.",
+      "params": {}
+    },
+    {
+      "critical": true,
+      "english": "Boot target may still be set",
+      "id": 4618,
+      "key": "power.failure.target",
+      "notes": "Bounded public desktop failure cause. English fallback only; non-English coverage and actual localized widget consumer remain open. Raw wire reason is never translated.",
+      "params": {}
+    },
+    {
+      "critical": true,
+      "english": "Guest or disk flush incomplete",
+      "id": 4619,
+      "key": "power.failure.storage",
+      "notes": "Bounded public desktop failure cause. English fallback only; non-English coverage and actual localized widget consumer remain open. Raw wire reason is never translated.",
+      "params": {}
+    },
+    {
+      "critical": true,
+      "english": "Network device could not stop",
+      "id": 4620,
+      "key": "power.failure.nic",
+      "notes": "Bounded public desktop failure cause. English fallback only; non-English coverage and actual localized widget consumer remain open. Raw wire reason is never translated.",
+      "params": {}
+    },
+    {
+      "critical": true,
+      "english": "Storage work active; try later",
+      "id": 4621,
+      "key": "power.failure.work",
+      "notes": "Bounded public desktop failure cause. English fallback only; non-English coverage and actual localized widget consumer remain open. Raw wire reason is never translated.",
+      "params": {}
+    },
+    {
+      "critical": true,
+      "english": "Shut down in progress",
+      "id": 4622,
+      "key": "power.failure.pending",
+      "notes": "Bounded public desktop failure cause. English fallback only; non-English coverage and actual localized widget consumer remain open. Raw wire reason is never translated.",
+      "params": {}
+    },
+    {
+      "critical": true,
+      "english": "Driver ownership not ready",
+      "id": 4623,
+      "key": "power.failure.ownership",
+      "notes": "Bounded public desktop failure cause. English fallback only; non-English coverage and actual localized widget consumer remain open. Raw wire reason is never translated.",
+      "params": {}
+    },
+    {
+      "critical": true,
+      "english": "Power action did not finish",
+      "id": 4624,
+      "key": "power.failure.unknown",
+      "notes": "Bounded public desktop failure cause. English fallback only; non-English coverage and actual localized widget consumer remain open. Raw wire reason is never translated.",
+      "params": {}
     }
   ],
   "revision": 1,
   "schema": "paos.pcat.source.v1",
-  "sites_sha256": "6f6b81f7d54c37aa1af7e4791625762710e7d348cd1d9783c78691313ca0f34a"
+  "sites_sha256": "e8eef7b169f1691b99e7dda1d30b1ca496f9ec92c080ca9c4e5988c6df4ce738"
 }

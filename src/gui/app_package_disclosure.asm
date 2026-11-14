@@ -138,6 +138,8 @@ app_disclosure_open:
     cmp qword [rel pd_fact+48],0
     jne .bad
     mov qword [rel pd_warning],0
+    cmp qword [rel pd_fact],8
+    je .collateral
     cmp qword [rel pd_fact],5
     je .uncovered
     cmp qword [rel pd_fact+40],0
@@ -162,6 +164,11 @@ app_disclosure_open:
     call pd_literal
     lea rsi,[rel pd_effective]
     call pd_literal
+    jmp .location
+.collateral:
+    lea rsi,[rel pd_collateral]
+    call pd_literal
+.location:
     ; Exact integer locations, no ambiguous truncation or decimal overflow.
     lea rsi,[rel pd_loc_label]
     call pd_literal
@@ -187,7 +194,7 @@ app_disclosure_open:
     mov rax,[rel pd_fact]
     cmp rax,1
     jb .bad
-    cmp rax,7
+    cmp rax,8
     ja .bad
     lea rdx,[rel pd_kinds]
     mov rsi,[rdx+rax*8-8]
@@ -198,7 +205,7 @@ app_disclosure_open:
     and eax,15
     cmp eax,1
     jb .bad
-    cmp eax,13
+    cmp eax,15
     ja .bad
     lea rdx,[rel pd_reasons]
     mov rsi,[rdx+rax*8-8]
@@ -532,7 +539,7 @@ pd_allow: db 'ALLOW (requested only)',10,0
 pd_ask: db 'ASK (requested only)',10,0
 pd_unavailable: db 'unavailable / unknown',10,0
 align 8
-pd_kinds: dq pd_kind_0-pd_kinds,pd_kind_1-pd_kinds,pd_kind_2-pd_kinds,pd_kind_3-pd_kinds,pd_kind_4-pd_kinds,pd_kind_5-pd_kinds,pd_kind_6-pd_kinds
+pd_kinds: dq pd_kind_0-pd_kinds,pd_kind_1-pd_kinds,pd_kind_2-pd_kinds,pd_kind_3-pd_kinds,pd_kind_4-pd_kinds,pd_kind_5-pd_kinds,pd_kind_6-pd_kinds,pd_kind_7-pd_kinds
 pd_kind_0: db 'Action: command call',10,0
 pd_kind_1: db 'Action: network endpoint',10,0
 pd_kind_2: db 'Action: file path',10,0
@@ -540,8 +547,10 @@ pd_kind_3: db 'Requested permission',10,0
 pd_kind_4: db 'Unresolved action',10,0
 pd_kind_5: db 'Initial package data',10,0
 pd_kind_6: db 'Form binding reference',10,0
+pd_kind_7: db 'Package collateral',10,0
+pd_collateral: db 'Informational metadata',10,0
 align 8
-pd_reasons: dq pd_reason_0-pd_reasons,pd_reason_1-pd_reasons,pd_reason_2-pd_reasons,pd_reason_3-pd_reasons,pd_reason_4-pd_reasons,pd_reason_5-pd_reasons,pd_reason_6-pd_reasons,pd_reason_7-pd_reasons,pd_reason_8-pd_reasons,pd_reason_9-pd_reasons,pd_reason_10-pd_reasons,pd_reason_11-pd_reasons,pd_reason_12-pd_reasons
+pd_reasons: dq pd_reason_0-pd_reasons,pd_reason_1-pd_reasons,pd_reason_2-pd_reasons,pd_reason_3-pd_reasons,pd_reason_4-pd_reasons,pd_reason_5-pd_reasons,pd_reason_6-pd_reasons,pd_reason_7-pd_reasons,pd_reason_8-pd_reasons,pd_reason_9-pd_reasons,pd_reason_10-pd_reasons,pd_reason_11-pd_reasons,pd_reason_12-pd_reasons,pd_reason_13-pd_reasons,pd_reason_14-pd_reasons
 pd_reason_0: db 'Typed WAIT operation',10,0
 pd_reason_1: db 'Registered verb; unavailable',10,0
 pd_reason_2: db 'Unknown command or call',10,0
@@ -555,6 +564,8 @@ pd_reason_9: db 'Immutable indexed app file',10,0
 pd_reason_10: db 'Own private data path',10,0
 pd_reason_11: db 'Foreign / unsafe path',10,0
 pd_reason_12: db 'Requested WAIT; BEGIN ALLOW also lets it read and change its own window text',10,0
+pd_reason_13: db 'Verified PNG image role',10,0
+pd_reason_14: db 'Credits; contents not analyzed',10,0
 pd_write: db 'Possible write',10,0
 pd_readwrite: db 'Possible read and write',10,0
 %macro WDATA_gui_app_package_disclosure 0

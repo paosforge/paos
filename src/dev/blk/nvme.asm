@@ -1,6 +1,6 @@
 ;; MODULE dev/blk/nvme
 ;; LAYER 3
-;; EXPORTS nvme_blk_create, nvme_self_exercise, nvme_identify_dma_to, nvme_get_log_error4_dma_to, nvme_quiesce_for_reset, nvme_power_gate, nvme_power_command_gate, nvme_io_exec_cooperative, nvme_admin_exec_cooperative, nvme_poll_cq_once, nvme_power_poll
+;; EXPORTS nvme_blk_create, nvme_self_exercise, nvme_identify_dma_to, nvme_get_log_error4_dma_to, nvme_quiesce_for_reset, nvme_quiesce_observation, nvme_quiesce_lifetime, nvme_quiesce_completion, nvme_power_gate, nvme_power_command_gate, nvme_io_exec_cooperative, nvme_admin_exec_cooperative, nvme_poll_cq_once, nvme_power_poll
 ;; IMPORTS boot/native_driver_gate, fs/blockdev, fs/storage_access, bus/pci, core/dma, core/time, boot/serial, boot/paging, dev/blk/vmd, bus/pci_claim, boot/boot_v2_handoff
 ;; CAPS mmio dma
 ;; OWNER saga:storage
@@ -1096,6 +1096,29 @@ nvme_admin_exec:
 ;   foreign/stale CQE poisons the controller: nothing is submitted again and
 ;   health is DEGRADED until nvme_reset_enable re-arms it (0xFFFE = refused).
 ; ---------------------------------------------------------------------------
+; Passive terminal Flush scope only: 0 outside, 1 original Flush bracket,
+; 2 original synchronous io_exec poll. These stores never authorize transport.
+; Capture only already-loaded native operands, preserving all registers/flags.
+%macro NVME_QC_STORE 4
+    pushfq
+    cmp byte [rel nvme_qc_scope],%4
+    jne %%out
+%if %4 = 2
+    cmp r15d,1                         ; original I/O CQ1, never admin CQ0
+    jne %%out
+%endif
+    mov %2 [rel nvme_quiesce_completion+%1],%3
+%%out:
+    popfq
+%endmacro
+%macro NVME_QC_SCOPE 2
+    pushfq
+    cmp byte [rel nvme_qc_scope],%1
+    jne %%out
+    mov byte [rel nvme_qc_scope],%2
+%%out:
+    popfq
+%endmacro
 nvme_io_exec_cooperative:
     mov eax, 1
     jmp nvme_io_exec.cooperative
@@ -1128,6 +1151,7 @@ nvme_io_exec:
 .cid:
     mov byte [rel nvme_io_pending], 1
     mov  [rel nvme_io_cid], ax
+    NVME_QC_STORE 8,word,ax,1          ; actual assigned CID, not last CQE
     mov  [rel nvme_cmd + 2], ax                 ; CDW0[31:16] = CID
     mov  rbx, [rel nvme_bar0]
     movzx r12d, word [rel nvme_iosq_tail]
@@ -1141,12 +1165,14 @@ nvme_io_exec:
     inc   r12d
     and   r12d, (NVME_IOSIZE - 1)
     mov   [rel nvme_iosq_tail], r12w
+    NVME_QC_STORE 16,word,r12w,1       ; original published expected SQHD
     ; SQ1 tail doorbell = BAR0 + 0x1000 + 2*stride
     mov   eax, [rel nvme_stride]
     shl   eax, 1
     lea   rdi, [rbx + 0x1000]
     add   rdi, rax
     mov   [rdi], r12d
+    NVME_QC_STORE 0,qword,1,1          ; original SQ1 doorbell was issued
     test r13d, r13d
     jnz .issued
     mov   rdi, [rel nvme_iocq]
@@ -1154,7 +1180,9 @@ nvme_io_exec:
     lea   rdx, [rel nvme_iocq_phase]
     mov   r8d, NVME_IOSIZE
     mov   r9d, 1                             ; CQ id 1
+    NVME_QC_SCOPE 1,2                 ; this original synchronous Flush poll
     call  nvme_poll_cq_running
+    NVME_QC_SCOPE 2,1                 ; close capture before integrity decisions
     cmp  eax, 0xFFFF
     je   .poison                       ; timeout: command still outstanding
     movzx ecx, word [rel nvme_last_cqe_cid]
@@ -1256,13 +1284,18 @@ nvme_poll_cq:
 .got:
     movzx eax, word [rcx + 8]
     mov [rel nvme_last_cqe_sqhd], ax
+    NVME_QC_STORE 48,word,ax,2
     movzx eax, word [rcx + 12]                ; CQE DW3[15:0] command identifier
     mov   [rel nvme_last_cqe_cid], ax
+    NVME_QC_STORE 32,word,ax,2
     movzx eax, word [rcx + 10]                ; CQE DW2[31:16] SQ identifier
     mov   [rel nvme_last_cqe_sqid], ax
+    NVME_QC_STORE 40,word,ax,2
     mov   eax, r11d
     shr   eax, 1
     and   eax, 0x7FFF                         ; status code
+    NVME_QC_STORE 56,dword,eax,2
+    NVME_QC_STORE 24,qword,1,2          ; observed only after actual .got loads
     push  rax                                 ; save status across doorbell math
     ; advance head, wrap -> toggle expected phase
     movzx r8d, word [r12]
@@ -1295,6 +1328,9 @@ nvme_poll_cq:
     pop rbp
     cld
     ret
+
+%unmacro NVME_QC_STORE 4
+%unmacro NVME_QC_SCOPE 2
 
 ; Private cooperative completion: EDI=0 admin / 1 I/O. The capability
 ; gate below nvme_poll_cq_once validates exact CQ/head/phase/size/qid before
@@ -1666,52 +1702,354 @@ nvme_shutdown_if_ready:
     pop  r12
     ret
 
-; nvme_quiesce_for_reset() — every orderly platform reset path calls this after
-;   its reply is on the wire: if this driver owns a live controller, one NVM
-;   Flush, then a normal shutdown, so no ACKed write is left in a volatile cache
-;   at ResetSystem/CF9. A never-initialised or degraded controller is untouched.
-;   Once CC.SHN is written (status 0 or 2) the controller is going away under
-;   this driver whether or not the platform then resets or powers off, so its
-;   I/O is refused and it reads DEGRADED (as an I/O timeout poisons it) until
-;   nvme_reset_enable re-arms it: a reset or power-off that does not happen
-;   leaves a truthful offline disk, never a healthy-looking one.
-;   Clobbers caller-saved. EAX = shutdown status (0/1/2), 3 = not owned.
+; nvme_quiesce_for_reset() — terminal BSP-only decision, not a shutdown summary.
+; EAX: 0 COMPLETE (actual Flush=0 AND shutdown=0), 1 INACTIVE (no original
+; owned-controller state), 2 POLICY_REFUSED, 3 UNAVAILABLE (present degraded,
+; unknown identity/activity/geometry), 4 FLUSH_FAILED, 5 SHUTDOWN_FAILED.
+; Only 0/1 allow the platform's later irreversible transition. INACTIVE proves
+; no controller owned by this backend; it does not assert physical PCI absence.
+; A failed/refused Flush NEVER calls shutdown. The existing 34-qword per-call
+; record retains separate attempted/raw-low32 results; attempt0/resultFFFFFFFF
+; is missing, not a successful Flush. Class admission precedes all MMIO, and
+; class-bound/poisoned/refused-geometry observer reads remain unavailable.
+; Normal shutdown keeps its original bounded poll. Only actual shutdown0/2
+; writes CC.SHN and marks the disk offline until its original reset re-arms it.
+; Callee-saved registers and IF preserved; caller-saved registers clobbered.
 nvme_quiesce_for_reset:
     cld
+    ; BSP-only passive record for THIS call, never a stale prior controller.
+    ; Qwords: present then the POWER NVMe device fields documented below.
+    lea rdi,[rel nvme_quiesce_observation]
+    xor eax,eax
+    mov ecx,34
+    rep stosq
+    ; Separate passive lifetime snapshot, cleared even on pre-admission refusal.
+    ; No original operand is sampled until its native predicate executes.
+    lea rdi,[rel nvme_quiesce_lifetime]
+    mov ecx,5
+    rep stosq
+    lea rdi,[rel nvme_quiesce_completion]
+    mov ecx,8
+    rep stosq
+    mov byte [rel nvme_qc_scope],0
+    mov eax,0xffffffff                   ; unavailable, distinct from success
+    mov [rel nvme_quiesce_observation+152],rax
+    mov [rel nvme_quiesce_observation+232],rax
     sub rsp, 8
     xor eax, eax
     call nvme_power_check
     add rsp, 8
     test rax, rax
     jz .power_admitted
-    ret
+    mov eax,2                           ; bounded POLICY_REFUSED, never raw -1
+    ret                                 ; no observer MMIO before class admission
 .power_admitted:
     push rbx
-    mov  eax, 3
-    cmp  byte [rel nvme_present], 0
-    je   .out
-    cmp  dword [rel nvme_health], HEALTH_OK
-    jne  .out
-    mov  rbx, [rel nvme_bar0]
-    test rbx, rbx
-    jz   .out
-    lea rdi, [rel nvme_devs]
-    call nvme_op_flush                      ; bounded (NVME_POLL_MAX); result advisory
-    call nvme_shutdown_if_ready
-    push rax
-    cmp  eax, 1
-    je   .report                            ; nothing was enabled: CC.SHN never written
+    mov eax,3
+    movzx edx,byte [rel nvme_present]
+    cmp dl,0
+    mov [rel nvme_quiesce_lifetime+8],rdx
+    mov qword [rel nvme_quiesce_lifetime],1
+    je .inactive
+    movzx edx,byte [rel nvme_present]
+    cmp dl,1
+    mov [rel nvme_quiesce_lifetime+8],rdx
+    jne .out                            ; malformed state cannot mean absence
+    mov qword [rel nvme_quiesce_observation],1
+    mov rax,[rel nvme_bar0]
+    mov [rel nvme_quiesce_observation+16],rax
+    mov eax,0xffffffff
+    mov [rel nvme_quiesce_observation+8],rax
+    xor ecx,ecx
+    cmp byte [rel nvme_claim_legacy],0
+    je .not_legacy
+    or ecx,1
+    mov eax,[rel nvme_busno]
+    shl eax,8
+    mov edx,[rel nvme_devno]
+    shl edx,3
+    or eax,edx
+    or eax,[rel nvme_fn]
+    mov [rel nvme_quiesce_observation+8],rax
+.not_legacy:
+    cmp byte [rel nvme_vmd_child],0
+    je .owner_done
+    or ecx,2
+    mov eax,0xffffffff                   ; child physical BDF is not available
+    mov [rel nvme_quiesce_observation+8],rax
+.owner_done:
+    mov eax,ecx
+    mov [rel nvme_quiesce_observation+24],rax
+    mov qword [rel nvme_quiesce_observation+32],1
+    ; The existing backend selects namespace1 for the actual NVM Flush.
+    mov eax,[rel nvme_sector_size]
+    mov [rel nvme_quiesce_observation+40],rax
+    mov eax,[rel nvme_health]
+    mov [rel nvme_quiesce_observation+48],rax
+    movzx eax,byte [rel nvme_io_poisoned]
+    mov [rel nvme_quiesce_observation+56],rax
+    mov [rel nvme_quiesce_observation+216],rax
+    mov [rel nvme_quiesce_observation+264],rax
+    movzx eax,byte [rel nvme_io_pending]
+    mov [rel nvme_quiesce_observation+64],rax
+    movzx eax,byte [rel nvme_admin_pending]
+    mov [rel nvme_quiesce_observation+72],rax
+    movzx eax,word [rel nvme_iosq_tail]
+    mov [rel nvme_quiesce_observation+80],rax
+    movzx eax,word [rel nvme_io_sqhd]
+    mov [rel nvme_quiesce_observation+88],rax
+    movzx eax,word [rel nvme_asq_tail]
+    mov [rel nvme_quiesce_observation+96],rax
+    movzx eax,word [rel nvme_admin_sqhd]
+    mov [rel nvme_quiesce_observation+104],rax
+    movzx eax,word [rel nvme_io_cid]
+    mov [rel nvme_quiesce_observation+112],rax
+    mov eax,3
+    cmp dword [rel nvme_health],HEALTH_OK
+    jne .out
+    mov rbx,[rel nvme_bar0]
+    test rbx,rbx
+    jz .out
+    ; Refuse existing work or unusable ownership before staging any command or
+    ; touching observer MMIO. No draining, replay, reset or admission bypass.
+    call .ready
+    test eax,eax
+    jnz .unavailable
+    ; Read-only ownership/activity MMIO is unavailable for a class-bound,
+    ; poisoned or refused-geometry device. Do not call/bypass its power gate.
+    cmp qword [rel nvme_power_gate],0
+    jne .before_done
+    cmp byte [rel nvme_io_poisoned],0
+    jne .before_done
+    cmp dword [rel nvme_sector_size],512
+    jne .before_done
+    mov qword [rel nvme_quiesce_observation+120],1
+    or qword [rel nvme_quiesce_observation+24],4
+    mov rax,[rel nvme_asq]
+    test rax,rax
+    jz .acq_owner
+    cmp rax,[rbx+0x28]                   ; live ASQ full64-bit equality
+    jne .acq_owner
+    or qword [rel nvme_quiesce_observation+24],8
+.acq_owner:
+    mov rax,[rel nvme_acq]
+    test rax,rax
+    jz .registers
+    cmp rax,[rbx+0x30]                   ; live ACQ full64-bit equality
+    jne .registers
+    or qword [rel nvme_quiesce_observation+24],16
+.registers:
+    mov eax,[rbx+0x14]
+    mov [rel nvme_quiesce_observation+128],rax
+    mov eax,[rbx+0x1c]
+    mov [rel nvme_quiesce_observation+136],rax
+    ; These original live admin-queue comparisons are authority, not just
+    ; diagnostic flags. A foreign queue must not receive our Flush/shutdown.
+    mov eax,[rel nvme_quiesce_observation+24]
+    and eax,24
+    cmp eax,24
+    jne .unavailable
+    test dword [rel nvme_quiesce_observation+128],1 ; CC.EN
+    jz .unavailable
+    mov eax,[rel nvme_quiesce_observation+136]
+    and eax,3                           ; CSTS.RDY=1 and CFS=0
+    cmp eax,1
+    jne .unavailable
+.before_done:
+    mov qword [rel nvme_quiesce_observation+144],1
+    lea rdi,[rel nvme_devs]
+    mov byte [rel nvme_qc_scope],1      ; bracket only this original Flush
+    call nvme_op_flush                  ; original bounded call/gates unchanged
+    mov byte [rel nvme_qc_scope],0      ; preserve actual return and flags
+    push rax                            ; test FULL actual return after snapshots
+    mov eax,eax                         ; preserve actual low32 return, -1 included
+    mov [rel nvme_quiesce_observation+152],rax
+    movzx eax,byte [rel nvme_io_pending]
+    mov [rel nvme_quiesce_observation+160],rax
+    movzx eax,byte [rel nvme_admin_pending]
+    mov [rel nvme_quiesce_observation+168],rax
+    movzx eax,word [rel nvme_iosq_tail]
+    mov [rel nvme_quiesce_observation+176],rax
+    movzx eax,word [rel nvme_io_sqhd]
+    mov [rel nvme_quiesce_observation+184],rax
+    movzx eax,word [rel nvme_asq_tail]
+    mov [rel nvme_quiesce_observation+192],rax
+    movzx eax,word [rel nvme_admin_sqhd]
+    mov [rel nvme_quiesce_observation+200],rax
+    movzx eax,word [rel nvme_io_cid]
+    mov [rel nvme_quiesce_observation+208],rax
+    movzx eax,byte [rel nvme_io_poisoned]
+    mov [rel nvme_quiesce_observation+216],rax
+    mov [rel nvme_quiesce_observation+264],rax ; final poison even if Flush failed
+    pop rax
+    test rax,rax
+    jnz .flush_failed                   ; never manufacture success from shutdown
+    call .ready                         ; no new work/poison after actual Flush
+    test eax,eax
+    jnz .unavailable
+    mov qword [rel nvme_quiesce_observation+224],1
+    call nvme_shutdown_if_ready         ; distinct original outcome, not flush proof
+    mov edx,eax
+    mov [rel nvme_quiesce_observation+232],rdx
+    push rax                            ; preserve actual status across reporting
+    cmp qword [rel nvme_quiesce_observation+120],1
+    jne .after_done
+    cmp qword [rel nvme_power_gate],0
+    jne .after_done
+    cmp byte [rel nvme_io_poisoned],0
+    jne .after_done                     ; no added MMIO after a timeout/foreign CQE
+    mov qword [rel nvme_quiesce_observation+240],1
+    mov eax,[rbx+0x14]
+    mov [rel nvme_quiesce_observation+248],rax
+    mov eax,[rbx+0x1c]
+    mov [rel nvme_quiesce_observation+256],rax
+.after_done:
+    cmp qword [rsp],0
+    je .offline
+    cmp qword [rsp],2
+    jne .report                         ; policy refusal/not-ready wrote no CC.SHN
+.offline:
     mov  byte [rel nvme_io_poisoned], 1
     mov  dword [rel nvme_health], HEALTH_DEGRADED
     mov  dword [rel nvme_devs + dev.health], HEALTH_DEGRADED
     lea  rdi, [rel str_nvme_offline]
     call serial_string
 .report:
-    lea  rdi, [rel str_nvme_quiesced]
+    movzx eax,byte [rel nvme_io_poisoned]
+    mov [rel nvme_quiesce_observation+264],rax
+    lea rdi,[rel str_nvme_quiesced]
     call serial_string
-    pop  rax
+    pop rax
+    test rax,rax
+    jz .out                             ; only shutdown0 after Flush0 is COMPLETE
+    mov eax,5                           ; raw result is separately retained
+    jmp .out
+.flush_failed:
+    mov eax,4
+    jmp .out
+.unavailable:
+    mov eax,3
+    jmp .out
+.inactive:
+    ; A clear present flag alone cannot hide failed bring-up or an old owner.
+    ; These are the backend's ORIGINAL ownership/lifetime fields, not guest
+    ; inventory or a synthetic device witness. No MMIO is needed or allowed.
+    cmp byte [rel nvme_claim_legacy],0
+    mov qword [rel nvme_quiesce_lifetime+16],0x1
+    setne byte [rel nvme_quiesce_lifetime+24]
+    jne .out
+    cmp byte [rel nvme_vmd_child],0
+    mov qword [rel nvme_quiesce_lifetime+16],0x3
+    setne byte [rel nvme_quiesce_lifetime+25]
+    jne .out
+    cmp byte [rel nvme_io_poisoned],0
+    mov qword [rel nvme_quiesce_lifetime+16],0x7
+    setne byte [rel nvme_quiesce_lifetime+26]
+    jne .out
+    cmp byte [rel nvme_io_pending],0
+    mov qword [rel nvme_quiesce_lifetime+16],0xf
+    setne byte [rel nvme_quiesce_lifetime+27]
+    jne .out
+    cmp byte [rel nvme_admin_pending],0
+    mov qword [rel nvme_quiesce_lifetime+16],0x1f
+    setne byte [rel nvme_quiesce_lifetime+28]
+    jne .out
+    cmp qword [rel nvme_bar0],0
+    mov qword [rel nvme_quiesce_lifetime+16],0x3f
+    setne byte [rel nvme_quiesce_lifetime+29]
+    jne .out
+    cmp qword [rel nvme_vmd_cfg],0
+    mov qword [rel nvme_quiesce_lifetime+16],0x7f
+    setne byte [rel nvme_quiesce_lifetime+30]
+    jne .out
+    cmp qword [rel nvme_asq],0
+    mov qword [rel nvme_quiesce_lifetime+16],0xff
+    setne byte [rel nvme_quiesce_lifetime+31]
+    jne .out
+    cmp qword [rel nvme_acq],0
+    mov qword [rel nvme_quiesce_lifetime+16],0x1ff
+    setne byte [rel nvme_quiesce_lifetime+32]
+    jne .out
+    cmp qword [rel nvme_iosq],0
+    mov qword [rel nvme_quiesce_lifetime+16],0x3ff
+    setne byte [rel nvme_quiesce_lifetime+33]
+    jne .out
+    cmp qword [rel nvme_iocq],0
+    mov qword [rel nvme_quiesce_lifetime+16],0x7ff
+    setne byte [rel nvme_quiesce_lifetime+34]
+    jne .out
+    cmp qword [rel nvme_bounce],0
+    mov qword [rel nvme_quiesce_lifetime+16],0xfff
+    setne byte [rel nvme_quiesce_lifetime+35]
+    jne .out
+    cmp qword [rel nvme_idbuf],0
+    mov qword [rel nvme_quiesce_lifetime+16],0x1fff
+    setne byte [rel nvme_quiesce_lifetime+36]
+    jne .out
+    cmp word [rel nvme_io_cid],0
+    mov qword [rel nvme_quiesce_lifetime+16],0x3fff
+    setne byte [rel nvme_quiesce_lifetime+37]
+    jne .out
+    cmp word [rel nvme_admin_cid],0
+    mov qword [rel nvme_quiesce_lifetime+16],0x7fff
+    setne byte [rel nvme_quiesce_lifetime+38]
+    jne .out
+    mov eax,1                           ; INACTIVE, never Flush success
 .out:
-    pop  rbx
+    pop rbx
+    ret
+.ready:
+    ; Software-only guards apply to attached and unattached ownership alike.
+    cmp byte [rel nvme_present],1
+    jne .not_ready
+    cmp dword [rel nvme_health],HEALTH_OK
+    jne .not_ready
+    cmp byte [rel nvme_io_poisoned],0
+    jne .not_ready
+    cmp byte [rel nvme_io_pending],0
+    jne .not_ready
+    cmp byte [rel nvme_admin_pending],0
+    jne .not_ready
+    cmp dword [rel nvme_sector_size],512
+    jne .not_ready
+    cmp rbx,[rel nvme_bar0]              ; exact original controller retained
+    jne .not_ready
+    lea rax,[rel nvme_ops]
+    cmp [rel nvme_devs+dev.ops],rax
+    jne .not_ready
+    lea rax,[rel nvme_info]
+    cmp [rel nvme_devs+dev.info],rax
+    jne .not_ready
+    cmp qword [rel nvme_asq],0
+    je .not_ready
+    cmp qword [rel nvme_acq],0
+    je .not_ready
+    cmp qword [rel nvme_iosq],0
+    je .not_ready
+    cmp qword [rel nvme_iocq],0
+    je .not_ready
+    mov rax,[rel nvme_asq]
+    or rax,[rel nvme_acq]
+    or rax,[rel nvme_iosq]
+    or rax,[rel nvme_iocq]
+    test eax,4095                       ; original DMA queue page alignment
+    jnz .not_ready
+    cmp word [rel nvme_asq_tail],NVME_ASIZE
+    jae .not_ready
+    cmp word [rel nvme_acq_head],NVME_ASIZE
+    jae .not_ready
+    cmp word [rel nvme_admin_sqhd],NVME_ASIZE
+    jae .not_ready
+    cmp word [rel nvme_iosq_tail],NVME_IOSIZE
+    jae .not_ready
+    cmp word [rel nvme_iocq_head],NVME_IOSIZE
+    jae .not_ready
+    cmp word [rel nvme_io_sqhd],NVME_IOSIZE
+    jae .not_ready
+    xor eax,eax
+    ret
+.not_ready:
+    mov eax,3
     ret
 
 ; degraded op — every call -1 until a controller is brought up (no disk present).
@@ -1969,7 +2307,7 @@ str_nvme_rw_post:    db " [blk.nvme.rw.verified]", 13, 10, 0
 str_nvme_rw_bad:     db "[PAOS64] P3 blk: NVMe rw round-trip FAIL", 13, 10, 0
 str_nvme_poisoned:   db "[PAOS64] blk: NVMe I/O completion timed out or did not match its command; I/O refused until controller reset [blk.nvme.poisoned]", 13, 10, 0
 str_nvme_offline:    db "[PAOS64] blk: NVMe shut down (CC.SHN): I/O refused until the controller is reset [blk.nvme.offline]", 13, 10, 0
-str_nvme_quiesced:   db "[PAOS64] blk: NVMe flushed + normal shutdown before platform reset [blk.nvme.quiesced]", 13, 10, 0
+str_nvme_quiesced:   db "[PAOS64] blk: NVMe flush/shutdown attempted; separate outcomes required [blk.nvme.quiesced]", 13, 10, 0
 str_nvme_ro:         db "[PAOS64] P3 blk: NVMe read-only content-grade PASS (write round-trip deferred: real disk, supervised 1027b) [blk.nvme.read.verified]", 13, 10, 0
 %endmacro
 WDATA_DEFER WDATA_dev_blk_nvme_0
@@ -1986,3 +2324,22 @@ nvme_ex_buf:      resb 4096
 nvme_ex_buf2:     resb 4096
 %endmacro
 WDATA_BSS_DEFER WDATA_dev_blk_nvme_0_bss1
+
+; Passive per-call P4 observation only. present +33 qwords; original state
+; offsets above stay unchanged. Queue activity is software state, ASQ/ACQ
+; equality is a live admin-queue ownership witness, not complete I/O authority.
+; bdf, bar, owner, nsid, sector, health, poison_before, io_before, admin_before, sqt_before, sqh_before, aqt_before, aqh_before, cid_before, before_valid, cc_before, csts_before, flush_attempt, flush_result, io_after, admin_after, sqt_after, sqh_after, aqt_after, aqh_after, cid_after, poison_after_flush, shutdown_attempt, shutdown_result, after_valid, cc_after, csts_after, poison_after
+%macro WDATA_dev_blk_nvme_quiesce 0
+alignb 8
+nvme_quiesce_observation: resq 34
+; Separate 40B ABI: present_available, actual present operand, observed mask,
+; 15 byte nonzero results in original .inactive predicate order, one pad byte.
+; SETNE and MOV preserve each original CMP/JNE flags; unobserved bytes are not
+; evidence of zero operands. No address/inventory/MMIO/lifetime authority.
+nvme_quiesce_lifetime: resq 5
+; Separate 64B: submitted, expected CID/SQHD, observed, CQE CID/SQID/SQHD/status.
+; Zero with submitted/observed=0 is unavailable, never a completion witness.
+nvme_quiesce_completion: resq 8
+nvme_qc_scope: resb 1                  ; private passive capture scope, no authority
+%endmacro
+WDATA_BSS_DEFER WDATA_dev_blk_nvme_quiesce

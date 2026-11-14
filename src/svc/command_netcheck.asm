@@ -1,8 +1,8 @@
 ;; MODULE svc/command_netcheck
 %include "core/abi/build_profile.inc"
 ;; LAYER 5
-;; EXPORTS command_netcheck_init, netcheck_out_ready, netcheck_out_buf, netcheck_collect, netcheck_classify, nc_check
-;; IMPORTS boot/header, core/lib/fmt, dev/net/e1000e, dev/net/rtl8168, dev/net/virtio_domain, net/arp_cache, net/dhcp, net/dns, net/http, net/netdev, svc/command, svc/command_udp, svc/command_web
+;; EXPORTS command_netcheck_init, netcheck_out_ready, netcheck_out_buf, netcheck_collect, netcheck_classify, nc_check, netcheck_snapshot_text, netcheck_selected_link
+;; IMPORTS boot/header, core/lib/fmt, dev/net/e1000e, dev/net/rtl8168, dev/net/virtio_domain, net/arp_cache, net/dhcp, net/dns, net/http, net/netdev, hv/nd_isolation, svc/command, svc/command_udp, svc/command_web
 ;; CAPS
 ;; OWNER saga:net
 ; RCQ-40 J3: NETCHECK, the bounded native Network Check (G1). One read-only
@@ -44,6 +44,7 @@ NC_INC_RESOLVER   equ 7
 NC_WEB_FAIL       equ 8
 NC_INC_WEB        equ 9
 NC_HEALTHY        equ 10
+NC_ISO_REFUSED    equ 11              ; NDISO1: the domain NIC was refused for isolation and no adapter holds egress
 
 ; web words (index into netcheck_web_words)
 NC_WEB_UNPINNED   equ 0
@@ -78,6 +79,22 @@ cmd_verb_netcheck:
     mov  byte [rel netcheck_out_ready], 1
     mov  qword [rbx + RSP_CODE], CMDE_OK
     pop  rbx
+    ret
+
+; Native GUI observation adapter: same bounded facts as the verb without
+; publishing a command reply. RAX=text, RDX=selected identity, RCX=sample ms.
+netcheck_snapshot_text:
+    cmp byte [rel netcheck_out_ready],0
+    jne .busy
+    call netcheck_collect
+    call netcheck_classify
+    call netcheck_format
+    lea rax,[rel netcheck_out_buf]
+    mov rdx,[rel nc_sel]
+    mov rcx,[rel nc_now]
+    ret
+.busy:
+    xor eax,eax
     ret
 
 ; netcheck_link_sample(RDI=command NIC handle) -> EAX NC_LINK_*. The cached bit
@@ -115,6 +132,20 @@ netcheck_link_sample:
     mov  eax, NC_LINK_UNPROBED
     ret
 
+; netcheck_selected_link(RDI=member or 0) -> EAX NC_LINK_*: the link= fact
+;   NETCHECK reports. UNPROBED unless the member is the command NIC the stack
+;   uses (addr_nic=selected), else that NIC's cached sample. No driver call.
+;   NDISO1's line 2 reads the same fact (INPUT110053). clobbers: caller-saved.
+netcheck_selected_link:
+    mov  eax, NC_LINK_UNPROBED
+    test rdi, rdi
+    jz   .out
+    cmp  rdi, [rel udp_nic_handle]
+    jne  .out
+    jmp  netcheck_link_sample
+.out:
+    ret
+
 ; netcheck_collect — snapshot every fact into nc_*. clobbers: caller-saved.
 netcheck_collect:
     push rbx
@@ -135,11 +166,8 @@ netcheck_collect:
     mov  ecx, NC_ADDR_SELECTED
 .addr:
     mov  [rel nc_addr], cl
-    mov  byte [rel nc_link], NC_LINK_UNPROBED
-    cmp  cl, NC_ADDR_SELECTED
-    jne  .dhcp
     mov  rdi, rbx
-    call netcheck_link_sample
+    call netcheck_selected_link                 ; UNPROBED unless addr_nic=selected
     mov  [rel nc_link], al
 .dhcp:
     ; address facts, as STATUS reports them (G6: the lease is the DHCP word)
@@ -249,10 +277,10 @@ netcheck_fresh:
 netcheck_classify:
     mov  ecx, NC_NO_ADAPTER
     cmp  qword [rel nc_sel], 0
-    je   .set
+    je   .no_adapter
     lea  rax, [rel str_udp_dhcp_nodriver]
     cmp  [rel nc_dhcp_word], rax
-    je   .set
+    je   .no_adapter
     mov  ecx, NC_STARTING
     cmp  byte [rel boot_nic_state], NIC_ST_WARMING
     je   .set
@@ -328,6 +356,13 @@ netcheck_classify:
 %endif
 .healthy:
     mov  ecx, NC_HEALTHY
+    jmp  .set
+.no_adapter:
+    ; NDISO1 (ROOT110035): an adapter is present but refused for isolation, so
+    ; "no adapter" would be false. The text is ndiso_render's, never NETCHECK's.
+    cmp  byte [rel nd_iso_page], 1
+    jne  .set
+    mov  ecx, NC_ISO_REFUSED
 .set:
     mov  [rel nc_check], cl
     ret
@@ -698,7 +733,7 @@ netcheck_check_words:
     dd str_nc_c_no_lease - netcheck_check_words, str_nc_c_inc_gateway - netcheck_check_words
     dd str_nc_c_dns_fail - netcheck_check_words, str_nc_c_inc_resolver - netcheck_check_words
     dd str_nc_c_web_fail - netcheck_check_words, str_nc_c_inc_web - netcheck_check_words
-    dd str_nc_c_healthy - netcheck_check_words
+    dd str_nc_c_healthy - netcheck_check_words, str_nc_c_iso_refused - netcheck_check_words
 netcheck_link_words:
     dd str_nc_down - netcheck_link_words, str_nc_up - netcheck_link_words, str_nc_unprobed - netcheck_link_words
 netcheck_addr_words:
@@ -743,6 +778,7 @@ str_nc_web:          db " web=", 0
 str_nc_web_status:   db " web_status=", 0
 str_nc_web_age:      db " web_age_s=", 0
 str_nc_c_no_adapter:   db "no_adapter", 0
+str_nc_c_iso_refused:  db "isolation_refused", 0
 str_nc_c_starting:     db "starting", 0
 str_nc_c_inc_adapter:  db "incomplete:adapter", 0
 str_nc_c_no_link:      db "no_link", 0

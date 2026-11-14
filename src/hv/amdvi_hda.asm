@@ -1,6 +1,6 @@
 ;; MODULE hv/amdvi_hda
 ;; LAYER 5
-;; EXPORTS amdvi_hda_attach, amdvi_hda_receipt, amdvi_hda_live_receipt
+;; EXPORTS amdvi_scope_snapshot, amdvi_hda_attach, amdvi_hda_receipt, amdvi_hda_live_receipt, amdvi_enforcing_regs
 ;; IMPORTS hv/amdvi, hv/vtd, boot/paging, bus/acpi, bus/pci_bdf, core/dma
 ;; CAPS CAP_MMIO
 ;; OWNER rc-codex-av
@@ -50,7 +50,31 @@ amdvi_hda_reset:
 
 ; Live enforcement, not cached boot success. Event history is sticky here:
 ; an already consumed fault cannot become a clean receipt on a later poll.
+; The register half is amdvi_enforcing_regs (pure); this caller then consumes
+; the event log, so terminal predicates use the regs half plus their own
+; non-consuming peek instead (SEC110926 item 4).
 amdvi_hda_enforcing:
+    sub rsp, 8
+    call amdvi_enforcing_regs
+    add rsp, 8
+    test eax, eax
+    jz .no
+    sub rsp, 8
+    call amdvi_event_check
+    add rsp, 8
+    test eax, eax
+    jnz .no
+    cmp dword [rel amdvi_events], 0
+    jne .no
+    mov eax, 1
+    ret
+.no:
+    xor eax, eax
+    ret
+
+; Pure: the owning unit's enforcement registers only -> EAX 1/0. Reads module
+; fields and MMIO; writes nothing (no event consume, observer or sticky state).
+amdvi_enforcing_regs:
     cmp byte [rel amdvi_owned], 1
     jne .no
     cmp byte [rel amdvi_enabled], 1
@@ -81,13 +105,6 @@ amdvi_hda_enforcing:
     mov edx, [rax + AMDVI_R_STATUS]
     and edx, AMDVI_STS_CMD_RUN | AMDVI_STS_EVT_RUN
     cmp edx, AMDVI_STS_CMD_RUN | AMDVI_STS_EVT_RUN
-    jne .no
-    sub rsp, 8
-    call amdvi_event_check
-    add rsp, 8
-    test eax, eax
-    jnz .no
-    cmp dword [rel amdvi_events], 0
     jne .no
     mov eax, 1
     ret
@@ -633,7 +650,13 @@ amdvi_hda_ecam_uc:
     ret
 
 ; No alias source/range and no IVMD unity exception may name this requester.
+; EDI requester -> EAX 1 allowed / 0 refused, unchanged predicate.
+; Secondary read-only result: R8 matched parsed entry, R9D kind (1 alias
+; range, 2 alias requester field, 3 IVMD), ECX one-based parsed ordinal.
+; R8/R9 are zero on no match. Tables are immutable after IVRS ownership.
 amdvi_hda_scope:
+    xor r8d, r8d
+    xor r9d, r9d
     xor ecx, ecx
 .alias:
     cmp ecx, [rel amdvi_alias_n]
@@ -642,12 +665,18 @@ amdvi_hda_scope:
     lea rax, [rax + rcx*8]
     inc ecx
     cmp di, [rax + 4]
-    je .no
+    je .alias_id
     cmp di, [rax]
     jb .alias
     cmp di, [rax + 2]
-    jbe .no
+    jbe .alias_range
     jmp .alias
+.alias_id:
+    mov r9d, 2
+    jmp .matched
+.alias_range:
+    mov r9d, 1
+    jmp .matched
 .ivmd_start:
     xor ecx, ecx
 .ivmd:
@@ -660,13 +689,85 @@ amdvi_hda_scope:
     cmp di, [rax]
     jb .ivmd
     cmp di, [rax + 2]
-    jbe .no
+    jbe .ivmd_match
     jmp .ivmd
+.ivmd_match:
+    mov r9d, 3
+.matched:
+    mov r8, rax
+    xor eax, eax
+    ret
 .yes:
     mov eax, 1
     ret
-.no:
+
+; Passive NAS1 v1 snapshot, EDI requester, RSI fixed48 output -> EAX48 or0.
+; Uses the SAME predicate over the ownership-time immutable parsed tables;
+; no second firmware/PCI scan and no admission, reset or IOMMU writes.
+; Zero whole output first. Counts are parser-bounded; reject corrupt counts
+; before calling the evaluator, and never expose a pointer or stale record.
+; +0 magic NAS1 +4 version16 +6 size16 +8 requester16 +10 kind8
+; +11 selected IVHD type8 +12 zero-based parsed ordinal32
+; +16 alias count32 +20 IVMD count32 +24 raw parsed entry24.
+; Alias entries are8 bytes followed by16 zero bytes. IVMD entries contain
+; first16,last16,normalized flags32,aligned base64,length64 (not raw firmware).
+amdvi_scope_snapshot:
+    push rbx
+    push r12
+    sub rsp, 8
+    mov rbx, rsi
+    mov r12d, edi
+    mov rdi, rsi
     xor eax, eax
+    mov ecx, 6
+    cld
+    rep stosq
+    cmp r12d, 65535
+    ja .none
+    cmp dword [rel amdvi_alias_n], AMDVI_ALIAS_MAX
+    ja .none
+    cmp dword [rel amdvi_ivmd_n], AMDVI_IVMD_MAX
+    ja .none
+    mov edi, r12d
+    call amdvi_hda_scope
+    test eax, eax
+    jnz .none
+    test r8, r8
+    jz .none
+    mov word [rbx+4], 1
+    mov word [rbx+6], 48
+    mov [rbx+8], r12w
+    mov [rbx+10], r9b
+    mov rax, [rel amdvi_ivhd]
+    test rax, rax
+    jz .no_type
+    mov al, [rax]
+    mov [rbx+11], al
+.no_type:
+    dec ecx
+    mov [rbx+12], ecx
+    mov eax, [rel amdvi_alias_n]
+    mov [rbx+16], eax
+    mov eax, [rel amdvi_ivmd_n]
+    mov [rbx+20], eax
+    mov rax, [r8]
+    mov [rbx+24], rax
+    cmp r9d, 3
+    jne .publish
+    mov rax, [r8+8]
+    mov [rbx+32], rax
+    mov rax, [r8+16]
+    mov [rbx+40], rax
+.publish:
+    mov dword [rbx], 0x3153414e       ; NAS1 valid last
+    mov eax, 48
+    jmp .out
+.none:
+    xor eax, eax
+.out:
+    add rsp, 8
+    pop r12
+    pop rbx
     ret
 
 ; Shared HDA quiesce predicate: CRST0/CORBRUN0/RIRBDMA0/DPLoff and RUN0 in

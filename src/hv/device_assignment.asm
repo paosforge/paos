@@ -1,6 +1,6 @@
 ;; MODULE hv/device_assignment
 ;; LAYER 5
-;; EXPORTS devassign_classify, devassign_build_facts, iommu_isolation_topology_kat
+;; EXPORTS devassign_group_classify, devassign_classify, devassign_build_facts, iommu_isolation_topology_kat
 ;; IMPORTS boot/serial
 ;; CAPS
 ;; OWNER saga:device_assignment_portability
@@ -167,6 +167,119 @@ devassign_classify:
     pop  rbx
     ret
 
+; W4c-2 A: shared-fact group classifier. This is additive: singleton
+; devassign_classify and its ISO8 decision above remain byte-for-byte.
+%include "hv/pcia_grp.inc"
+; RDI bounded fact record -> EAX ISO_*. No config access or caller write.
+; Class, original claims and reset scope are A's separate live prerequisites.
+devassign_group_classify:
+    push rbx
+    push rbp
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rdi
+    cmp byte [r12], 1
+    jne .iommu
+    cmp byte [r12+1], 1
+    jne .backend
+    cmp byte [r12+2], 0
+    jne .trunc
+    movzx r13d, byte [r12+3]
+    cmp r13d, 1
+    jb .trunc
+    cmp r13d, 32
+    ja .trunc
+    movzx eax, byte [r12+4]
+    cmp eax, r13d
+    jae .trunc
+    lea r14, [r12+16]
+    lea rax, [r14+rax*8]
+    cmp byte [rax+5], DA_K_ENDPOINT
+    jne .alias
+    test byte [rax+6], DA_F_DMA
+    jz .alias
+    movzx r15d, byte [rax+7]
+    xor ebx, ebx
+    xor ebp, ebp
+.member:
+    cmp ebx, r13d
+    jae .count
+    lea r8, [r14+rbx*8]
+    cmp byte [r8+7], r15b
+    jne .next
+    cmp word [r8], 0
+    jne .segment
+    test byte [r8+6], DA_F_RMRR
+    jnz .rmrr
+    test byte [r8+6], DA_F_ALIAS
+    jnz .alias
+    mov ecx, ebx
+    xor edx, edx
+.parent:
+    movzx eax, byte [r14+rcx*8+4]
+    cmp eax, DA_ROOT
+    je .parent_ok
+    cmp eax, r13d
+    jae .cycle
+    cmp byte [r14+rax*8+5], DA_K_BRIDGE
+    jne .cycle
+    mov ecx, eax
+    inc edx
+    cmp edx, r13d
+    jae .cycle
+    jmp .parent
+.parent_ok:
+    test byte [r8+6], DA_F_DMA
+    jz .bridge
+    cmp byte [r8+5], DA_K_ENDPOINT
+    jne .alias
+    test byte [r8+6], DA_F_PROTECTED
+    jnz .claimed
+    inc ebp
+    cmp ebp, PCIA_GRP_MAX
+    ja .overflow
+    jmp .next
+.bridge:
+    cmp byte [r8+5], DA_K_BRIDGE
+    jne .alias
+.next:
+    inc ebx
+    jmp .member
+.count:
+    cmp ebp, 2
+    jb .singleton
+    xor eax, eax
+    jmp .out
+.iommu: mov eax, ISO_NO_IOMMU
+    jmp .out
+.backend: mov eax, ISO_UNSUP_BACKEND
+    jmp .out
+.trunc: mov eax, ISO_TRUNC_ACPI
+    jmp .out
+.cycle: mov eax, ISO_CYCLE
+    jmp .out
+.rmrr: mov eax, ISO_RMRR
+    jmp .out
+.alias: mov eax, ISO_ALIAS
+    jmp .out
+.segment: mov eax, ISO_SEGMENT
+    jmp .out
+.claimed: mov eax, ISO_GRP_CLAIMED
+    jmp .out
+.overflow: mov eax, ISO_GRP_OVERFLOW
+    jmp .out
+.singleton: mov eax, ISO_SHARED_DMA   ; route singleton through its old API
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbp
+    pop rbx
+    ret
+
 ; ---- live-topology snapshot (input to devassign_build_facts) ----
 ;   one 8-byte entry per present function:
 ;     +0 word bdf (bus<<8 | dev<<3 | fn)  +2 byte DA_S_* flags
@@ -197,6 +310,26 @@ DA_H_INCOMPLETE   equ 4
     mov  r11b, [r13 + rax*8 + 4]
     mov  [rbp + 17 + r10*2], r11b
     inc  byte [rbp + 9]
+%endmacro
+
+; Retain every emitted member's native reservation/requester scope facts.
+; The old singleton already rejects DMA peers. Trusted/shared consumers also
+; need these flags on nonselected bridges/endpoints, not only on the target.
+; R13/RCX identify the original snapshot member; R8D accumulates DA_F_*.
+%macro DA_MEMBER_SCOPE_FLAGS 0
+    test byte [r13 + rcx*8 + 2], DA_S_RMRR
+    jz %%bridge
+    or   r8d, DA_F_RMRR
+%%bridge:
+    test byte [r13 + rcx*8 + 2], DA_S_BRIDGE
+    jz %%done
+    test byte [r13 + rcx*8 + 2], DA_S_PCIE
+    jz %%alias
+    test byte [r13 + rcx*8 + 2], DA_S_PCI_BRIDGE
+    jz %%done
+%%alias:
+    or   r8d, DA_F_ALIAS
+%%done:
 %endmacro
 
 ; devassign_build_facts(RDI = record out [DA_REC_BYTES], RSI = snapshot,
@@ -404,6 +537,7 @@ devassign_build_facts:
     jz   .c_grp
     mov  r8d, DA_F_PROTECTED
 .c_grp:
+    DA_MEMBER_SCOPE_FLAGS
     mov  r9d, 1
     test ebx, ebx
     jz   .c_parent                       ; the parent port is a topology-only member
@@ -465,6 +599,7 @@ devassign_build_facts:
     jz   .p_emit
     or   r8d, DA_F_PROTECTED
 .p_emit:
+    DA_MEMBER_SCOPE_FLAGS
     movzx eax, word [r13 + rcx*8]
     mov  esi, DA_ROOT
     mov  r9d, 1

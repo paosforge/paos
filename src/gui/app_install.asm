@@ -1,8 +1,8 @@
 ;; MODULE gui/app_install
 ;; LAYER 6
 ;; PURPOSE Owner install decision for one checked package candidate: offer, intent and checker.
-;; EXPORTS app_install_declare, app_install_init, app_install_offer, app_install_tick, app_install_intent_check, app_install_intent_consume, cmd_verb_appinstall
-;; IMPORTS gui/app_package_card, gui/widget, gui/window_mgmt, gui/window, svc/app_package, svc/app_analysis, svc/command, sec/app_install_grants, sec/session, fs/vfs, core/heap, core/time, core/smp, dev/input/ps2, boot/gop
+;; EXPORTS app_install_declare, app_install_init, app_install_offer, app_install_tick, app_install_intent_check, app_install_intent_consume, app_install_store_descriptor, app_install_store_copy, app_install_store_execution_policy, cmd_verb_appinstall
+;; IMPORTS gui/app_installed, gui/app_store_observe, gui/app_store_install, gui/app_package_card, gui/widget, gui/window_mgmt, gui/window, svc/app_package, svc/app_analysis, svc/command, sec/app_install_grants, sec/session, fs/vfs, core/heap, core/time, core/smp, dev/input/ps2, boot/gop
 ;; OWNER saga:app_package
 ;; CONTEXT: bsp_only
 ; Offering installs, grants and enrolls nothing. The owner's button freezes one
@@ -13,6 +13,7 @@ AIN_PATH_MAX equ 255
 AIN_BOUND_US equ 30000000
 AIN_DWELL_US equ 400000
 AIN_ORIGIN_FILE equ 1
+AIN_FLAGS_UNSIGNED equ 1
 AIN_FLAGS_SIGNED equ 3
 AIN_ORIGIN_TERMINAL equ 2
 AIN_PROFILE equ 2                      ; app_install_grants sharing candidate
@@ -30,9 +31,10 @@ AIN_ALLOW equ 12
 AIN_ASK equ 13
 AIN_CANCEL equ 14
 AIN_DETAILS equ 15
-AIN_COUNT equ 16
+AIN_EXEC equ 16
+AIN_COUNT equ 17
 AIN_WIDTH equ 560
-AIN_HEIGHT equ 370
+AIN_HEIGHT equ 402
 AIN_TOP equ 64                      ; below the desktop launcher entry, which ain_ok refuses to overlap
 AIN_IDLE equ 0
 AIN_DECIDING equ 1
@@ -41,12 +43,15 @@ AIN_ACT_ALLOW equ 1
 AIN_ACT_ASK equ 2
 AIN_ACT_CANCEL equ 3
 AIN_ACT_DETAILS equ 4
+AIN_ACT_EXEC equ 5
 AIN_FILE_IDLE equ 0
 AIN_FILE_QUEUED equ 1
 AIN_FILE_SHOWN equ 2
 AIN_FILE_REFUSED equ 3
 
 app_install_declare:
+    call app_store_observe_declare
+    call app_installed_declare
     lea rdi,[rel ain_verb]
     lea rsi,[rel cmd_verb_appinstall]
     mov rdx,CMD_AUTH_CAP_EXTENSION
@@ -67,6 +72,8 @@ app_install_init:
     mov [rel ain_prev_click],rax
     lea rax,[rel ain_click]
     mov [rel wgt_click_hook],rax
+    lea rax,[rel app_store_install]
+    mov [rel app_install_store],rax      ; fixed authenticated provider, never guest-configured
     mov byte [rel ain_initialized],1
     jmp app_install_grants_init
 .out:
@@ -102,13 +109,18 @@ app_install_offer:
     jne .refuse
     cmp rdx,-1
     je .refuse
-    ; Signed-only (SEC 89224): an unsigned container has no key identity to bind.
+    ; Installation accepts valid sharing packages independently of execution
+    ; approval. Signed content still passes the original complete verifier.
     cmp r13,44
     jb .refuse
+    cmp dword [r12+40],AIN_FLAGS_UNSIGNED
+    je .flags
     cmp dword [r12+40],AIN_FLAGS_SIGNED
     jne .refuse
+.flags:
     mov [rel ain_epoch],rdx
     mov [rel ain_origin],ebx
+    mov byte [rel ain_exec_selected],0
     mov rdi,r12
     mov rsi,r13
     call app_package_stage
@@ -116,8 +128,11 @@ app_install_offer:
     jz .refuse
     mov [rel ain_handle],rax
     mov rcx,[rel ap_resident]            ; the bytes verified, not the caller's
+    cmp dword [rcx+40],AIN_FLAGS_UNSIGNED
+    je .verified
     cmp dword [rcx+40],AIN_FLAGS_SIGNED
     jne .retire
+.verified:
     mov rdi,rax
     call app_analysis_build
     cmp eax,1
@@ -364,6 +379,16 @@ ain_action_for_id:
     mov al,AIN_ACT_ASK
     ret
 .details:
+    cmp edi,[rel ain_ids+AIN_EXEC*4]
+    jne .disclosure
+    mov rcx,[rel ap_resident]
+    test rcx,rcx
+    jz .out
+    cmp dword [rcx+40],AIN_FLAGS_UNSIGNED
+    jne .out
+    mov al,AIN_ACT_EXEC
+    ret
+.disclosure:
     cmp edi,[rel ain_ids+AIN_DETAILS*4]
     jne .cancel
     mov al,AIN_ACT_DETAILS
@@ -377,6 +402,8 @@ ain_action_for_id:
 
 ; EDI id, AL action. Installing arms against the window as the human saw it.
 ain_queue:
+    cmp al,AIN_ACT_EXEC
+    je .install
     cmp al,AIN_ACT_ALLOW
     je .install
     cmp al,AIN_ACT_ASK
@@ -487,10 +514,24 @@ ain_key:
 ; Cancel, then each live button in order. Origin 2 has no Allow button.
 ain_focus_next:
     mov eax,[rel wgt_focus_id]
+    cmp dword [rel ain_state],AIN_DECIDING
+    jne .normal
+    cmp eax,[rel ain_ids+AIN_CANCEL*4]
+    jne .normal
+    mov rdx,[rel ap_resident]
+    test rdx,rdx
+    jz .normal
+    cmp dword [rdx+40],AIN_FLAGS_UNSIGNED
+    jne .normal
+    mov ecx,AIN_EXEC
+    jmp .set
+.normal:
     mov ecx,AIN_ASK
     cmp dword [rel ain_origin],AIN_ORIGIN_FILE
     jne .choose
     mov ecx,AIN_ALLOW
+    cmp eax,[rel ain_ids+AIN_EXEC*4]
+    je .set
     cmp eax,[rel ain_ids+AIN_CANCEL*4]
     je .set
     mov ecx,AIN_ASK
@@ -502,6 +543,8 @@ ain_focus_next:
     mov ecx,AIN_CANCEL
     jmp .set
 .choose:
+    cmp eax,[rel ain_ids+AIN_EXEC*4]
+    je .set
     cmp eax,[rel ain_ids+AIN_CANCEL*4]
     je .set
     mov ecx,AIN_DETAILS
@@ -560,6 +603,8 @@ ain_click:
 
 ; Idle effects only. Any loss of the owner or the candidate closes the decision.
 app_install_tick:
+    call app_store_observe_tick
+    call app_installed_tick
     call ain_file_tick
     cmp dword [rel ain_state],AIN_IDLE
     je .out
@@ -596,12 +641,16 @@ app_install_tick:
     je .close
     cmp eax,AIN_ACT_DETAILS
     je .details
+    cmp eax,AIN_ACT_EXEC
+    je .execution
     cmp eax,AIN_ACT_ALLOW
     je .install
     cmp eax,AIN_ACT_ASK
     jne .out
 .install:
     jmp ain_install
+.execution:
+    jmp ain_execution_choice
 .details:
     mov rdi,[rel ain_handle]
     call app_package_card_open
@@ -621,6 +670,35 @@ app_install_tick:
     jmp ain_close
 .out:
     ret
+
+; A separate original physical choice. This does not install or grant app
+; permissions. The following Install decision must start a fresh dwell/Tab.
+ain_execution_choice:
+    cmp byte [rel ain_armed],1
+    jne .disarm
+    mov byte [rel ain_armed],0
+    call ain_unchanged
+    cmp eax,1
+    jne .disarm
+    mov rax,[rel ap_resident]
+    test rax,rax
+    jz .disarm
+    cmp dword [rax+40],AIN_FLAGS_UNSIGNED
+    jne .disarm
+    xor byte [rel ain_exec_selected],1
+    lea rsi,[rel ain_text_exec]
+    cmp byte [rel ain_exec_selected],0
+    je .text
+    lea rsi,[rel ain_text_exec_yes]
+.text:
+    mov edi,[rel ain_ids+AIN_EXEC*4]
+    call wgt_set_text
+    call ain_disarm
+    call time_monotonic_now_us
+    mov [rel ain_opened_us],rax
+    jmp wmx_draw_all
+.disarm:
+    jmp ain_disarm
 
 ; The dwell and the Tab mean the owner has had this card in front of them. Any
 ; time away restarts both, so what closes over it cannot pass a press through.
@@ -700,6 +778,7 @@ ain_current:
     ret
 
 ain_intent_clear:
+    mov byte [rel ain_exec_selected],0
     mov qword [rel ain_intent],0
     ret
 
@@ -756,6 +835,8 @@ app_install_intent_check:
     jne .refuse
     cmp byte [rel cmd_in_dispatch],0
     jne .fail
+    cmp dword [rel cmd_dispatch_depth],0
+    jne .fail
     cmp dword [rel ain_state],AIN_DECIDING
     jne .fail
     call ain_current
@@ -771,14 +852,121 @@ app_install_intent_check:
     pop rbx
     ret
 
-; RDI intent id -> EAX1 spent now, 0 never held or already spent. FS calls it once
-; when the commit ends, whatever the result.
+; Fixed native writer views of the exact still-current physical decision.
+; No private candidate pointer escapes; caller owns mapped stable output bytes.
+; descriptor(intent,out704,exact704) / copy(intent,out,exact whole length)->1/0.
+; Only1 writes. These functions never manufacture or consume human intent.
+app_install_store_descriptor:
+    push r12
+    mov r12,rsi
+    cmp rdx,704
+    jne .bad
+    call ain_store_span
+    test eax,eax
+    jz .bad
+    call app_install_intent_check
+    cmp eax,1
+    jne .bad
+    mov rdi,[rel ain_handle]
+    mov rsi,r12
+    mov edx,704
+    call app_package_descriptor
+    pop r12
+    ret
+.bad:
+    xor eax,eax
+    pop r12
+    ret
+; RDI original intent -> RAX0 no choice,1 owner chose unsigned execution,
+; -1 invalid. No caller flag/hash/receipt can supply the policy. The durable
+; writer must check the copied bytes again and publish only after commit.
+app_install_store_execution_policy:
+    call app_install_intent_check
+    cmp eax,1
+    jne .bad
+    movzx eax,byte [rel ain_exec_selected]
+    test eax,eax
+    jz .out
+    cmp eax,1
+    jne .bad
+    mov rcx,[rel ap_resident]
+    test rcx,rcx
+    jz .bad
+    cmp dword [rcx+40],AIN_FLAGS_UNSIGNED
+    jne .bad
+    mov eax,1
+.out:
+    ret
+.bad:
+    mov rax,-1
+    ret
+
+app_install_store_copy:
+    push r12
+    push r13
+    mov r12,rsi
+    mov r13,rdx
+    test r13,r13
+    jz .bad
+    cmp r13,AIN_MAX
+    ja .bad
+    call ain_store_span
+    test eax,eax
+    jz .bad
+    call app_install_intent_check
+    cmp eax,1
+    jne .bad
+    cmp r13,[rel ap_length]
+    jne .bad
+    mov rdi,[rel ain_handle]
+    xor esi,esi
+    mov rdx,r12
+    mov rcx,r13
+    call app_package_copy
+    pop r13
+    pop r12
+    ret
+.bad:
+    xor eax,eax
+    pop r13
+    pop r12
+    ret
+; RSI output,RDX length. Preserve intent RDI and output arguments.
+ain_store_span:
+    test rsi,rsi
+    jz .no
+    mov rax,rsi
+    add rax,rdx
+    jc .no
+    lea rcx,[rel ain_private_data_end]
+    cmp rsi,rcx
+    jae .bss
+    lea rcx,[rel ain_private_data_begin]
+    cmp rax,rcx
+    ja .no
+.bss:
+    lea rcx,[rel ain_private_bss_end]
+    cmp rsi,rcx
+    jae .yes
+    lea rcx,[rel ain_private_bss_begin]
+    cmp rax,rcx
+    ja .no
+.yes:
+    mov eax,1
+    ret
+.no:
+    xor eax,eax
+    ret
+
+; RDI intent id -> EAX1 spent now, 0 never held or already spent. GUI consumes
+; once when the complete store call ends, including an uncertain result.
 app_install_intent_consume:
     test rdi,rdi
     jz .refuse
     cmp rdi,[rel ain_intent]
     jne .refuse
     mov qword [rel ain_intent],0
+    mov byte [rel ain_exec_selected],0
     mov eax,1
     ret
 .refuse:
@@ -850,7 +1038,15 @@ ain_install:
     call app_install_grants_remember
     test rax,rax
     jz .committed_no_grant
+    mov rdi,[rel ain_handle]
+    mov esi,AIN_PROFILE
+    mov rdx,[rel ain_epoch]
+    lea rcx,[rel ain_analysis]
+    call app_install_grants_save
     lea rsi,[rel ain_text_installed]
+    cmp eax,1
+    je .finish
+    lea rsi,[rel ain_text_ram_grant]
     jmp .finish
 .committed_no_grant:
     lea rsi,[rel ain_text_no_grant]
@@ -873,6 +1069,9 @@ ain_finish:
     call wgt_slot_ptr
     and dword [rax+WGI_FLAGS],~1
     mov edi,[rel ain_ids+AIN_DETAILS*4]
+    call wgt_slot_ptr
+    and dword [rax+WGI_FLAGS],~1
+    mov edi,[rel ain_ids+AIN_EXEC*4]
     call wgt_slot_ptr
     and dword [rax+WGI_FLAGS],~1
     mov edi,[rel ain_ids+AIN_CANCEL*4]
@@ -949,8 +1148,16 @@ ain_build:
     call ain_line_for
     jmp .next_widget
 .button:
-    mov dword [r13+WGI_Y],320
+    mov dword [r13+WGI_Y],352
     mov dword [r13+WGI_H],30
+    cmp ebx,AIN_EXEC
+    jne .permissions
+    mov dword [r13+WGI_Y],320
+    lea rsi,[rel ain_text_exec]
+    mov edx,8
+    mov ecx,544
+    jmp .place
+.permissions:
     lea rsi,[rel ain_text_allow]
     mov edx,8
     mov ecx,160
@@ -991,6 +1198,13 @@ ain_build:
     call wgt_slot_ptr
     and dword [rax+WGI_FLAGS],~1        ; origin 2 has no such button at all
 .buttons_done:
+    mov rax,[rel ap_resident]
+    cmp dword [rax+40],AIN_FLAGS_UNSIGNED
+    je .execution_shown
+    mov edi,[rel ain_ids+AIN_EXEC*4]
+    call wgt_slot_ptr
+    and dword [rax+WGI_FLAGS],~1
+.execution_shown:
     dec byte [rel wgt_paint_suspended]
     mov dword [rel wgt_alloc_next],-1
     mov eax,[rel ain_ids+AIN_CANCEL*4]
@@ -1348,8 +1562,8 @@ ain_file_tick:
 
 ain_verb: db 'APPINSTALL',0
 ain_status_word: db 'STATUS',0
-ain_title: db 'Install app',0
-ain_text_head: db 'Install this app?',0
+ain_title: db 'Allow this?',0
+ain_text_head: db 'You want to install this app.',0
 ain_text_name: db 'Name: ',0
 ain_text_version: db 'Version: ',0
 ain_text_unknown: db 'Unknown author',0
@@ -1360,6 +1574,8 @@ ain_text_perm_head: db 'This app asks for:',0
 ain_text_perm_none: db 'This app asks for nothing',0
 ain_text_note_ask: db 'Ask each time: no window text',0
 ain_text_note_unresolved: db 'Unknown uses: see Details',0
+ain_text_exec: db 'Allow unsigned app to run',0
+ain_text_exec_yes: db 'Unsigned app run allowed',0
 ain_text_allow: db 'Install and allow',0
 ain_text_ask: db 'Install, ask each time',0
 ain_text_cancel: db 'Cancel',0
@@ -1371,6 +1587,7 @@ ain_text_no_store: db 'Not installed: no app storage',0
 ain_text_full: db 'Not installed: 8 apps at most',0
 ain_text_uncertain: db 'May have installed; no access',0
 ain_text_no_grant: db 'Installed; no access granted',0
+ain_text_ram_grant: db 'Installed; access until restart',0
 ain_perm_status: db 'WAIT STATUS',0
 ain_perm_begin: db 'WAIT BEGIN and own window text',0
 ain_perm_poll: db 'WAIT POLL',0
@@ -1380,6 +1597,7 @@ ain_perm_rows: dd ain_perm_status-ain_perm_rows,ain_perm_begin-ain_perm_rows,ain
 %include "core/abi/wdata.inc"
 %macro WDATA_app_install 0
 align 8, db 0
+ain_private_data_begin:
 ain_prev_filter: dq 0
 ain_prev_click: dq 0
 app_install_store: dq 0                ; FS commit: RDI intent, RSI bytes, RDX length -> 1/0/2
@@ -1411,10 +1629,13 @@ ain_action: db 0
 ain_armed: db 0
 ain_tab: db 0
 ain_file_pending: db 0
+ain_exec_selected: db 0
+ain_private_data_end:
 %endmacro
 WDATA_DEFER WDATA_app_install
 %macro WDATA_app_install_bss 0
 alignb 8
+ain_private_bss_begin:
 ain_scrub_start:
 ain_analysis: resb 192
 ain_package: resb 704
@@ -1425,5 +1646,9 @@ ain_scrub_end:
 ain_line: resb 40
 ain_file_path: resb 256
 ain_file_stat: resb fs_stat_size
+ain_private_bss_end:
 %endmacro
 WDATA_BSS_DEFER WDATA_app_install_bss
+
+%include "gui/app_store_observe.asm"
+%include "gui/app_installed.asm"

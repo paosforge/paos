@@ -283,6 +283,10 @@ dc_receive:
     sete r9b
     cmp [rbx + 36], r9d
     jne .bad
+    ; R10-H1: complete every nested bounds/order/final-bit check before
+    ; guest-controlled RCX or the admitted reply offset reaches the copy.
+    ; The earlier transport acquire predates these nested field checks.
+    lfence
     mov [rel dc_reply_length], edx
     lea rdi, [rel dc_reply]
     mov eax, [rel dc_rx_offset]

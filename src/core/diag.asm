@@ -484,8 +484,13 @@ diag_boot_phase_record:
 ;   silicon can retain a mixture of old DRAM and dirty cache lines even though
 ;   QEMU's reset model preserves every write.  Flush only this fixed 64 KiB
 ;   region (never global WBINVD: active device DMA makes that needlessly risky).
-;   No-op when the reservation is unavailable. clobbers: RCX,RDI.
+;   No-op when the reservation is unavailable. Outputs (already clobbered):
+;   RCX=0/RDI=0 unavailable, or RCX=DIAG_RING_SIZE/RDI=end after MFENCE.
+;   Other registers and the original CMP/DEC flags are unchanged. A later
+;   completion observation is NOT itself persisted by this earlier flush.
 diag_persist_flush:
+    mov  ecx, 0                            ; MOV preserves original branch flags
+    mov  edi, 0
     cmp  byte [rel diag_ready], 0
     je   .done
     mov  rdi, [rel diag_ptr]
@@ -496,6 +501,7 @@ diag_persist_flush:
     dec  ecx
     jnz  .line
     mfence                                  ; every dirty ring line reached DRAM
+    mov  ecx, DIAG_RING_SIZE                 ; completion only AFTER original fence
 .done:
     ret
 
@@ -514,12 +520,16 @@ diag_persist_flush:
 ; Unknown vendors are explicitly unqualified. Missing ring => no extra
 ; hardware work. The caller writes the ordinary final fault and flushes all.
 ; At most 32 banks, with raw CAP retained so truncation is visible; invalid VAL
-; banks are read but not published. No per-bank error severity interpretation.
+; banks are read but not published. A final raw-derived assessment records
+; known restart blockers and missing context, never recoverability/containment.
 ; Unqualified tag C: 1=vendor, 2=missing CPUID leaf/MSR/MCE/MCA feature.
 diag_ring_mca:
     cmp  byte [rel diag_ready], 0
     je   .skip
     push rbx
+    push rbp
+    xor ebp,ebp                       ; low32 VAL, high32 VAL/PCC bank masks
+    sub rsp,8                         ; retain original call-site stack alignment
     push r12
     push r13
     push r14
@@ -599,7 +609,7 @@ diag_ring_mca:
     xor  r15d, r15d
 .bank:
     cmp  r15d, r14d
-    jae  .done
+    jae  .assessment
     lea  ecx, [r15d * 4 + 0x401]      ; IA32_MCi_STATUS, no other bank MSRs
     cmp  ebx, 2
     jne  .read_bank
@@ -612,6 +622,12 @@ diag_ring_mca:
     or   rax, rdx
     bt   rax, 63                      ; VAL, not any low-word error/UC bit
     jnc  .next
+    bts  rbp,r15                       ; exactly the VAL statuses actually read
+    bt   rax,57                        ; architectural processor context corrupt
+    jnc  .pcc_done
+    lea  ecx,[r15d+32]
+    bts  rbp,rcx
+.pcc_done:
     mov  edi, DIAG_K_MCA
     mov  esi, r15d
     mov  rdx, rax
@@ -632,17 +648,79 @@ diag_ring_mca:
 .features:
     mov  r8d, 2
 .unqualified:
+    mov ebx,3                          ; no qualified globals or bank layout
+    xor r12d,r12d
+    xor r13d,r13d
     mov  edi, DIAG_K_MCA
     mov  esi, 0xffffffff
     xor  edx, edx
     xor  ecx, ecx
     lea  r9, [rel .unsupported_tag]
     call diag_ring_append
+.assessment:
+    ; Assessment from this CPU's original capture, not poll/notices or a second
+    ; hardware sample. This record NEVER authorizes return/clear/recovery. The
+    ; original final fault immediately follows and flushes the retained window.
+    mov esi,MCA_A_FATAL_POLICY | MCA_A_HANDLING_UNKNOWN
+    lea r9,[rel .unknown_assessment_tag]
+    cmp ebx,3
+    je .context_missing
+    or esi,MCA_A_GLOBAL_KNOWN
+    lea r9,[rel .intel_assessment_tag]
+    test ebx,ebx
+    jz .scan_check
+    lea r9,[rel .amd_assessment_tag]
+    cmp ebx,1
+    je .global_predicates
+    lea r9,[rel .smca_assessment_tag]
+.scan_check:
+    movzx eax,r12b
+    cmp eax,32
+    ja .global_predicates
+    or esi,MCA_A_SCAN_COMPLETE          ; no unseen banks past bounded scan
+.global_predicates:
+    test r13b,1
+    jz .eipv
+    or esi,MCA_A_RIPV
+.eipv:
+    test r13b,2
+    jz .pcc
+    or esi,MCA_A_EIPV
+.pcc:
+    mov rax,rbp
+    shr rax,32
+    jz .mcip
+    or esi,MCA_A_PCC
+.mcip:
+    test r13b,4
+    jz .context_missing                ; no in-progress #MC context established
+    or esi,MCA_A_MCIP
+    test esi,MCA_A_RIPV
+    jz .blocked
+    test esi,MCA_A_PCC
+    jz .context_check
+.blocked:
+    or esi,MCA_A_RESTART_BLOCKED        ; interrupted context, NOT error recovery
+.context_check:
+    test esi,MCA_A_SCAN_COMPLETE
+    jz .context_missing
+    test ebp,ebp
+    jnz .publish_assessment
+.context_missing:
+    or esi,MCA_A_CONTEXT_MISSING
+.publish_assessment:
+    mov edi,DIAG_K_MCA
+    mov rdx,rbp                        ; original VAL/PCC bitmap (bank0..31)
+    mov rcx,r13                        ; original MCG_STATUS
+    mov r8,r12                         ; original MCG_CAP, including clipping
+    call diag_ring_append              ; refusal is absence, never synthetic PASS
 .done:
     pop  r15
     pop  r14
     pop  r13
     pop  r12
+    add  rsp,8
+    pop  rbp
     pop  rbx
 .skip:
     ret
@@ -652,6 +730,10 @@ diag_ring_mca:
 .smca_global_tag: db "smca-global", 0
 .smca_bank_tag:   db "smca-bank", 0
 .unsupported_tag: db "mca-unqualified", 0
+.intel_assessment_tag:   db "mca-assess-intel",0
+.amd_assessment_tag:     db "mca-assess-amd",0
+.smca_assessment_tag:    db "mca-assess-smca",0
+.unknown_assessment_tag: db "mca-assess-unknown",0
 ; ---- end fatal MCA capture ----
 
 diag_ring_fault:
@@ -1209,6 +1291,16 @@ diag_live_record_copy:
     call .tag_equal
     test eax,eax
     jnz .record
+    lea rsi,[rel .tag_mca_observed]
+    mov ecx,13
+    call .tag_equal
+    test eax,eax
+    jnz .record
+    lea rsi,[rel .tag_smca_observed]
+    mov ecx,14
+    call .tag_equal
+    test eax,eax
+    jnz .record
     lea rsi,[rel .tag_boot_mca]
     mov ecx,9
     call .tag_equal
@@ -1297,6 +1389,8 @@ diag_live_record_copy:
     ret
 .tag_boot_mca: db 'mca-boot',0
 .tag_boot_smca: db 'smca-boot',0
+.tag_mca_observed: db 'mca-observed',0
+.tag_smca_observed: db 'smca-observed',0
 .tag_mca: db 'mca-corrected',0
 .tag_smca: db 'smca-corrected',0
 .tag_aer: db 'aer-poll',0

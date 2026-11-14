@@ -1,6 +1,6 @@
 ;; MODULE dev/blk/vmd
 ;; LAYER 3
-;; EXPORTS vmd_child_identity_snapshot, vmd_domain_create, vmd_find_child, vmd_selftest, vmd_root_count, vmd_child_count, vmd_bridge_count, vmd_refused_count, vmd_bus_start, vmd_ecam_base, vmd_ecam_mapped
+;; EXPORTS vmd_child_identity_snapshot, vmd_selected_owner_snapshot, vmd_selected_owner_current, vmd_selected_root_snapshot, vmd_domain_create, vmd_find_child, vmd_selftest, vmd_root_count, vmd_child_count, vmd_bridge_count, vmd_refused_count, vmd_bus_start, vmd_ecam_base, vmd_ecam_mapped
 ;; IMPORTS boot/native_driver_gate, bus/pci, boot/serial, boot/paging, core/heap, core/lib/mem, bus/pci_claim
 ;; CAPS mmio
 ;; OWNER saga:storage
@@ -62,6 +62,8 @@ VMD_KAT_IMAGE_BYTES  equ (1 << VMD_KAT_BUS_SHIFT)   ; one bus = 16 KiB
                                                   ; (zeroed kernel-heap buffer, vmd_kat_base;
                                                   ;  was 16 KiB of image zero bytes)
 %include "core/abi/heap_once.inc"
+%include "core/abi/vmd_selected_owner.inc"
+%include "core/abi/vmd_selected_root.inc"
 
 struc vmd_child
   .cfg:      resq 1                          ; ECAM config base of the function
@@ -151,6 +153,15 @@ vmd_domain_create:
     mov  r8d, VMD_ECAM_BUS_SHIFT
     xor  r9d, r9d
     call vmd_walk
+    ; Only this original real-domain walk can publish provenance. The KAT
+    ; calls the unchanged walker directly and never sets this completion bit.
+    cmp byte [rel vmd_owner_overflow], 0
+    jne .owner_unavailable
+    cmp qword [rel vmd_owner_epoch], 0
+    je .owner_unavailable
+    call vmd_root_owner_publish           ; RAM only, same original real walk
+    mov byte [rel vmd_owner_ready], 1
+.owner_unavailable:
     lea  rdi, [rel vmd_root_bus]            ; RCQ-29 hardware report: VMD took the root
     mov  ecx, PCI_DRV_VMD
     mov  r8d, PCI_CLAIM_BOUND
@@ -192,9 +203,12 @@ vmd_domain_create:
 ; every root is counted. Records BAR0 (CFGBAR, 64-bit), MEMBAR1, MEMBAR2.
 ; ---------------------------------------------------------------------------
 vmd_detect_cb:
+    push r12                              ; keep original3 BDF stack offsets
+    push r13
     push rdi
     push rsi
     push rdx
+    mov r12d, ecx                         ; original scanner ID, never reread
     cmp  cx, VMD_VENDOR_INTEL
     jne  .pop
     mov  eax, ecx
@@ -211,6 +225,7 @@ vmd_detect_cb:
 .id_ok:
     mov  ecx, 0x08
     call pci_cfg_read32                     ; clobbers RAX,R8,RDX
+    mov r13d, eax                         ; same original class/revision read
     shr  eax, 8
     cmp  eax, VMD_CLASS24
     jne  .pop
@@ -225,12 +240,19 @@ vmd_detect_cb:
     inc  byte [rel vmd_root_count]
     cmp  byte [rel vmd_root_count], 1
     jne  .pop                               ; first root wins (v1)
+    mov [rel vmd_root_owner_record+VSR_PCI_ID], r12d
+    mov [rel vmd_root_owner_record+VSR_CLASSREV], r13d
+    mov rax, [rel vmd_owner_epoch]
+    mov [rel vmd_root_owner_record+VSR_DOMAIN], rax
     mov  eax, [rsp + 16]
     mov  [rel vmd_root_bus], eax
+    mov [rel vmd_root_owner_record+VSR_BUS], eax
     mov  eax, [rsp + 8]
     mov  [rel vmd_root_dev], eax
+    mov [rel vmd_root_owner_record+VSR_DEV], eax
     mov  eax, [rsp + 0]
     mov  [rel vmd_root_fn], eax
+    mov [rel vmd_root_owner_record+VSR_FN], eax
     ; BAR0 (0x10/0x14) = CFGBAR
     mov  edi, [rel vmd_root_bus]
     mov  esi, [rel vmd_root_dev]
@@ -289,6 +311,8 @@ vmd_detect_cb:
     pop  rdx
     pop  rsi
     pop  rdi
+    pop r13
+    pop r12
     ret
 
 ; ---------------------------------------------------------------------------
@@ -628,13 +652,348 @@ vmd_child_identity_snapshot:
     xor eax,eax
     ret
 
+; RAM-only original selection capture. EDI=class24, RSI=original selected cfg,
+; RDX=original selected BAR, RCX=trusted128B output. EAX=1 retained /0 missing.
+; No hardware reads/writes and no new child admission. Attach epoch left0 for
+; the original AHCI selection publisher. Duplicate or inconsistent RAM refuses.
+vmd_selected_owner_snapshot:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov r12, rsi
+    mov r13, rdx
+    mov r15, rcx
+    mov ebx, edi
+    mov rdi, rcx
+    mov ecx, VSO_BYTES/8
+    xor eax, eax
+    cld
+    rep stosq
+    cmp ebx, VMD_CLASS_AHCI
+    jne .none
+    cmp byte [rel vmd_owner_ready], 1
+    jne .none
+    cmp byte [rel vmd_owner_overflow], 0
+    jne .none
+    cmp qword [rel vmd_owner_epoch], 0
+    je .none
+    cmp byte [rel vmd_ecam_mapped], 1
+    jne .none
+    cmp byte [rel vmd_root_count], 0
+    je .none
+    cmp dword [rel vmd_root_bus], 255
+    ja .none
+    cmp dword [rel vmd_root_dev], 31
+    ja .none
+    cmp dword [rel vmd_root_fn], 7
+    ja .none
+    mov rax, [rel vmd_ecam_base]
+    test rax, rax
+    jz .none
+    cmp rax, [rel vmd_root_bar0]
+    jne .none
+    movzx eax, byte [rel vmd_ecam_buses]
+    dec eax
+    cmp eax, VMD_MAX_BUSES-1
+    ja .none
+    test r12, r12
+    jz .none
+    test r13, r13
+    jz .none
+    test r13b, 15
+    jnz .none
+    mov rax, r13
+    shr rax, 32                          ; actual AHCI BAR5 source is32bit
+    jnz .none
+    movzx ecx, byte [rel vmd_child_count]
+    test ecx, ecx
+    jz .none
+    cmp ecx, VMD_MAX_CHILDREN
+    ja .none
+    xor r14d, r14d
+    xor ebx, ebx
+    xor eax, eax
+    lea rdx, [rel vmd_children]
+.scan:
+    cmp byte [rdx+vmd_child.active], 1
+    jne .next
+    cmp dword [rdx+vmd_child.class24], VMD_CLASS_AHCI
+    jne .next
+    cmp [rdx+vmd_child.cfg], r12
+    jne .next
+    cmp [rdx+vmd_child.bar], r13
+    jne .next
+    test rbx, rbx
+    jnz .none                            ; ambiguous original selection
+    mov rbx, rdx
+    mov r14d, eax                        ; original index below, EAX starts0
+.next:
+    add rdx, vmd_child_size
+    inc eax
+    cmp eax, ecx
+    jb .scan
+    test rbx, rbx
+    jz .none
+    mov eax, [rbx+vmd_child.pci_id]
+    test ax, ax
+    jz .none
+    cmp ax, 0xffff
+    je .none
+    mov eax, [rbx+vmd_child.bdf]
+    test eax, ~0x00ff1f07
+    jnz .none
+    mov edx, eax
+    shr edx, 16
+    movzx ecx, byte [rel vmd_ecam_buses]
+    cmp edx, ecx
+    jae .none
+    shl rdx, VMD_ECAM_BUS_SHIFT
+    mov ecx, eax
+    shr ecx, 8
+    and ecx, 31
+    shl rcx, VMD_ECAM_DEV_SHIFT
+    add rdx, rcx
+    and eax, 7
+    shl rax, VMD_ECAM_FN_SHIFT
+    add rdx, rax
+    add rdx, [rel vmd_ecam_base]
+    jc .none
+    cmp rdx, r12
+    jne .none
+    mov rax, [rel vmd_owner_epoch]
+    mov [r15+VSO_DOMAIN], rax
+    mov [r15+VSO_CFG], r12
+    mov [r15+VSO_BAR], r13
+    mov rax, [rel vmd_ecam_base]
+    mov [r15+VSO_ECAM], rax
+    mov rax, [rel vmd_root_bar0]
+    mov [r15+VSO_ROOTBAR], rax
+    mov rax, [rel vmd_window_gb]
+    mov [r15+VSO_WINDOW_GB], rax
+    mov eax, [rel vmd_root_bus]
+    mov [r15+VSO_ROOT_BUS], eax
+    mov eax, [rel vmd_root_dev]
+    mov [r15+VSO_ROOT_DEV], eax
+    mov eax, [rel vmd_root_fn]
+    mov [r15+VSO_ROOT_FN], eax
+    mov eax, [rbx+vmd_child.bdf]
+    mov [r15+VSO_CHILD_BDF], eax
+    mov eax, [rbx+vmd_child.pci_id]
+    mov [r15+VSO_PCI_ID], eax
+    mov eax, [rbx+vmd_child.class24]
+    mov [r15+VSO_CLASS], eax
+    movzx eax, byte [rbx+vmd_child.revision]
+    mov [r15+VSO_REVISION], eax
+    mov [r15+VSO_INDEX], r14d
+    movzx eax, byte [rel vmd_ecam_mapped]
+    mov [r15+VSO_MAPPED], eax
+    movzx eax, byte [rel vmd_ecam_buses]
+    mov [r15+VSO_BUSES], eax
+    movzx eax, word [rel vmd_bus_start]
+    mov [r15+VSO_BUS_START], eax
+    movzx eax, byte [rel vmd_bus_start_setting]
+    mov [r15+VSO_SETTING], eax
+    movzx eax, byte [rel vmd_bus_start_probed]
+    mov [r15+VSO_PROBED], eax
+    movzx eax, byte [rel vmd_root_count]
+    mov [r15+VSO_ROOT_COUNT], eax
+    mov eax, [rel vmd_vmcap]
+    mov [r15+VSO_VMCAP], eax
+    mov eax, [rel vmd_vmconfig]
+    mov [r15+VSO_VMCONFIG], eax
+    mov dword [r15+VSO_SCHEMA], VSO_VERSION
+    mov dword [r15+VSO_FLAGS], 1
+    mov eax, 1
+    jmp .out
+.none:
+    xor eax, eax
+.out:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; RDI=retained128B record. EAX=1 same original RAM lifetime /0 stale or unknown.
+; Compare a new RAM-only image, excluding AHCI's separate attach epoch. This
+; cannot establish current PCI identity, mapping admission, or quiescence.
+vmd_selected_owner_current:
+    push rbx
+    sub rsp, VSO_BYTES
+    mov rbx, rdi
+    mov edi, [rbx+VSO_CLASS]
+    mov rsi, [rbx+VSO_CFG]
+    mov rdx, [rbx+VSO_BAR]
+    mov rcx, rsp
+    call vmd_selected_owner_snapshot
+    cmp eax, 1
+    jne .out
+    xor ecx, ecx
+.compare:
+    cmp ecx, VSO_ATTACH
+    je .next
+    mov rax, [rsp+rcx]
+    cmp rax, [rbx+rcx]
+    jne .stale
+.next:
+    add ecx, 8
+    cmp ecx, VSO_BYTES
+    jb .compare
+    mov eax, 1
+    jmp .out
+.stale:
+    xor eax, eax
+.out:
+    add rsp, VSO_BYTES
+    pop rbx
+    ret
+
 ; ---------------------------------------------------------------------------
-; vmd_reset_state - zero every table and counter.
+; Complete only the root selected by this original real-domain walk. The
+; callback captured ID/class/BDF/epoch, and these mapping values are the
+; original domain's values. No extra config access, admission or effect.
+vmd_root_owner_publish:
+    push rax
+    mov rax, [rel vmd_owner_epoch]
+    cmp [rel vmd_root_owner_record+VSR_DOMAIN], rax
+    jne .out
+    mov rax, [rel vmd_root_bar0]
+    mov [rel vmd_root_owner_record+VSR_CFGBAR], rax
+    mov rax, [rel vmd_ecam_base]
+    mov [rel vmd_root_owner_record+VSR_ECAM], rax
+    mov rax, [rel vmd_window_gb]
+    mov [rel vmd_root_owner_record+VSR_WINDOW_GB], rax
+    mov dword [rel vmd_root_owner_record+VSR_FLAGS], 1
+    mov dword [rel vmd_root_owner_record+VSR_SCHEMA], 1
+.out:
+    pop rax
+    ret
+
+; RDI=trusted distinct64B output. EAX0=missing/zero,1=same original RAM
+; lifetime,2=stale/inconsistent with original bytes preserved. All are only
+; provenance, never current hardware admission. Synchronous BSP lifecycle
+; matches domain_create and the accepted selected-child record. No I/O.
+vmd_selected_root_snapshot:
+    push rbx
+    mov rbx, rdi
+    mov ecx, VSR_BYTES/8
+    xor eax, eax
+    cld
+    rep stosq
+    cmp dword [rel vmd_root_owner_record+VSR_SCHEMA], 0
+    je .out
+    mov rdi, rbx
+    lea rsi, [rel vmd_root_owner_record]
+    mov ecx, VSR_BYTES/8
+    rep movsq
+    mov eax, 2
+    cmp dword [rbx+VSR_SCHEMA], 1
+    jne .out
+    cmp dword [rbx+VSR_FLAGS], 1
+    jne .out
+    cmp dword [rbx+VSR_RESERVED], 0
+    jne .out
+    cmp byte [rel vmd_owner_ready], 1
+    jne .out
+    cmp byte [rel vmd_owner_overflow], 0
+    jne .out
+    mov rdx, [rbx+VSR_DOMAIN]
+    test rdx, rdx
+    jz .out
+    cmp rdx, [rel vmd_owner_epoch]
+    jne .out
+    cmp byte [rel vmd_root_count], 0
+    je .out
+    mov ecx, [rbx+VSR_BUS]
+    cmp ecx, 255
+    ja .out
+    cmp ecx, [rel vmd_root_bus]
+    jne .out
+    mov ecx, [rbx+VSR_DEV]
+    cmp ecx, 31
+    ja .out
+    cmp ecx, [rel vmd_root_dev]
+    jne .out
+    mov ecx, [rbx+VSR_FN]
+    cmp ecx, 7
+    ja .out
+    cmp ecx, [rel vmd_root_fn]
+    jne .out
+    mov ecx, [rbx+VSR_CLASSREV]
+    shr ecx, 8
+    cmp ecx, VMD_CLASS24
+    jne .out
+    mov ecx, [rbx+VSR_PCI_ID]
+    cmp cx, VMD_VENDOR_INTEL
+    jne .out
+    shr ecx, 16
+    lea rdx, [rel vmd_id_table]
+    xor r8d, r8d
+.id:
+    cmp r8d, VMD_ID_COUNT
+    jae .out
+    cmp cx, [rdx+r8*2]
+    je .mapping
+    inc r8d
+    jmp .id
+.mapping:
+    mov rdx, [rbx+VSR_CFGBAR]
+    test rdx, rdx
+    jz .out
+    test edx, 0xfffff
+    jnz .out
+    cmp rdx, [rel vmd_root_bar0]
+    jne .out
+    cmp rdx, [rbx+VSR_ECAM]
+    jne .out
+    cmp rdx, [rel vmd_ecam_base]
+    jne .out
+    cmp byte [rel vmd_ecam_mapped], 1
+    jne .out
+    movzx ecx, byte [rel vmd_ecam_buses]
+    dec ecx
+    cmp ecx, VMD_MAX_BUSES-1
+    ja .out
+    mov rcx, [rbx+VSR_WINDOW_GB]
+    cmp rcx, [rel vmd_window_gb]
+    jne .out
+    shr rdx, 30
+    cmp rdx, VMD_IDENTITY_GB
+    jb .valid
+    test rcx, rcx
+    jz .out
+    cmp rdx, rcx
+    je .valid
+    inc rcx
+    cmp rdx, rcx
+    jne .out
+.valid:
+    mov eax, 1
+.out:
+    pop rbx
+    ret
+
+; vmd_reset_state - zero every table and counter, invalidate saved provenance.
 ; ---------------------------------------------------------------------------
 vmd_reset_state:
     push rdi
     push rcx
     push rax
+    lea rdi, [rel vmd_root_owner_record]
+    mov ecx, VSR_BYTES/8
+    xor eax, eax
+    rep stosq
+    mov byte [rel vmd_owner_ready], 0
+    cmp qword [rel vmd_owner_epoch], -1
+    je .owner_exhausted
+    inc qword [rel vmd_owner_epoch]
+    jmp .owner_invalid
+.owner_exhausted:
+    mov byte [rel vmd_owner_overflow], 1  ; sticky: never recycle a lifetime
+.owner_invalid:
     lea  rdi, [rel vmd_children]
     mov  ecx, (VMD_MAX_CHILDREN * vmd_child_size) / 8
     xor  eax, eax
@@ -919,6 +1278,11 @@ vmd_children:       times (VMD_MAX_CHILDREN * vmd_child_size) db 0
 vmd_kat_ptr:        dq 0                ; -> heap synthetic ECAM bus (vmd_kat_base)
 vmd_id_table:       dw 0x201d, 0x28c0, 0x467f, 0x4c3d, 0x9a0b, 0xa77f, 0x7d0b, 0xad0b, 0xb60b, 0xb06f
 vmd_root_bar0:      dq 0
+vmd_root_owner_record: times VSR_BYTES db 0
+vmd_owner_epoch:    dq 0
+vmd_owner_ready:    db 0
+vmd_owner_overflow: db 0
+align 8
 vmd_root_membar1:   dq 0
 vmd_root_membar2:   dq 0
 vmd_ecam_base:      dq 0

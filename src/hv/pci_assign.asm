@@ -1,7 +1,7 @@
 ;; MODULE hv/pci_assign
 ;; LAYER 5
-;; EXPORTS pcia_group_snapshot, pcia_render_stat, pcia_render_gate, hv_vpci_in, hv_vpci_out, pcia_vpci_in, pcia_vpci_out, pcia_owns_cfg, pcia_shadow_init, pcia_shadow_reset, pcia_state, pcia_bdf, pcia_attach, pcia_release, pcia_try_inject_irq, pcia_guest_owned, pcia_playback_source
-;; IMPORTS hv/vmx, hv/vtd, hv/vtd_guest, hv/amdvi, hv/amdvi_guest, hv/amdvi_hda, hv/device_assignment, hv/slat_mmio, hv/hv_ops, hv/vm_profile, bus/pci, bus/pci_bdf, boot/paging, boot/serial, dev/snd/hda_runtime, core/time, bus/pci_claim
+;; EXPORTS pcia_grp, pcia_grp_admit, pcia_grp_receipt, pcia_grp_reserved, pcia_grp_claims_retire, pcia_grp_attach, pcia_grp_live, pcia_grp_detach, pcia_grp_any_held, pcia_root_scope, pcia_group_snapshot, pcia_group_record_peek, pcia_a1_group_capture, pcia_render_stat, pcia_render_gate, hv_vpci_in, hv_vpci_out, pcia_vpci_in, pcia_vpci_out, pcia_owns_cfg, pcia_shadow_init, pcia_shadow_reset, pcia_state, pcia_bdf, pcia_attach, pcia_release, pcia_try_inject_irq, pcia_guest_owned, pcia_power_observation, pcia_playback_source
+;; IMPORTS hv/nd_isolation, bus/acpi, hv/nic_assignment, hv/vmx, hv/vtd, hv/vtd_guest, hv/amdvi, hv/amdvi_guest, hv/amdvi_hda, hv/device_assignment, hv/slat_mmio, hv/hv_ops, hv/vm_profile, bus/pci, bus/pci_bdf, boot/paging, boot/serial, dev/snd/hda_runtime, core/time, bus/pci_claim
 ;; CAPS
 ;; OWNER saga:audio
 ; RCQ-36 V2 (V2_DESIGN.md section 2): the guest's conf1 view of ONE assigned
@@ -632,12 +632,25 @@ pcia_iommu_receipt:
 ; pcia_iso_cb: pci_scan_with_filter callback (EDI bus, ESI dev, EDX fn) that appends
 ; one hv/device_assignment snapshot entry per present function (DA_SNAP_SZ: +0 word
 ; BDF, +2 DA_S_* flags, +3 secondary bus, +4 subordinate bus). Config mechanism #1
-; reads only; ACS is never proven here, so every port widens its group (fail-closed,
-; as vtd_iso_snapshot). More than DA_SNAP_MAX functions marks the facts incomplete.
+; reads the header and PCIe capability. U3a: only while the AMD-Vi owner is active and
+; only for a type-1 PCIe Root Port (port type 4), the existing admitted ECAM transport
+; reads the ACS extended capability (pci_ecam_acs_snapshot), fresh at every gate. DA_S_ACS
+; is set iff that read succeeds AND ACS Capability and ACS Control both hold SV|RR|CR|UF
+; AND ACS Control has Direct Translated P2P (DT, bit 6) clear. This is stricter than Linux,
+; whose pci_acs_flags_enabled treats a bit absent from Capability as enabled: such a port
+; stays unproven here. Port type is device-reported, and devassign_build_facts stops
+; widening at the FIRST chain port with DA_S_ACS (device_assignment.asm .grp_done), so
+; pcia_group_gate then keeps the flag only on a port no snapshot bridge window covers: the
+; top of the chain. Switch/PCI bridges never get the flag; absent, partial, unread,
+; changed or unadmitted ACS leaves every port widening its group (fail-closed, as
+; vtd_iso_snapshot). ACS Control is never written. More than DA_SNAP_MAX functions marks
+; the facts incomplete.
+PCIA_ACS_REQUIRED equ 0x1D             ; SV(0) | RR(2) | CR(3) | UF(4)
+PCIA_ACS_DT       equ 0x40             ; ACS Control: Direct Translated P2P enable
 pcia_iso_cb:
     push rbx
     push r12
-    sub  rsp, 8
+    sub  rsp, 72                         ; private ACS sample64, aligned calls
     mov  ebx, edi
     shl  ebx, 8
     shl  esi, 3
@@ -681,14 +694,37 @@ pcia_iso_cb:
     call pci_bdf_read
     shr  eax, 20
     and  eax, 0xF                        ; device/port type
+    cmp  eax, 4                          ; PCIe Root Port
+    je   .root_port
     cmp  eax, 7                          ; PCIe to PCI/PCI-X bridge
     je   .pci_bridge
     cmp  eax, 8                          ; PCI/PCI-X to PCIe bridge
     jne  .out
 .pci_bridge:
     or   byte [r12 + 2], DA_S_PCI_BRIDGE
+    jmp  .out
+.root_port:
+    cmp  byte [rel amdvi_owned], 1       ; no owner / VT-d: no ECAM read, no proof
+    jne  .out
+    test byte [r12 + 2], DA_S_BRIDGE
+    jz   .out
+    mov  edi, ebx
+    mov  rsi, rsp
+    call pci_ecam_acs_snapshot
+    test eax, eax
+    jnz  .out                            ; absent/unread/changed/unadmitted: no proof
+    mov  eax, [rsp + 8]                  ; ACS Capability low16, Control high16
+    mov  edx, eax
+    and  eax, PCIA_ACS_REQUIRED
+    cmp  eax, PCIA_ACS_REQUIRED
+    jne  .out
+    shr  edx, 16
+    and  edx, PCIA_ACS_REQUIRED | PCIA_ACS_DT
+    cmp  edx, PCIA_ACS_REQUIRED          ; all four on, DT off
+    jne  .out
+    or   byte [r12 + 2], DA_S_ACS
 .out:
-    add  rsp, 8
+    add  rsp, 72
     pop  r12
     pop  rbx
     ret
@@ -700,8 +736,10 @@ pcia_iso_cb:
 ; refusal; pcia_iso_reason keeps it. Read-only.
 ;   VT-d: the unit's ownership-time snapshot (vtd_iso_snapshot, as vtd_iso_check), which
 ;         carries the boot DMAR's RMRR scopes (ISO_RMRR) and PaOS's lifeline functions.
-;   AMD-Vi: the conf1 walk (pcia_iso_cb); afterwards no IVHD alias and no IVMD unity range
-;         may name the requester (amdvi_hda_scope), else ISO_RMRR.
+;   AMD-Vi: the conf1 walk (pcia_iso_cb) plus, for type-1 PCIe Root Ports only, a fresh
+;         ECAM ACS read (U3a); then DA_S_ACS is kept only at the top of the chain (no
+;         snapshot bridge window covers the port's bus). Afterwards no IVHD alias and no
+;         IVMD unity range may name the requester (amdvi_hda_scope), else ISO_RMRR.
 ;   Neither owner: the conf1 walk with no IOMMU fact (ISO_NO_IOMMU).
 pcia_group_gate:
     push rbx
@@ -738,6 +776,10 @@ pcia_group_gate:
     mov  byte [rel pcia_iso_incomplete], 0
     lea  rdi, [rel pcia_iso_cb]
     call pci_scan_with_filter
+    cmp  byte [rel amdvi_owned], 1
+    jne  .acs_checked
+    call .acs_top_only
+.acs_checked:
     mov  r8d, r12d
     test r8d, r8d
     jz   .walk_facts                     ; no owner: incompleteness changes nothing
@@ -755,6 +797,8 @@ pcia_group_gate:
     jnz  .out
     lea  rdi, [rel pcia_iso_record]
     call devassign_classify
+    cmp  eax, ISO_PROTECTED
+    je   .protected_facts
     test eax, eax
     jnz  .out
     cmp  byte [rel amdvi_owned], 1
@@ -766,15 +810,64 @@ pcia_group_gate:
     je   .out
     mov  eax, ISO_RMRR                   ; an IVMD unity range or an IVHD alias names it
 .out:
+    xor  ecx, ecx
+    xor  edx, edx
+    jmp  .return
+.protected_facts:
+    ; Secondary read-only result belongs to THIS completed calculation only.
+    ; Primary ISO7 and ordinary output-buffer refusal remain unchanged.
+    lea  rcx, [rel pcia_iso_record]
+    mov  edx, DA_REC_BYTES
+.return:
     mov  [rel pcia_iso_reason], al
     add  rsp, 8
     pop  r12
     pop  rbx
     ret
+; U3a (SEC 106248 S1): the builder stops at the first DA_S_ACS chain port, which is only
+; Linux-equivalent at the top of the chain. A device below any bridge can claim port type
+; 4, so clear DA_S_ACS on every entry whose own bus lies inside some snapshot bridge's
+; [secondary, subordinate] window (stricter than a secondary-bus match). Clobbers RAX,
+; RCX, RDX, RSI, RDI, R8, R9.
+.acs_top_only:
+    mov  ecx, [rel pcia_iso_n]
+    lea  rsi, [rel pcia_iso_snap]
+    xor  r8d, r8d
+.acs_i:
+    cmp  r8d, ecx
+    jae  .acs_ret
+    lea  rdi, [rsi + r8*DA_SNAP_SZ]
+    test byte [rdi + 2], DA_S_ACS
+    jz   .acs_next_i
+    movzx eax, byte [rdi + 1]            ; the port's own bus
+    xor  r9d, r9d
+.acs_j:
+    cmp  r9d, ecx
+    jae  .acs_next_i
+    lea  rdx, [rsi + r9*DA_SNAP_SZ]
+    test byte [rdx + 2], DA_S_BRIDGE
+    jz   .acs_next_j
+    cmp  al, [rdx + 3]                   ; below secondary: not inside
+    jb   .acs_next_j
+    cmp  al, [rdx + 4]                   ; above subordinate: not inside
+    ja   .acs_next_j
+    and  byte [rdi + 2], ~DA_S_ACS & 0xFF
+    jmp  .acs_next_i
+.acs_next_j:
+    inc  r9d
+    jmp  .acs_j
+.acs_next_i:
+    inc  r8d
+    jmp  .acs_i
+.acs_ret:
+    ret
 
 ; Read-only copy of the existing common group verdict and its complete facts.
 ; EDI=segment0 BDF, RSI=out DA_REC_BYTES, RDX=capacity -> ISO_*.
-; Refusal never copies stale working facts. No caller can shrink the group.
+; Refusal never copies working facts into RSI. ISO7 alone returns secondary
+; RCX=current completed DA_REC pointer, EDX=272; other results clear the pair.
+; Pointer is BSP-local scratch, valid only until the next group calculation.
+; No caller can shrink the group.
 pcia_group_snapshot:
     push r12
     cmp edi,0xFFFF
@@ -801,11 +894,204 @@ pcia_group_snapshot:
     cld
     rep movsq
     xor eax,eax
+    xor ecx,ecx
+    xor edx,edx
     jmp .out
 .bad:
+    xor ecx,ecx
+    xor edx,edx
     mov eax,ISO_TRUNC_ACPI
 .out:
     pop r12
+    ret
+
+; NDISO1 (ROOT110035): pcia_group_record_peek(EDI=segment0 BDF) -> RAX = the
+; completed fact record of the LAST group calculation when that calculation
+; was a group verdict (pcia_iso_reason ISO7/ISO8: a builder refusal 3/4/6 leaves
+; the previous header over partly rewritten entries, VM110051) built for
+; exactly this target (record 0 = EDI, segment 0, target_idx 0, 1 <= n_dev <=
+; DA_REC_MAX), else 0. Read-only and BSP-local: valid only until the next group
+; gate. Evidence for the isolation-refusal message only, never an admission
+; input; the ISO7-only RCX contract of pcia_group_snapshot is unchanged.
+; Clobbers RAX, RCX.
+pcia_group_record_peek:
+    xor eax,eax
+    cmp edi,0xFFFF
+    ja .out
+    movzx ecx,byte [rel pcia_iso_reason]
+    cmp ecx,ISO_PROTECTED
+    jb .out
+    cmp ecx,ISO_SHARED_DMA
+    ja .out
+    movzx ecx,byte [rel pcia_iso_record+3]
+    test ecx,ecx
+    jz .out
+    cmp ecx,DA_REC_MAX
+    ja .out
+    cmp byte [rel pcia_iso_record+4],0
+    jne .out
+    cmp word [rel pcia_iso_record+16],0
+    jne .out
+    movzx ecx,byte [rel pcia_iso_record+16+2]
+    shl ecx,8
+    mov cl,[rel pcia_iso_record+16+3]
+    cmp ecx,edi
+    jne .out
+    lea rax,[rel pcia_iso_record]
+.out:
+    ret
+
+; Fresh raw common facts for the eventual A1 caller, NOT admission authority.
+; RDI=exact uint64 segment0 BDF, RSI=private resident native out272,
+; RDX=exact uint64 bytes272 -> EAX=0 CAPTURED / ISO_* / A1C_E_ARGUMENT.
+; Success EDX=original singleton ISO0/7/8, ECX=0. Refusal clears both and
+; leaves output untouched. The original ISO7/8 refusal is never erased.
+; Caller serializes on BSP and owns resident output, original signed START,
+; selected config/claims and remaining policy/topology/reset/mapping/return
+; joins. Copies of facts are observations, not original START custody.
+; Each call runs the real common gate anew; retained diagnostic facts are
+; never consulted. AMD requester alias/IVMD scope is mandatory even where
+; singleton ISO7/8 returned before that check. No second scanner or device
+; write, policy selection, claim, reset or attach is introduced here.
+A1C_E_ARGUMENT equ 32
+pcia_a1_group_capture:
+    mov eax, A1C_E_ARGUMENT
+    cmp rdi, 0xFFFF
+    ja .early
+    cmp rdx, DA_REC_BYTES
+    jne .early
+    test rsi, rsi
+    jz .early
+    test rsi, 7
+    jnz .early
+    mov r8, rsi
+    add r8, DA_REC_BYTES
+    jc .early
+    mov rax, rsi
+    shl rax, 16
+    sar rax, 16
+    cmp rax, rsi
+    jne .argument
+    lea rcx, [r8-1]
+    mov rax, rcx
+    shl rax, 16
+    sar rax, 16
+    cmp rax, rcx
+    jne .argument
+    ; Output must not overwrite the common working facts, even on success.
+    lea r9, [rel pcia_iso_record]
+    lea r10, [r9+DA_REC_BYTES]
+    cmp rsi, r10
+    jae .separate
+    cmp r9, r8
+    jb .argument
+.separate:
+    push rbx
+    push rbp
+    push r12
+    push r13
+    push r14
+    push r15
+    sub rsp, 280                       ; private DA272 and aligned native calls
+    mov rbp, rsp
+    mov r12d, edi
+    mov r13, rsi
+    mov edi, r12d
+    call pcia_group_gate               ; THIS invocation, never record_peek
+    mov r14d, eax
+    test eax, eax
+    jz .completed
+    cmp eax, ISO_PROTECTED
+    je .completed
+    cmp eax, ISO_SHARED_DMA
+    jne .refuse
+.completed:
+    lea r15, [rel pcia_iso_record]
+    cmp byte [r15], 1
+    jne .iommu
+    cmp byte [r15+1], 1
+    jne .backend
+    cmp byte [r15+2], 0
+    jne .incomplete
+    movzx ebx, byte [r15+3]
+    test ebx, ebx
+    jz .incomplete
+    cmp ebx, DA_REC_MAX
+    ja .incomplete
+    cmp byte [r15+4], 0
+    jne .incomplete                    ; native builder's selected record0
+    cmp byte [r15+5], 0
+    jne .incomplete
+    cmp word [r15+6], 0
+    jne .incomplete
+    cmp qword [r15+8], 0
+    jne .incomplete
+    cmp word [r15+16], 0
+    jne .segment
+    movzx eax, byte [r15+18]
+    shl eax, 8
+    mov al, [r15+19]
+    cmp eax, r12d
+    jne .incomplete
+    ; Preserve the header and every CURRENT member. Unused stale slots are
+    ; not facts: normalize only that unused tail, as pcia_group_snapshot does.
+    mov rdi, rbp
+    xor eax, eax
+    mov ecx, DA_REC_BYTES/8
+    cld
+    rep stosq
+    mov rdi, rbp
+    mov rsi, r15
+    lea ecx, [rbx+2]
+    rep movsq
+    cmp byte [rel amdvi_owned], 1
+    je .amd_scope
+    cmp byte [rel amdvi_owned], 0
+    jne .backend
+    cmp byte [rel vtd_enabled], 1
+    jne .backend
+    jmp .publish
+.amd_scope:
+    mov edi, r12d
+    call amdvi_hda_scope               ; actual alias source/range and IVMD
+    cmp eax, 1
+    jne .rmrr
+.publish:
+    mov rdi, r13
+    mov rsi, rbp
+    mov ecx, DA_REC_BYTES/8
+    cld
+    rep movsq
+    mov edx, r14d                      ; original isolation reason disclosed
+    xor ecx, ecx
+    xor eax, eax                       ; CAPTURED, not ELIGIBLE
+    jmp .return
+.iommu: mov eax, ISO_NO_IOMMU
+    jmp .refuse
+.backend: mov eax, ISO_UNSUP_BACKEND
+    jmp .refuse
+.incomplete: mov eax, ISO_TRUNC_ACPI
+    jmp .refuse
+.segment: mov eax, ISO_SEGMENT
+    jmp .refuse
+.rmrr: mov eax, ISO_RMRR
+.refuse:
+    xor ecx, ecx
+    xor edx, edx
+.return:
+    add rsp, 280
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbp
+    pop rbx
+    ret
+.argument:
+    mov eax, A1C_E_ARGUMENT
+.early:
+    xor ecx, ecx
+    xor edx, edx
     ret
 
 ; pcia_attach(RDI = SLAT root (PML4), RSI = PCIA_POOL_PAGES zeroable table
@@ -1276,6 +1562,15 @@ pcia_try_inject_irq:
 ; EAX nonzero while a function is assigned or poisoned (guest power refuses).
 ; Touches EAX only.
 pcia_guest_owned:
+    ; Invalidate even when NIC delegation wins: no stale HDA sample may stand
+    ; for that independently owned class. No device read/write or admission.
+    mov dword [rel pcia_power_observation],0
+    ; Whole-group reservations remain guest-owned even after POISON and
+    ; independently of the singleton leaf. Never make an empty passive record
+    ; or a failed common query mean free; only A's private held set owns this.
+    call pcia_grp_any_held
+    test eax,eax
+    jnz .group_owned
 %ifdef PAOS_NIC_ASSIGNMENT
     cmp byte [rel nic_assignment_state], 0
     jne nic_assignment_owned
@@ -1283,6 +1578,30 @@ pcia_guest_owned:
     xor  eax, eax
     cmp  byte [rel pcia_state], PCIA_IDLE
     setne al
+    ; Record this actual assignment predicate, not a later resample/census.
+    ; Preserve the original EAX-only ABI and comparison flags. BSP caller with
+    ; IF clear consumes this immediately; no callback, release or owner change.
+    pushfq
+    push rax
+    mov [rel pcia_power_observation+4],eax
+    movzx eax,byte [rel pcia_state]
+    mov [rel pcia_power_observation+8],eax
+    mov eax,[rel pcia_dev_bdf]       ; physical owner survives shadow reset
+    mov [rel pcia_power_observation+12],eax
+    mov rax,[rel pcia_gen]           ; original IOMMU START generation, not boot age
+    mov [rel pcia_power_observation+16],rax
+    xor eax,eax                     ; HDA unless the compiled FLR kind says otherwise
+%ifidn RCQ50_G0_FLR_LAB,1
+    movzx eax,byte [rel pcia_kind]
+%endif
+    mov [rel pcia_power_observation+24],eax
+    movzx eax,byte [rel pcia_claimed]
+    mov [rel pcia_power_observation+28],eax
+    mov dword [rel pcia_power_observation],1 ; publish complete last
+    pop rax
+    popfq
+    ret
+.group_owned:
     ret
 
 ; RAX = owned immutable PCM for this START's player (0 unless attached),
@@ -1628,6 +1947,10 @@ str_pcia_gate_iso_none:   db " iso=none", 0
 str_pcia_gate_busy:       db " REFUSED busy pcia_state=", 0
 str_pcia_gate_claimed:    db " claimed=", 0
 
+%include "hv/pcia_grp_authority.inc" ; original per-endpoint reservations
+%include "hv/pcia_group.inc"         ; native whole-group admission/root scope
+
+%include "hv/pcia_grp.inc"           ; guarded; harnesses that assemble this file whole see PCIA_GRP_BYTES
 %include "core/abi/wdata.inc"
 %macro WDATA_hv_pci_assign 0
 alignb 8
@@ -1688,3 +2011,20 @@ pcia_iso_incomplete: resb 1
 pcia_iso_reason:     resb 1
 %endmacro
 WDATA_BSS_DEFER WDATA_hv_pci_assign_iso
+
+; W4c-2 (ABI v1, hv/pcia_grp.inc): the one private whole-group owner record. Mutating
+; group entry points accept only this exact address; zero is PGS_FREE. Written only by
+; the owning W4c-2 steps (VM A admit, AV B/C); nothing writes it in this build.
+%macro WDATA_hv_pcia_grp 0
+alignb 64
+pcia_grp:            resb PCIA_GRP_BYTES
+%endmacro
+WDATA_BSS_DEFER WDATA_hv_pcia_grp
+
+; Last exact pcia_guest_owned predicate only; never a DMA retirement receipt.
+; u32 version,owned,state,physical BDF; u64 START generation; u32 kind,claimed.
+%macro WDATA_hv_pci_power_observation 0
+alignb 8
+pcia_power_observation: resb 32
+%endmacro
+WDATA_BSS_DEFER WDATA_hv_pci_power_observation

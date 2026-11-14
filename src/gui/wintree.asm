@@ -572,6 +572,9 @@ f1_cmd_verb_wintree:
     lea  rdi, [rel str_tree_fit_contain]
     cmp  dword [r15 + WIS_FIT], WIMG_FIT_CONTAIN
     je   .image_fit_emit
+    lea  rdi, [rel str_wimg_fit_tile]
+    cmp  dword [r15 + WIS_FIT], WIMG_FIT_TILE
+    je   .image_fit_emit
     lea  rdi, [rel str_wimg_fit_scale]
 .image_fit_emit:
     call gui_ladder_put_str
@@ -688,6 +691,11 @@ f1_cmd_verb_wintree:
     call form_widget_tree_text_ptr       ; same live state the widget renders
     test rax, rax
     jnz  .g_have_text
+    mov  rax, rbx
+    call wgt_menu_text_ptr               ; a live menu's whole item text (A3 Explorer: 7 items)
+    lea  rcx, [rbx + WGI_VAL]
+    cmp  rax, rcx
+    jne  .g_have_text
     mov  rax, rbx
     call wgt_tf_buf                      ; RCQ-38 L3c: a long textfield's value
 .g_have_text:

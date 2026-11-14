@@ -3450,10 +3450,10 @@ dns_wire_tick:
 ; All DNS stream operations use table try-locks, while DNS owns this FSM lock.
 ; Polling avoids connected/receive callbacks and their reuse/cancellation races.
 dns_tcp_begin_locked:
-    cmp  qword [rel dns_tcp_cookie_next], -1
-    je   .exhausted                      ; never wrap/reuse an ownership cookie
-    inc  qword [rel dns_tcp_cookie_next]
-    mov  rax, [rel dns_tcp_cookie_next]
+    call tcp_client_cookie_alloc
+    test rax, rax
+    jz   .exhausted                      ; no ownership on exhaustion/contention
+    mov  [rel dns_tcp_cookie_next], rax   ; last issued observation, not allocator
     mov  [rel dns_tcp_route + 8], rax
     mov  eax, [rel dns_next_hop_ip]
     mov  [rel dns_tcp_route], eax
@@ -4467,7 +4467,7 @@ WDATA_BSS_DEFER WDATA_dns_netcheck
 %macro WDATA_dns_tcp 0
 alignb 8
 dns_tcp_handle:       resq 1
-dns_tcp_cookie_next:  resq 1           ; never reset/reused during this boot
+dns_tcp_cookie_next:  resq 1           ; historical name: last shared issued cookie
 dns_tcp_route:        resb 16          ; next hop, source IPv4, unique cookie
 dns_tcp_sent:         resd 1
 dns_tcp_received:     resd 1

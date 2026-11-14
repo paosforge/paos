@@ -1,0 +1,9 @@
+; Native Terminal folder path bounds; not a wire identity or grant.
+%ifndef TERMINAL_FS_READ_INCLUDED
+%define TERMINAL_FS_READ_INCLUDED 1
+TERMINAL_FS_PATH_MAX equ 1024
+TERMINAL_FS_COMPONENT_MAX equ 255
+TERMINAL_FS_DEPTH_MAX equ 16
+TERMINAL_FS_RELATIVE equ 0
+TERMINAL_FS_ABSOLUTE equ 1
+%endif

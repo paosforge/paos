@@ -1,7 +1,7 @@
 ;; MODULE hv/vm_profile
 ;; LAYER 5
 ;; EXPORTS vm_profile_smp2_match, vm_profile_name83_valid, vm_profile_pair_configure, vm_profile_request, vm_profile_pair_finish, vm_profile_pair_health, vm_profile_pair_recover, vm_profile_pair_durable, vm_profile_pair_state, vm_profile_validate, vm_profile_plan, vm_profile_plan_mask, vm_profile_find, vm_profile_select, vm_profile_reset_legacy, vm_profile_bind_launch, vm_profile_compose_cmdline, vm_profile_dep_verify, vm_profile_page_selected, vm_profile_live_reset, vm_profile_render_list, vm_profile_render_plan, vm_profile_render_live, vm_profile_active, vm_profile_dev_mask, vm_profile_gen, vm_profile_kdep, vm_profile_idep, vm_profile_plan_cur, vm_profile_live_devices, vm_profile_live_mmio, vm_profile_live_leaves, vm_profile_live_reserve, vp_builtin_table
-;; IMPORTS hv/vcpu_ap_run, hv/vcpu_bsp, core/lib/sha256, hv/vmx, hv/pad_channel, hv/filesystem_domain, hv/wifi_channel
+;; IMPORTS hv/vcpu_ap_run, hv/vcpu_bsp, core/lib/sha256, hv/vmx, hv/pad_channel, hv/filesystem_domain, hv/wifi_channel, hv/guestpower
 ;; CAPS
 ;; OWNER saga:hv
 ; ============================================================================
@@ -108,7 +108,10 @@ VP_DEV_KNOWN     equ VP_DEV_KNOWN_RC
 %endif
 VP_DEV_PADDOMAIN equ VP_DEV_TIMER | VP_DEV_CONSOLE | VP_DEV_PADCHAN ; the PAD1 closure
 VP_DEV_HDADOMAIN equ VP_DEV_PADDOMAIN | VP_DEV_PCIHDA ; RCQ-36 V2: PAD1 playing through the assigned HDA
-VP_DEV_PRICED    equ VP_DEV_KNOWN_RC & ~(VP_DEV_PADCHAN | VP_DEV_PCIHDA | VP_DEV_LAPIC | VP_DEV_WARMCHAN | VP_DEV_PINCHAN | VP_DEV_NIC) ; console mode / CPU state / host function: no virtio page or RAM
+; Console mode / CPU state / host function: not an omittable priced device. The NIC closure
+; (0x8007/0x18007) carries the paos.power page (C10b-1a, SEC 107064 B3): it is priced inside
+; that closure, never as an omittable device, so NIC stays outside this mask.
+VP_DEV_PRICED    equ VP_DEV_KNOWN_RC & ~(VP_DEV_PADCHAN | VP_DEV_PCIHDA | VP_DEV_LAPIC | VP_DEV_WARMCHAN | VP_DEV_PINCHAN | VP_DEV_NIC)
 VP_DEV_LEGACY    equ VP_DEV_TIMER | VP_DEV_CONSOLE | VP_DEV_NET ; the fixed shape every legacy START gets
 VP_DEV_DESKTOP   equ VP_DEV_TIMER | VP_DEV_CONSOLE | VP_DEV_DISPLAY | VP_DEV_INPUT
 
@@ -130,7 +133,7 @@ VP_VCPU_MAX      equ 256                ; representable
 VP_VCPU_RUNTIME  equ 1                  ; ordinary profiles; exact signed S7 tuple admits two
 VP_RAM_ALIGN     equ 0x200000           ; EPT/guest paging use 2 MiB leaves
 VP_RAM_MIN       equ 0x1000000          ; 16 MiB
-VP_RAM_MAX       equ 0xC0000000         ; 3 GiB: flat low RAM below the PDPT[3] MMIO hole (RCQ-50)
+VP_RAM_MAX       equ 0xD0000000         ; 3328 MiB RAM amount: NIC domains split above the 3..4 GiB MMIO hole
 VP_RAM_DISPLAY_MAX equ 0x40000000       ; a DISPLAY guest keeps one RAM PD (guestdisplay_clear)
 VP_INITRD_MAX    equ 0x40000000         ; 1 GiB pinned initramfs ceiling
 VP_KERNEL_MIN    equ 0x400
@@ -301,6 +304,18 @@ vm_profile_validate:
 .ram_ok:
 %endif
 %endif
+    ; Only the maintained full NIC domain uses split RAM. Other closures retain
+    ; their old flat-RAM bound; no optional device acquires an unproved layout.
+    mov  ecx, 0xC0000000
+    cmp  rdx, rcx
+    jbe  .flat_ram_ok
+    cmp  byte [rbx + VP_CLASS], VP_CLASS_CLI
+    jne  .out
+    cmp  dword [rbx + VP_DEVICES], VP_DEV_NICDOMAIN
+    je   .flat_ram_ok
+    cmp  dword [rbx + VP_DEVICES], VP_DEV_WIFIDOMAIN
+    jne  .out
+.flat_ram_ok:
     mov  eax, VP_E_DEVICE
     mov  edx, [rbx + VP_DEVICES]
     test edx, ~VP_DEV_KNOWN
@@ -657,6 +672,16 @@ vm_profile_plan_mask:
     mov  r10d, VP_FB_BYTES
     add  qword [rdi + VPP_RESERVE], VP_FB_BYTES
 .done:
+    ; C10b-1a B3 (SEC 107064/107097): the exact driver-domain closure carries the
+    ; paos.power register page: one page, one declaration, one leaf. Its IRQ5 is
+    ; the console's line, already counted. The closure is never an omittable device.
+    cmp  edx, VP_DEV_NICDOMAIN
+    je   .closure_power
+    cmp  edx, VP_DEV_WIFIDOMAIN
+    jne  .counted
+.closure_power:
+    inc  r8d
+.counted:
     mov  [rdi + VPP_MMIO_PAGES], r8d
     mov  [rdi + VPP_IRQ_LINES], r9d
     mov  [rdi + VPP_DECLS], r8d
@@ -1382,6 +1407,7 @@ vm_profile_live_reset:
     mov  [rel vm_profile_live_mmio], eax
     mov  [rel vm_profile_live_leaves], eax
     mov  [rel vm_profile_live_reserve], rax
+    mov  [rel guestpower_live], al          ; C10b-1a: no paos.power page before its map
     ret
 
 ; vm_profile_page_selected(EDI=offset from the virtio-mmio window base)
@@ -1411,6 +1437,11 @@ vm_profile_page_selected:
     mov edx,VP_DEV_WIFI
     cmp edi,0x9000
     jb .test
+    cmp edi,0xA000
+    jae .none
+    movzx eax, byte [rel guestpower_live]  ; C10b-1a B1/S7: mapped only for the exact closure
+    ret
+.none:
     xor  eax, eax
     ret
 .test:
@@ -1544,8 +1575,15 @@ vm_profile_compose_cmdline:
     jc .fail
 .wifi:
     test dword [rel vm_profile_dev_mask],VP_DEV_WIFI
-    jz .done
+    jz .power
     lea rsi,[rel str_vp_cmdline_wifi]
+    call vp_append
+    jc .fail
+.power:
+    call guestpower_selected               ; C10b-1a B1: same predicate as the map
+    test eax,eax
+    jz .done
+    lea rsi,[rel str_vp_cmdline_power]
     call vp_append
     jc .fail
 .done:
@@ -2663,3 +2701,4 @@ str_vp_cmdline_warm: db " virtio_mmio.device=4K@0xD0000000:5 paos.warm=1", 0
 str_vp_cmdline_filesystem: db " virtio_mmio.device=4K@0xD0006000:5 virtio_mmio.device=4K@0xD0007000:5",0
 
 str_vp_cmdline_wifi: db " virtio_mmio.device=4K@0xD0008000:5 paos.wifi=1",0
+str_vp_cmdline_power: db " virtio_mmio.device=4K@0xD0009000:5",0 ; C10b-1a: driver-domain closure only

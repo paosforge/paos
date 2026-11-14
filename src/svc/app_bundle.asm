@@ -1,6 +1,6 @@
 ;; MODULE svc/app_bundle
 ;; LAYER 5
-;; EXPORTS app_bundle_declare, app_bundle_verify, app_bundle_run, app_bundle_inspect, app_trust_find, app_trust_add, app_trust_del, app_key_id, cmd_verb_app, cmd_verb_appkey, app_out_buf, app_out_ready
+;; EXPORTS app_bundle_declare, app_bundle_verify, app_bundle_run, app_bundle_inspect, app_trust_find, app_trust_find_readonly, app_trust_add, app_trust_del, app_key_id, cmd_verb_app, cmd_verb_appkey, app_out_buf, app_out_ready
 ;; IMPORTS core/lib/str, core/lib/sha256, bootmgr/rsa2048_verify, svc/command, svc/command_auth, sec/owner_store, fs/vfs, core/heap
 ;; CAPS
 ;; OWNER saga:command
@@ -252,6 +252,74 @@ app_owner_id_ready:
     mov  qword [rel app_owner_id], 0
     mov  qword [rel app_owner_id + 8], 0
     jmp  .out
+
+; Passive native key id16 -> current trusted modulus/0, without populating
+; app_owner_id/app_owner_ready or changing any trust/snapshot/lifecycle state.
+; SHA scratch is BSP-only; caller owns local session/currentness admission.
+app_trust_find_readonly:
+    push rbx
+    push r12
+    push r13
+    sub rsp,288                    ; big-endian modulus256 + private digest32
+    mov r12,rdi
+    test r12,r12
+    jz .none
+    call owner_enrolled_modulus
+    mov r13,rax
+    test rax,rax
+    jz .added
+    xor ecx,ecx
+.reverse:
+    mov edx,255
+    sub edx,ecx
+    mov al,[r13+rdx]
+    mov [rsp+rcx],al
+    inc ecx
+    cmp ecx,256
+    jb .reverse
+    lea rdi,[rsp+256]
+    mov rsi,rsp
+    mov edx,256
+    call sha256_hash
+    test eax,eax
+    jnz .none
+    mov rax,[rsp+256]
+    cmp rax,[r12]
+    jne .added
+    mov rax,[rsp+264]
+    cmp rax,[r12+8]
+    jne .added
+    mov rax,r13
+    jmp .out
+.added:
+    xor ebx,ebx
+.slot:
+    cmp ebx,APP_KEYS_MAX
+    jae .none
+    imul rdx,rbx,APPK_SZ
+    lea rax,[rel app_keys]
+    add rdx,rax
+    cmp byte [rdx+APPK_USED],1
+    jne .next
+    mov rax,[rdx+APPK_ID]
+    cmp rax,[r12]
+    jne .next
+    mov rax,[rdx+APPK_ID+8]
+    cmp rax,[r12+8]
+    jne .next
+    lea rax,[rdx+APPK_MOD]
+    jmp .out
+.next:
+    inc ebx
+    jmp .slot
+.none:
+    xor eax,eax
+.out:
+    add rsp,288
+    pop r13
+    pop r12
+    pop rbx
+    ret
 
 ; app_trust_find(RDI = key id16) -> RAX = the trusted little-endian modulus, or 0.
 app_trust_find:

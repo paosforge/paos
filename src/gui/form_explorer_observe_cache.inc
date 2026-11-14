@@ -23,7 +23,7 @@ form_exp_observe_reset:
     pop  rdi
     ret
 
-; EDI=1 selected, 2 actually accepted. Preserve the input path's saved state.
+; EDI=1 selected, 2 copy accepted, 6 synchronous Move completed. Preserve the input path's saved state.
 form_exp_observe_capture:
     push rbx
     push r12
@@ -40,8 +40,11 @@ form_exp_observe_capture:
     call form_exp_observe_copy_z
     mov  rax, [rel form_exp_paste_seq]
     mov  [r12 + EXP_OBS_SEQ], rax
+    cmp  ebx, 6
+    je   .destination
     cmp  ebx, 2
     jne  .publish
+.destination:
     lea  rdi, [r12 + EXP_OBS_DST_STAMP]
     lea  rsi, [rel form_exp_dest_stamp]
     mov  ecx, 12
@@ -56,6 +59,8 @@ form_exp_observe_capture:
     call form_exp_observe_copy_z
     mov  rax, [rel form_exp_paste_seq]
     mov  [r12 + EXP_OBS_SEQ], rax
+    cmp  ebx, 6
+    je   .publish                    ; synchronous Move has no copy job
     mov  rax, [rel form_exp_owned_job]
     mov  [r12 + EXP_OBS_JOB], rax
 .publish:
@@ -73,6 +78,64 @@ form_exp_observe_copy_z:
     jz   .out
     loop form_exp_observe_copy_z
 .out:
+    ret
+
+; Publish only after the real deferred FSDEL returned its exact fresh success.
+; Reuse the public cache shape; this action has no asynchronous copy job.
+form_exp_observe_delete:
+    push r12
+    call form_exp_observe_reset
+    lea  r12, [rel form_exp_observation]
+    lea  rdi, [r12 + EXP_OBS_SRC_STAMP]
+    lea  rsi, [rel form_exp_delete_stamp]
+    mov  ecx, 12
+    rep  movsq
+    lea  rdi, [r12 + EXP_OBS_SRC_PATH]
+    lea  rsi, [rel form_exp_delete_path]
+    mov  ecx, FORM_FS_CWD_MAX
+    call form_exp_observe_copy_z
+    lea  rdi, [r12 + EXP_OBS_NONCE]
+    lea  rsi, [rel form_exp_delete_nonce]
+    mov  ecx, 17
+    call form_exp_observe_copy_z
+    mov  rax, [rel form_exp_paste_seq]
+    mov  [r12 + EXP_OBS_SEQ], rax
+    call boot_ms_now
+    mov  [r12 + EXP_OBS_MS], rax
+    mov  qword [r12 + EXP_OBS_PHASE], 3
+    pop  r12
+    ret
+
+form_exp_observe_rename:
+    push r12
+    call form_exp_observe_reset
+    lea  r12, [rel form_exp_observation]
+    lea  rdi, [r12 + EXP_OBS_SRC_STAMP]
+    lea  rsi, [rel form_exp_rename_stamp]
+    mov  ecx, 12
+    rep  movsq
+    lea  rdi, [r12 + EXP_OBS_SRC_PATH]
+    lea  rsi, [rel form_exp_rename_path]
+    mov  ecx, FORM_FS_CWD_MAX
+    call form_exp_observe_copy_z
+    lea  rdi, [r12 + EXP_OBS_DST_STAMP]
+    lea  rsi, [rel form_exp_rename_stamp]
+    mov  ecx, 12
+    rep  movsq
+    lea  rdi, [r12 + EXP_OBS_DST_PATH]
+    lea  rsi, [rel form_exp_rename_dst]
+    mov  ecx, FORM_FS_CWD_MAX
+    call form_exp_observe_copy_z
+    lea  rdi, [r12 + EXP_OBS_NONCE]
+    lea  rsi, [rel form_exp_rename_nonce]
+    mov  ecx, 17
+    call form_exp_observe_copy_z
+    mov  rax, [rel form_exp_paste_seq]
+    mov  [r12 + EXP_OBS_SEQ], rax
+    call boot_ms_now
+    mov  [r12 + EXP_OBS_MS], rax
+    mov  qword [r12 + EXP_OBS_PHASE], 4
+    pop  r12
     ret
 
 ; Readonly lifetime check. Does not use session_shell_local_authority: a remote
@@ -118,8 +181,17 @@ form_exp_observe_valid:
     jz   .bad_pop
     cmp  qword [rel form_exp_observation + EXP_OBS_PHASE], 1
     je   .ok_pop
+    cmp  qword [rel form_exp_observation + EXP_OBS_PHASE], 3
+    je   .ok_pop
+    cmp  qword [rel form_exp_observation + EXP_OBS_PHASE], 5
+    je   .destination
+    cmp  qword [rel form_exp_observation + EXP_OBS_PHASE], 6
+    je   .destination
+    cmp  qword [rel form_exp_observation + EXP_OBS_PHASE], 4
+    je   .destination
     cmp  qword [rel form_exp_observation + EXP_OBS_PHASE], 2
     jne  .bad_pop
+.destination:
     lea  r12, [rel form_exp_observation + EXP_OBS_DST_STAMP]
     call form_exp_observe_mount_valid
     test eax, eax

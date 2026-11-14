@@ -18,7 +18,7 @@
 ; dispatches it with the caller's own source, principal, capability and
 ; idempotency key, so the native gate decides (the FS reads are owner MUT on
 ; the shipped floor, the copy-job verbs are destructive) and the FS handler's
-; own admission (fs_armed_mount, the scratch classifier, the backend allowlist)
+; own admission (fs_armed_mount, the volume rule, the backend allowlist)
 ; runs unchanged. FSJOB LIST additionally validates and consumes the complete
 ; native discovery stage, then fits its copied facts into the bounded hook reply.
 ;
@@ -672,11 +672,6 @@ hse_content_plan:
     jc   .bad                          ; offset + byte count must not wrap
     ; Legacy range dispatch has backend-specific fences, no namespace gate.
     ; Keep typed range paths within the existing native scratch grammar too.
-    mov  rdi, r12
-    mov  esi, r14d
-    call hse_content_scratch
-    test eax, eax
-    jz   .bad
     jmp  .emit
 .hex:
     mov  r13, rax
@@ -794,80 +789,6 @@ hse_content_offset:
 .no:
     mov  edx, -1
     ret
-
-; The native raw scratch classifier, used as a stricter range planner fence.
-; This pure path grammar grants no authority and cannot arm a mount.
-hse_content_scratch:
-    ; Canonical validation already excludes dot components and aliases.
-    ; Retain the native /FSW*.TST or /FSWDIR[0..2 chars]/... shape.
-    cmp  esi, 7
-    jb   .root
-    cmp  byte [rdi], '/'
-    jne  .no
-    mov  eax, [rdi + 1]
-    or   eax, 0x20202020
-    cmp  eax, 'fswd'
-    jne  .root
-    mov  ax, [rdi + 5]
-    or   ax, 0x2020
-    cmp  ax, 'ir'
-    jne  .root
-    mov  ecx, 7
-.dir_component:
-    cmp  ecx, esi
-    jae  .directory
-    cmp  byte [rdi + rcx], '/'
-    je   .directory
-    cmp  ecx, 9
-    jae  .no
-    cmp  byte [rdi + rcx], '.'
-    je   .no
-    inc  ecx
-    jmp  .dir_component
-.directory:
-    mov  eax, 1
-    ret
-.root:
-    cmp  esi, 8                            ; /FSW.TST
-    jb   .no
-    cmp  esi, 13                           ; /FSWxxxxx.TST
-    ja   .no
-    cmp  byte [rdi], '/'
-    jne  .no
-    mov  al, [rdi + 1]
-    or   al, 0x20
-    cmp  al, 'f'
-    jne  .no
-    mov  al, [rdi + 2]
-    or   al, 0x20
-    cmp  al, 's'
-    jne  .no
-    mov  al, [rdi + 3]
-    or   al, 0x20
-    cmp  al, 'w'
-    jne  .no
-    mov  ecx, esi
-    sub  ecx, 4
-    cmp  byte [rdi + rcx], '.'
-    jne  .no
-    mov  al, [rdi + rcx + 1]
-    or   al, 0x20
-    cmp  al, 't'
-    jne  .no
-    mov  al, [rdi + rcx + 2]
-    or   al, 0x20
-    cmp  al, 's'
-    jne  .no
-    mov  al, [rdi + rcx + 3]
-    or   al, 0x20
-    cmp  al, 't'
-    jne  .no
-    mov  eax, 1
-    ret
-.no:
-    xor  eax, eax
-    ret
-
 
 ; Canonical non-root printable path; native backend rules remain decisive.
 hse_rename_path:

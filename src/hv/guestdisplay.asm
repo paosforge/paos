@@ -2,7 +2,7 @@
 %include "hv/guest_power.inc"
 
 ;; LAYER 5
-;; EXPORTS guestdisplay_hva, guestdisplay_capture_span, guestdisplay_clear, guestdisplay_map, guestdisplay_screen_info, guestdisplay_sum, guestdisplay_render_stat, guestdisplay_reset, guestdisplay_ready, hv_linux_fb_bytes
+;; EXPORTS guestdisplay_hva, guestdisplay_capture_span, guestdisplay_capture_reason, guestdisplay_clear, guestdisplay_map, guestdisplay_screen_info, guestdisplay_sum, guestdisplay_render_stat, guestdisplay_render_stage_stat, guestdisplay_reset, guestdisplay_ready, hv_linux_fb_bytes
 ;; IMPORTS hv/guest_power, hv/vmx, hv/hv_ops, hv/vm_profile, hv/vcpu_ap_run, hv/vcpu_bsp
 ;; CAPS
 ;; OWNER saga:hv
@@ -39,42 +39,59 @@ GD_IDENT_CEILING  equ 1 << GD_IDENT_SHIFT
     %error "the capture span must fit the reserved DISPLAY leaf"
 %endif
 
+; GD_REFUSE condition, ordinary target, scalar reason, diagnostic mode.
+; Ordinary mode emits the original branch. Diagnostic mode returns at the same
+; first failed predicate; j%-1 is NASM's inverse condition. Never export the
+; scratch owner/mapping values in RCX/RDX, even on successful diagnosis.
+%macro GD_REFUSE 4
+%if %4
+    j%-1 %%accepted
+    mov  eax, %3
+    xor  ecx, ecx
+    xor  edx, edx
+    ret
+%%accepted:
+%else
+    j%+1 %2
+%endif
+%endmacro
+
 ; All concrete owner fields must still match the fully checked clear snapshot.
 ; Uses only RAX/RCX/RDX; a live capture remains a read-only, stackless leaf with
 ; its original RAX/RDX/ECX results and all other registers/DF untouched.
-%macro GD_OWNER_CURRENT 1
+%macro GD_OWNER_CURRENT 1-2 0
     mov  ecx, [rel hv_linux_start_consumed]
     test ecx, ecx
-    jz   %1
+    GD_REFUSE z, %1, 4, %2
     cmp  ecx, [rel gd_generation]
-    jne  %1
+    GD_REFUSE ne, %1, 5, %2
     cmp  ecx, [rel vm_profile_gen]
-    jne  %1
+    GD_REFUSE ne, %1, 6, %2
     mov  eax, [rel vm_profile_dev_mask]
     cmp  eax, [rel gd_devices]
-    jne  %1
+    GD_REFUSE ne, %1, 7, %2
     test eax, VP_DEV_DISPLAY
-    jz   %1
+    GD_REFUSE z, %1, 8, %2
     mov  rax, [rel vm_profile_active]
     cmp  rax, [rel gd_profile]
-    jne  %1
+    GD_REFUSE ne, %1, 9, %2
     mov  rax, [rel hv_ops_active]
     cmp  rax, [rel gd_backend]
-    jne  %1
+    GD_REFUSE ne, %1, 10, %2
     mov  rax, [rel hv_linux_region]
     cmp  rax, [rel gd_region]
-    jne  %1
+    GD_REFUSE ne, %1, 11, %2
     mov  rdx, [rel hv_linux_region_capacity]
     cmp  rdx, [rel gd_capacity]
-    jne  %1
+    GD_REFUSE ne, %1, 12, %2
     mov  rax, [rel hv_linux_ram]
     cmp  rax, [rel gd_ram]
-    jne  %1
+    GD_REFUSE ne, %1, 13, %2
     mov  rdx, [rel hv_linux_ram_bytes]
     cmp  rdx, [rel gd_ram_bytes]
-    jne  %1
+    GD_REFUSE ne, %1, 14, %2
     cmp  qword [rel hv_linux_fb_bytes], VP_FB_BYTES
-    jne  %1
+    GD_REFUSE ne, %1, 15, %2
     mov  rax, [rel gd_frame]
 %endmacro
 
@@ -94,36 +111,82 @@ guestdisplay_hva:
     pop  rcx
     ret
 
+; Hardware sets AMD NPT A (bit5) on a nonleaf and A/D (bits5/6) on a
+; framebuffer leaf. Accept only those 0->1 transitions for the registered
+; SVM backend. Every saved one must remain one and every other bit is exact,
+; including address, present, permissions, NX, page size and cache attributes.
+; VMX's current EPTP does not enable A/D: keep its whole entry exact.
+; RAX=live, %1=saved record, %2=allowed AMD bits, %3=target, %4=reason,
+; %5=diagnostic mode. Uses only RAX/RCX, no calls/stack/writes/pointer following.
+%macro GD_ENTRY_CURRENT 5
+    cmp  rax, [rel %1]
+    je   %%same
+    lea  rcx, [rel hv_ops_svm]
+    cmp  rcx, [rel gd_backend]
+    GD_REFUSE ne, %3, %4, %5
+    mov  rcx, rax
+    or   rcx, [rel %1]
+    cmp  rcx, rax
+    GD_REFUSE ne, %3, %4, %5
+    xor  rax, [rel %1]
+    test rax, ~%2
+    GD_REFUSE nz, %3, %4, %5
+%%same:
+%endmacro
+
 ; guestdisplay_capture_span -> RAX = live frame, RDX = visible byte length,
 ; ECX = START generation (upper RCX zero), all three zero on refusal. No calls,
 ; stack or writes. BSP callers must not yield while reading; call again before
 ; publishing and require equal RAX/ECX (guest_desktop's existing protocol).
-guestdisplay_capture_span:
+%macro GD_CAPTURE_CURRENT 1
     cmp byte [rel hv_guest_power_fenced], 0
-    jne .none
+    GD_REFUSE ne, %%none, 1, %1
     cmp  byte [rel gd_state], 2
-    jne  .none
+    GD_REFUSE ne, %%none, 2, %1
     cmp  byte [rel hv_linux_running], 1
-    jne  .none
-    GD_OWNER_CURRENT .none
+    GD_REFUSE ne, %%none, 3, %1
+    GD_OWNER_CURRENT %%none, %1
     mov  edx, [rel vm_profile_live_devices]
     cmp  edx, [rel gd_devices]
-    jne  .none
+    GD_REFUSE ne, %%none, 16, %1
     mov  rdx, [rel gd_region]
     mov  rax, [rdx + 0x3000 + 3*8]
-    cmp  rax, [rel gd_link]
-    jne  .none
+    GD_ENTRY_CURRENT gd_link, 0x20, %%none, 17, %1
     mov  rax, [rdx + HV_VCON_EPT_PD + ((VP_FB_GPA - 0xC0000000) >> 21) * 8]
-    cmp  rax, [rel gd_leaf]
-    jne  .none
+    GD_ENTRY_CURRENT gd_leaf, 0x60, %%none, 18, %1
+%if !%1
     mov  rax, [rel gd_frame]
     mov  edx, GD_CAPTURE_LEN
+    mov  ecx, [rel gd_generation]
     ret
-.none:
+%endif
+%%none:
     xor  eax, eax
     xor  ecx, ecx
     xor  edx, edx
     ret
+
+%endmacro
+
+guestdisplay_capture_span:
+    GD_CAPTURE_CURRENT 0
+
+; guestdisplay_capture_reason -> EAX = first refusal, 0 = capture eligible.
+; RCX/RDX zero; other registers/DF untouched. Same stackless read-only predicate
+; order as capture_span. No pixels, pointer output, writes, calls or cached
+; result. A reason describes this BSP observation only, not an earlier refusal.
+; STAT fb_capture codes (absence on older builds means UNKNOWN, never 0):
+; 1 power fence; 2 not mapped; 3 not running; 4 no consumed START generation;
+; 5 prepared generation mismatch; 6 selected generation mismatch;
+; 7 selected device mask mismatch; 8 DISPLAY not selected;
+; 9 profile mismatch; 10 backend mismatch; 11 region mismatch;
+; 12 capacity mismatch; 13 RAM mismatch; 14 RAM length mismatch;
+; 15 framebuffer reservation mismatch; 16 live device mask mismatch;
+; 17 control link mismatch; 18 framebuffer leaf mismatch.
+; Only after every owner check may the original two control entries be read;
+; link refusal never reaches the leaf. No rejected pointer is followed.
+guestdisplay_capture_reason:
+    GD_CAPTURE_CURRENT 1
 
 ; Selected/prepared validation. Same owner as live capture, but no live reads
 ; before START runs. Only states 1 (cleared) and 2 (mapped) are prepared.
@@ -378,8 +441,16 @@ guestdisplay_sum:
 .out:
     ret
 
-; guestdisplay_render_stat — appended to GUESTVM STAT when a display is live.
+; guestdisplay_render_stat — scalar capture eligibility on every GUESTVM STAT;
+; mode/checksum retain their original live-only authority. No new caller or
+; lifecycle action. Output is bounded (fb_capture=0..18), without owner addresses.
 guestdisplay_render_stat:
+    call guestdisplay_capture_reason
+    push rax
+    lea  rdi, [rel str_gd_k_capture]
+    call hv_out_str
+    pop  rax
+    call hv_out_dec
     call guestdisplay_hva
     test rax, rax
     jz   .ret
@@ -394,6 +465,35 @@ guestdisplay_render_stat:
 .ret:
     ret
 
+; Passive BSP-owned capture/measurement observations. No guest or staging-buffer
+; dereference and no lifecycle action, including when DISPLAY is unavailable.
+; State/why are native byte enums (gui/guest_desktop, gui/guest_frame_measure);
+; dropped is the full64 cumulative discard counter, printed as fixed-width hex.
+; These observations diagnose progress; they grant no capture/publish authority.
+guestdisplay_render_stage_stat:
+    lea  rdi, [rel str_gd_k_stage]
+    call hv_out_str
+    movzx eax, byte [rel gd_stage_state]
+    call hv_out_dec
+    lea  rdi, [rel str_gd_k_why]
+    call hv_out_str
+    movzx eax, byte [rel gd_stage_why]
+    call hv_out_dec
+    lea  rdi, [rel str_gd_k_dropped]
+    call hv_out_str
+    mov  rax, [rel gd_stage_dropped]
+    call hv_linux_exit_hex
+    lea  rdi, [rel str_gd_k_measure]
+    call hv_out_str
+    movzx eax, byte [rel fm_state]
+    jmp  hv_out_dec
+
+str_gd_k_stage:   db " fb_stage=", 0
+str_gd_k_why:     db " fb_why=", 0
+str_gd_k_dropped: db " fb_dropped=0x", 0
+str_gd_k_measure: db " fm_state=", 0
+
+str_gd_k_capture: db " fb_capture=", 0
 str_gd_mode:   db " fb=800x600x32 fb_gpa=0xC0000000", 0
 str_gd_k_sum:  db " fb_sum=", 0
 %if VP_FB_WIDTH != 800 || VP_FB_HEIGHT != 600 || VP_FB_GPA != 0xC0000000

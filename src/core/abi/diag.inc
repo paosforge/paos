@@ -119,6 +119,22 @@ DIAG_K_IOMMU     equ 6
 ; Sampling can miss transitions, ring contention can drop records; no new
 ; durability or containment guarantee. Fatal snapshot tag semantics above stay.
 DIAG_K_MCA       equ 7
+; Fatal capture assessment, same kind7, layout tags mca-assess-{intel,amd,smca,
+; unknown}. ARG flags below. A low32=VAL bank bitmap, high32=VAL/PCC bitmap;
+; B=original MCG_STATUS, C=original MCG_CAP; zero when globals unqualified.
+; No recovery/containment result, no new hardware sampling. Records are optional
+; under original ring admission; missing records NEVER prove a negative.
+MCA_A_GLOBAL_KNOWN    equ 1
+MCA_A_SCAN_COMPLETE   equ 2
+MCA_A_MCIP            equ 4
+MCA_A_RIPV            equ 8
+MCA_A_EIPV            equ 16
+MCA_A_PCC             equ 32
+MCA_A_RESTART_BLOCKED equ 64             ; MCIP && (!RIPV || observed VAL/PCC)
+MCA_A_CONTEXT_MISSING equ 128            ; unqualified/incomplete/noVAL/noMCIP
+MCA_A_FATAL_POLICY    equ 256            ; existing vector18 policy, not outcome
+MCA_A_HANDLING_UNKNOWN equ 512           ; no recovery/containment action proved
+
 ; Opt-in lab first-contact recovery only. ARG=1 no timely owner contact,
 ; 2 storage quiesce refused, 3 warm reset attempted (not completed).
 ; A=absolute monotonic deadline us, B=last timer sample us, C=Manager state

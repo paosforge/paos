@@ -1,7 +1,7 @@
 ;; MODULE gui/settings_prefs
 ;; LAYER 6
 ;; EXPORTS settings_prefs_show, settings_prefs_click, settings_prefs_key, settings_prefs_tick, stp_ids, stp_slot, stp_live, stp_pending
-;; IMPORTS gui/widget, gui/wm_pointer, gui/window, gui/command_gui, gui/clock_prefs, gui/kbd_prefs, gui/lang_prefs, gui/config_prefs, gui/input_route, sec/session, sec/principal, svc/command, svc/command_auth, dev/input/ps2
+;; IMPORTS gui/widget, gui/wm_pointer, gui/window, gui/command_gui, gui/clock_prefs, gui/kbd_prefs, gui/lang_prefs, gui/config_prefs, gui/input_route, sec/session, sec/principal, svc/command, svc/command_auth, dev/input/ps2, gui/form_loader
 ;; CAPS CAP_GUI
 ;; OWNER saga:msi_start_programs_settings
 ; ============================================================================
@@ -73,7 +73,10 @@ STP_W_RESET     equ 6
 STP_W_KBD       equ 7                   ; RCQ-38 L2: declared last, so 0..6 keep their places
 STP_W_LANG      equ 8                   ; RCQ-38 L3: declared last, so 0..7 keep their places
 STP_W_APPS      equ 9                   ; declared last, so 0..8 keep
-STP_W_COUNT     equ 10
+STP_W_UPDATES   equ 10                  ; settings_updates' entry (not used here)
+STP_W_NAME      equ 11                  ; Peter 107784: computer name, read-only
+STP_W_ABOUT     equ 12                  ; opens the existing About this PC (form 3)
+STP_W_COUNT     equ 13
 STP_LANG_LAST   equ 3                   ; rows 0..3 = lang_prefs ordinals en, es, fr, de
 STP_LANG_TAG_LEN equ 2                  ; stp_lang_tags slot, passed as the tag length
 STP_LANG_NONE   equ 2                   ; no select call (lang_prefs_select answers 1..-4)
@@ -87,6 +90,7 @@ STP_APPLY       equ 1
 STP_CANCEL      equ 2
 STP_RESET       equ 3
 STP_APPS        equ 4
+STP_ABOUT       equ 5
 
 ;; settings_prefs_show(): the Settings window was just opened or raised. Its
 ;; list marks the zone in force, the status line names it, and the keyboard
@@ -107,6 +111,10 @@ settings_prefs_show:
 .focused:
     mov  edi, eax
     call wgt_draw_id
+    call about_device_name_line         ; Peter 107784: read-only, top of Settings
+    mov  edi, [rel stp_ids + STP_W_NAME*4]
+    mov  rsi, rax
+    call wgt_set_text
     call stp_zone_row
     call stp_mark_row
     call stp_lang_mark_in_force
@@ -129,8 +137,14 @@ settings_prefs_click:
     cmp  edi, [rel stp_ids + STP_W_LANG*4]
     je   .lang_click
     cmp  edi, [rel stp_ids + STP_W_APPS*4]
-    jne  .buttons
+    jne  .about
     mov  byte [rel stp_pending], STP_APPS ; only opens a read-only window
+    mov  eax, 1
+    ret
+.about:
+    cmp  edi, [rel stp_ids + STP_W_ABOUT*4]
+    jne  .buttons
+    mov  byte [rel stp_pending], STP_ABOUT ; only opens a read-only window
     mov  eax, 1
     ret
 .buttons:
@@ -321,6 +335,8 @@ settings_prefs_tick:
     je   .cancel
     cmp  eax, STP_APPS
     je   .apps
+    cmp  eax, STP_ABOUT
+    je   .about
     cmp  byte [rel command_auth_remote_active], 0
     jne  .wait                          ; never inside a remote request: later
     push rax
@@ -436,6 +452,14 @@ settings_prefs_tick:
     jmp  stp_say
 .apps_open:
     ret
+.about:
+    sub  rsp, 8
+    call start_programs_open_about
+    add  rsp, 8
+    test eax, eax
+    jnz  .apps_open
+    lea  rsi, [rel stp_s_about_refused] ; the loader refused it: say so
+    jmp  stp_say
 .cancel:
     call stp_unpin
     call stp_zone_row
@@ -811,6 +835,7 @@ stp_s_lang_refused: db "Language refused", 0
 stp_s_lang_failed: db "Language not changed", 0
 stp_s_lang_repick: db "Select the language again", 0
 stp_s_apps_refused: db "Close a window to open Apps", 0
+stp_s_about_refused: db "About could not open", 0
 stp_lang_tags:     db "en", "es", "fr", "de" ; row i = lang_prefs ordinal i (lang_prefs_tags order)
 stp_s_kbd_sep:     db "; ", 0
 stp_s_fixed:       db "fixed UTC", 0

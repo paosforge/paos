@@ -880,7 +880,9 @@ cmd_verb_aerinject:
     mov  qword [rsi + RSP_CODE], CMDE_OK
     ret
 
-; --- VERB: AERLOG <last|stats|hw/BBBB|poll/BBBB|ctrl/BBBB|stop/BBBB> — last retains its existing wire grammar.
+; --- VERB: AERLOG <last|stats|hw/BBBB|poll/BBBB|ctrl/BBBB|acs/BBBB|stop/BBBB> — last retains its existing wire grammar.
+; acs/BBBB (U3a) reads the ACS extended capability through the admitted ECAM transport
+; (pci_ecam_acs_snapshot): a read-only observation of what the isolation gate sees.
 ; Exact stats projects boot-local SOFTWARE observation counts by class, including
 ; selftest/injection. No device read, interrupt, error clear or containment credit.
 ; hw/BBBB (four hex digits, segment0 packed BDF) requests a bounded read-only
@@ -920,10 +922,17 @@ cmd_verb_aerlog:
     jmp .publish
 .poll:
     cmp dword [rel res_read_arg], 'poll'
-    jne .hardware
+    jne .acs
     cmp byte [rel res_read_arg+4], '/'
-    jne .hardware
+    jne .acs
     call res_emit_aer_poll
+    test eax,eax
+    jz .bad
+    jmp .publish
+.acs:
+    cmp dword [rel res_read_arg], 'acs/'
+    jne .hardware
+    call res_emit_acs
     test eax,eax
     jz .bad
     jmp .publish
@@ -1495,6 +1504,81 @@ res_emit_aer_hardware:
     pop rbx
     ret
 
+; U3a: read-only ACS observation for one segment-0 function, separate grammar:
+; acs_v1 seg=0 bdf=0xB status=N [data=capOffset/header/capabilityControl] scope=...
+; Status is pci_ecam_acs_snapshot's (0 read, 1 absent, 2 malformed, 3 read error,
+; 5 changed, 6..9 transport, 12 not applicable); only status 0 carries data. It reads
+; and reports; it never writes ACS Control or decides isolation (pcia_iso_cb does).
+res_emit_acs:
+    push rbx
+    push rbp
+    sub rsp, 8
+    xor ebx, ebx
+    mov ebp, 4
+    lea rdx, [rel res_read_arg]
+.parse:
+    movzx eax, byte [rdx+rbp]
+    sub eax, '0'
+    cmp eax, 9
+    jbe .digit
+    movzx eax, byte [rdx+rbp]
+    or eax, 32
+    sub eax, 'a'
+    cmp eax, 5
+    ja .bad
+    add eax, 10
+.digit:
+    shl ebx, 4
+    or ebx, eax
+    inc ebp
+    cmp ebp, 8
+    jb .parse
+    cmp byte [rel res_read_arg+8], 0
+    jne .bad
+    mov edi, ebx
+    lea rsi, [rel res_acs_sample]
+    call pci_ecam_acs_snapshot
+    mov ebp, eax
+    lea rdi, [rel str_acs_v1]
+    call res_out_str
+    mov edi, ebx
+    call res_out_hex
+    lea rdi, [rel str_aer_hw_status]
+    call res_out_str
+    mov edi, ebp
+    call res_out_dec
+    test ebp, ebp
+    jnz .unavailable
+    lea rdi, [rel str_aer_hw_data]
+    call res_out_str
+    xor ebx, ebx
+.data:
+    lea rax, [rel res_acs_sample]
+    mov edi, [rax+rbx*4]
+    call res_out_hex
+    inc ebx
+    cmp ebx, 3
+    jae .sampled
+    lea rdi, [rel str_aer_hw_slash]
+    call res_out_str
+    jmp .data
+.sampled:
+    lea rdi, [rel str_acs_scope]
+    jmp .scope
+.unavailable:
+    lea rdi, [rel str_acs_unavailable]
+.scope:
+    call res_out_str
+    mov eax, 1
+    jmp .done
+.bad:
+    xor eax, eax
+.done:
+    add rsp, 8
+    pop rbp
+    pop rbx
+    ret
+
 ; Read-only qualified PCIe/AER controls; separate grammar, no IRQ route claim.
 res_emit_aer_control:
     push rbx
@@ -1971,6 +2055,7 @@ iommu_last_tag:     times 32 db 0
 res_out_buf:        times 1024 db 0
 align 8
 res_aer_ctl_sample: times 64 db 0      ; private BSP control sample
+res_acs_sample: times 64 db 0          ; private BSP ACS sample (U3a)
 res_aer_hw_diag:    times 32 db 0      ; private BSP diagnostics, no qualification
 res_aer_hw_sample:  times 64 db 0      ; private BSP sample, never software totals
 
@@ -2049,6 +2134,9 @@ str_aer_poll_time: db " t=",0
 str_aer_poll_retained: db " record=retained",0
 str_aer_poll_unobserved: db " record=unobserved",0
 str_aer_ctl: db "aer_ctl_v1 seg=0 bdf=0x",0
+str_acs_v1: db "acs_v1 seg=0 bdf=0x",0
+str_acs_scope: db " scope=sample",0
+str_acs_unavailable: db " scope=unavailable",0
 str_aer_ctl_scope: db " scope=sample irq_route=unknown",0
 str_aer_ctl_unavailable: db " scope=unavailable irq_route=unknown",0
 str_aer_hw: db "aer_hw_v1 seg=0 bdf=0x", 0

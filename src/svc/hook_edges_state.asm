@@ -772,15 +772,85 @@ htc_record:
     jz   .out
     cmp  byte [rbx], 0
     jne  .field
-    cmp  byte [rdi], 0
-    jne  .no
-    mov  eax, 1
-    jmp  .out
-.no:
-    xor  eax, eax
+    call htc_realtek_tail
 .out:
     pop  rbx
     ret
+
+; Legacy receipts end after syn_reaps. Current native receipts carry ordered
+; five-u64 rearm tuples and, if a family did not fit, its exact omitted mask.
+; This read-only suffix never enters the six-field table-state witness.
+htc_realtek_tail:
+    cmp byte [rdi], 0
+    je .yes
+    push rbx
+    push r12
+    push r13
+    xor r12d, r12d                     ; present-family mask
+    mov r13d, 1
+    lea rbx, [rel htc_realtek_keys]
+.family:
+    mov r9, rdi                       ; literal failure may consume a prefix
+    mov rsi, rbx
+    call hst_thermal_literal
+    test eax, eax
+    jz .absent
+    or r12d, r13d
+    mov r10d, 5
+.value:
+    call htc_decimal
+    test eax, eax
+    jz .bad
+    dec r10d
+    jz .next
+    cmp byte [rdi], ','
+    jne .bad
+    inc rdi
+    jmp .value
+.absent:
+    mov rdi, r9
+.next:
+    ; Advance the fixed label independently of a failed literal match.
+    cmp byte [rbx], 0
+    lea rbx, [rbx+1]
+    jne .next
+    shl r13d, 1
+    cmp r13d, 8
+    jb .family
+    cmp r12d, 7
+    je .end                           ; all families present: no omission
+    lea rsi, [rel htc_realtek_omitted]
+    call hst_thermal_literal
+    test eax, eax
+    jz .bad
+    movzx eax, byte [rdi]
+    sub eax, '0'
+    mov ecx, r12d
+    xor ecx, 7                        ; precisely the absent families
+    cmp eax, ecx
+    jne .bad
+    inc rdi                           ; mask is exactly one digit, 1..7
+.end:
+    cmp byte [rdi], 0
+    jne .bad
+    mov eax, 1
+    jmp .done
+.bad:
+    xor eax, eax
+.done:
+    pop r13
+    pop r12
+    pop rbx
+    ret
+.yes:
+    mov eax, 1
+    ret
+
+htc_realtek_keys:
+    db " r25lr=", 0
+    db " r26lr=", 0
+    db " r68lr=", 0
+htc_realtek_omitted: db " lr_omitted=", 0
 
 ; UINT64_MAX is valid; overflow, signs and leading zeros refuse.
 htc_decimal:

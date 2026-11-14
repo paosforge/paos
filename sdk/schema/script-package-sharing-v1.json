@@ -2,18 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "paos.script-package.sharing-v1",
   "title": "Public shareable PAOSAPP1 container2 BASHAPP2 authoring input",
-  "description": "Explicit sharing profile: optional author signature, native owner confirmation required. No install, key enrollment or execution.",
+  "description": "Explicit sharing profile: optional author signature, native owner confirmation required. No install, key enrollment or execution. Icons: icon.png RGBA8 PNG 48x48 (12288 bytes), optional icon@2x.png 96x96 (40960), NOTICES.json (8192) required with an icon. Images: up to four images/<name>.(png|bmp|jpg|gif) (40960 each), leading bytes matching the extension. SDK/native enforce content, uniqueness and total65536.",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "id",
-    "entry",
-    "icon",
-    "data_dir",
-    "members",
-    "name",
-    "version"
-  ],
+  "required": ["id", "entry", "icon", "data_dir", "members", "name", "version"],
   "properties": {
     "id": {
       "type": "string",
@@ -24,13 +16,9 @@
       "$ref": "#/$defs/path"
     },
     "icon": {
-      "anyOf": [
-        {
-          "const": ""
-        },
-        {
-          "$ref": "#/$defs/path"
-        }
+      "enum": [
+        "",
+        "icon.png"
       ]
     },
     "data_dir": {
@@ -45,28 +33,163 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "kind",
-          "path",
-          "source"
-        ],
+        "required": ["kind", "path", "source"],
         "properties": {
           "kind": {
-            "enum": [
-              "script",
-              "form",
-              "icon",
-              "data",
-              "grants"
-            ]
+            "enum": ["script", "form", "icon", "data", "grants", "icon2x", "notices", "image"]
           },
           "path": {
-            "$ref": "#/$defs/path"
+            "anyOf": [
+              {
+                "$ref": "#/$defs/path"
+              },
+              {
+                "enum": ["icon@2x.png", "NOTICES.json"]
+              }
+            ]
           },
           "source": {
-            "$ref": "#/$defs/path"
+            "anyOf": [
+              {
+                "$ref": "#/$defs/path"
+              },
+              {
+                "enum": ["icon@2x.png", "NOTICES.json"]
+              }
+            ]
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "image"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "pattern": "^images/[a-z0-9_-]+[.](png|bmp|jpg|gif)$"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "icon"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "path": {
+                  "const": "icon.png"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "icon2x"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "path": {
+                  "const": "icon@2x.png"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "notices"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "path": {
+                  "const": "NOTICES.json"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "path": {
+                  "const": "icon@2x.png"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "kind": {
+                  "const": "icon2x"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "path": {
+                  "const": "NOTICES.json"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "kind": {
+                  "const": "notices"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "source": {
+                  "const": "icon@2x.png"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "kind": {
+                  "const": "icon2x"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "source": {
+                  "const": "NOTICES.json"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "kind": {
+                  "const": "notices"
+                }
+              }
+            }
+          }
+        ]
       }
     },
     "name": {
@@ -88,5 +211,120 @@
       "pattern": "^[a-z0-9_-]+([./][a-z0-9_-]+)*$",
       "maxLength": 63
     }
-  }
+  },
+  "allOf": [
+    {
+      "properties": {
+        "members": {
+          "contains": {
+            "properties": {
+              "kind": {
+                "const": "icon"
+              }
+            },
+            "required": ["kind"]
+          },
+          "minContains": 0,
+          "maxContains": 1
+        }
+      }
+    },
+    {
+      "properties": {
+        "members": {
+          "contains": {
+            "properties": {
+              "kind": {
+                "const": "icon2x"
+              }
+            },
+            "required": ["kind"]
+          },
+          "minContains": 0,
+          "maxContains": 1
+        }
+      }
+    },
+    {
+      "properties": {
+        "members": {
+          "contains": {
+            "properties": {
+              "kind": {
+                "const": "notices"
+              }
+            },
+            "required": ["kind"]
+          },
+          "minContains": 0,
+          "maxContains": 1
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "icon": {
+            "const": "icon.png"
+          }
+        }
+      },
+      "then": {
+        "allOf": [
+          {
+            "properties": {
+              "members": {
+                "contains": {
+                  "properties": {
+                    "kind": {
+                      "const": "icon"
+                    }
+                  },
+                  "required": ["kind"]
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "members": {
+                "contains": {
+                  "properties": {
+                    "kind": {
+                      "const": "notices"
+                    }
+                  },
+                  "required": ["kind"]
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "icon": {
+            "const": ""
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "members": {
+            "items": {
+              "properties": {
+                "kind": {
+                  "not": {
+                    "enum": ["icon", "icon2x"]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

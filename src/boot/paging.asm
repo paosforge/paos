@@ -1,6 +1,6 @@
 ;; MODULE boot/paging
 ;; LAYER 0
-;; EXPORTS exit_boot_and_page, preebs_wdt_arm, preebs_wdt_status, wx_test_page, heap_base, heap_size, model_heap_base, model_heap_size, model_heap_alloc_base, model_heap_alloc_size, mmap_buffer, mmap_size, mmap_desc_size, diag_ring_base, crash_identity_base, filmstrip_ring_base, pmod_region_base, pmod_region_phys, pmod_pt_addr, pmod_sandbox_pml4, vmd_ecam_phys, vmd_window_gb, vmd_root_bdf_boot, fb_shadow_region_base, fb_shadow_region_size, paging_xhci_bar_mapped, paging_nvme_bar_mapped, paging_pd_entry_ptr, inv_top_of_ram, paging_fb_unmapped, paging_fb_gop_base, paging_hda_count, paging_hda_overflow, paging_hda_bars, paging_hda_bdfs, hp_mapping_reserve, hp_mapping_probe, hp_mapping_page
+;; EXPORTS exit_boot_and_page, preebs_wdt_arm, preebs_wdt_status, wx_test_page, heap_base, heap_size, model_heap_base, model_heap_size, model_heap_alloc_base, model_heap_alloc_size, mmap_buffer, mmap_size, mmap_desc_size, diag_ring_base, crash_identity_base, filmstrip_ring_base, pmod_region_base, pmod_region_phys, pmod_pt_addr, pmod_sandbox_pml4, vmd_ecam_phys, vmd_window_gb, vmd_root_bdf_boot, fb_shadow_region_base, fb_shadow_region_size, paging_xhci_bar_mapped, paging_nvme_bar_mapped, paging_pd_entry_ptr, inv_top_of_ram, paging_fb_unmapped, paging_fb_gop_base, pbm_runtime_read_mapped, paging_hda_count, paging_hda_overflow, paging_hda_bars, paging_hda_bdfs, hp_mapping_reserve, hp_mapping_probe, hp_mapping_page
 ;; IMPORTS boot/model_preload, boot/boot_menu, boot/serial, boot/header, boot/boot_v2_handoff, boot/boot_v2_health, boot/gop, core/reset_wipe
 ;; CAPS
 ;; OWNER saga:boot
@@ -1670,6 +1670,8 @@ paging_nvme_bar_mapped:
     ; AllocateMaxAddress for one contiguous high region inside the established
     ; 0..16 GiB identity map.  Machines without 384 MiB available still boot:
     ; cognition reports present=0 instead of making the model a boot dependency.
+    ; If that region is unavailable, retain a smaller arena for the image cache
+    ; and other model-heap users.  Its actual size still excludes cognition.
     mov  rax, 0x3FFFFFFFF              ; qword store has no imm64 encoding
     mov  [rel model_heap_alloc_base], rax
     mov  rax, [rel boot_services]
@@ -1680,7 +1682,20 @@ paging_nvme_bar_mapped:
     call [rax + 0x28]                   ; AllocatePages
     test rax, rax
     jz   .model_heap_ok
+    ; A failed AllocatePages may dirty its in/out address.  Restart every
+    ; firmware operand for the bounded 64 MiB fallback inside the same map.
+    mov  rax, 0x3FFFFFFFF
+    mov  [rel model_heap_alloc_base], rax
+    mov  rax, [rel boot_services]
+    mov  ecx, 1                         ; AllocateMaxAddress
+    mov  edx, 2                         ; EfiLoaderData
+    mov  r8d, 0x4000                    ; 64 MiB / 4 KiB
+    lea  r9, [rel model_heap_alloc_base]
+    call [rax + 0x28]                   ; AllocatePages
+    test rax, rax
+    jz   .model_heap_small_ok
     mov  qword [rel model_heap_alloc_base], 0
+    mov  qword [rel model_heap_alloc_size], 0
     mov  qword [rel model_heap_base], 0
     mov  qword [rel model_heap_size], 0
     jmp  .model_heap_done
@@ -1689,6 +1704,12 @@ paging_nvme_bar_mapped:
     mov  [rel model_heap_base], rax
     mov  qword [rel model_heap_alloc_size], 0x18000000
     mov  qword [rel model_heap_size], 0x18000000
+    jmp  .model_heap_done
+.model_heap_small_ok:
+    mov  rax, [rel model_heap_alloc_base]
+    mov  [rel model_heap_base], rax
+    mov  qword [rel model_heap_alloc_size], 0x4000000
+    mov  qword [rel model_heap_size], 0x4000000
 .model_heap_done:
     call hp_mapping_reserve            ; dedicated high-RAM preservation page
     call boot_model_preload             ; verified boot-volume file, before final memory map
@@ -2228,8 +2249,9 @@ mmap_final_publish:
     ret
 
 ; Preserve the executable half of UEFI Runtime Services inside our otherwise-NX
-; 0..16 GiB identity map. This is enabled only for the nonce-bound mutable
-; Manager handoff. Every EfiRuntimeServicesCode descriptor must be nonempty and
+; identity map. A validated Manager Try handoff gains read availability only;
+; mutable availability remains restricted to the nonce-bound mutable handoff.
+; Every EfiRuntimeServicesCode descriptor must be nonempty and
 ; wholly covered; otherwise the publisher stays disabled rather than jumping
 ; into an NX or unmapped firmware page after EBS.
 map_pbm_runtime_code:
@@ -2239,12 +2261,14 @@ map_pbm_runtime_code:
     push r14
     push r15
     mov  byte [rel pbm_runtime_code_mapped], 0
+    mov  byte [rel pbm_runtime_read_mapped], 0
     cmp  byte [rel pbm_manager_launch], 1
     jne  .out
-    cmp  byte [rel pbm_try_media], 1   ; RCQ-29 live Try: no runtime NV writer
-    je   .out
+    cmp  byte [rel pbm_try_media], 1   ; read-only Try, never a writer grant
+    je   .read_map
     test byte [rel pbm_flags], PBM_HF_MUTABLE_ATTEMPT
     jz   .out
+.read_map:
     mov  rsi, [rel mmap_buffer]
     mov  r12, [rel mmap_size]
     mov  r13, [rel mmap_desc_size]
@@ -2326,6 +2350,9 @@ map_pbm_runtime_code:
 .done:
     test r14d, r14d
     jz   .out
+    mov  byte [rel pbm_runtime_read_mapped], 1
+    cmp  byte [rel pbm_try_media], 1
+    je   .out                        ; every existing writer gate remains closed
     mov  byte [rel pbm_runtime_code_mapped], 1
     lea  rdi, [rel str_pbm_runtime_mapped]
     call serial_string
@@ -2772,3 +2799,9 @@ str_lab_preebs_hang: db '[PAOS64] lab.preebs.hang (QEMU lab: deliberate pre-EBS 
 %endif
 
 %include "boot/hp_usb_mapping.inc"
+
+%include "core/abi/wdata.inc"
+%macro WDATA_BSS_boot_runtime_read 0
+pbm_runtime_read_mapped: resb 1 ; coverage only, never authorizes persistent writes
+%endmacro
+WDATA_BSS_DEFER WDATA_BSS_boot_runtime_read

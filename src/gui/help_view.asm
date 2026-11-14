@@ -1,7 +1,7 @@
 ;; MODULE gui/help_view
 ;; LAYER 6
-;; EXPORTS help_view_init, help_view_draw, help_view_hit, help_view_key, help_view_click, help_view_type, hv_ids, hv_slot, hv_live
-;; IMPORTS gui/widget, gui/l10n_paint, gui/res_pack_boot, sec/session, boot/serial
+;; EXPORTS help_view_init, help_view_get, help_view_draw, help_view_hit, help_view_key, help_view_click, help_view_type, hv_ids, hv_slot, hv_live
+;; IMPORTS gui/widget, gui/window_mgmt, gui/l10n_paint, gui/res_pack_boot, svc/command_auth, sec/session, boot/serial
 ;; CAPS CAP_GUI
 ;; OWNER rc-input-claude
 ;; CONTEXT: bsp_only
@@ -16,7 +16,8 @@
 ; opens it on the owner's hand (gui/input_route). There is no Help on the lock
 ; screen in RC1 (root Q1).
 ;
-; PAINTING (t6). Help text reaches the screen only through rc-boot's two H1b
+; PAINTING (t6). The generated Commands page uses l10n_native_wrap; existing
+; help text reaches the screen through rc-boot's two H1b
 ; entries, l10n_help_paint / l10n_help_rows (gui/l10n_paint): this module
 ; passes (page, block) and never holds a pointer to help text or a parameter
 ; value. l10n_help_rows is the same wrap with nothing drawn, so the layout here
@@ -57,7 +58,7 @@ HV_ROW_PX       equ 16
 HV_MARK_CELLS   equ 2                   ; the right column for the ^ / v markers, and a gap
 HV_PREFIX_CELLS equ 3                   ; "1. " before a Contents title
 HV_MIN_CELLS    equ HV_PREFIX_CELLS + 8 ; narrower than this shows only the native line
-HV_ITEMS_MAX    equ 16                  ; a page's title + blocks; more is never laid out
+HV_ITEMS_MAX    equ COMMAND_CATALOG_BLOCKS + 1                  ; a page's title + blocks; more is never laid out
 HV_FG           equ GUI_TOK_LABEL_TEXT
 HV_BG           equ GUI_TOK_WINDOW_BODY
 HV_SEL_FG       equ GUI_TOK_CONTROL_TEXT
@@ -67,7 +68,7 @@ HV_SEL_BG       equ GUI_TOK_SELECTION
 ; to nothing and l10n_paint_wrap paints the English below, escaped and wrapped.
 HV_UNAVAILABLE_ID equ L10N_ID_hv_s_unavailable
 
-%if L10N_HELP_PAGES > 9
+%if L10N_HELP_PAGES + 1 > 9
 %error "the page indicator and the Contents numbers are one digit"
 %endif
 
@@ -83,7 +84,7 @@ help_view_init:
     lea  rsi, [rel help_view_draw]
     lea  rdx, [rel help_view_hit]
     lea  rcx, [rel help_view_set]
-    lea  r8,  [rel wgt_label_get]       ; WIDGETGET text: the form's token
+    lea  r8,  [rel help_view_get]       ; state: bounded navigation; value/text: form token
     mov  r9, (348 << 32) | 568
     call wgt_type_register
     mov  [rel help_view_type], eax
@@ -102,27 +103,214 @@ help_view_set:
     ret
 
 ; ---------------------------------------------------------------------------
-; help_view_hit(EDI widget id, ESI x, EDX y) -> EAX 1 inside its rectangle.
-; The kit's WT_HIT: it records the point, which the click hook that follows
-; the hit (wgt_pointer_hit_dispatch) maps to a Contents title.
+; WIDGETGET <id> state: passive navigation for this exact live Help instance.
+; page=contents or a zero-based page; selected/first are zero-based; pages=0
+; means no usable pack. Contents reports first=0 (retained page scroll is idle).
+; This is navigation state, not a paint/content result.
+; No rebind, navigation, resource mutation or authority follows from a read.
+; value/text retain the original form token through the kit getter.
+help_view_get:
+    cmp  byte [rsi], 's'
+    jne  .token
+    cmp  byte [rsi + 1], 't'
+    jne  .token
+    cmp  byte [rsi + 2], 'a'
+    jne  .token
+    cmp  byte [rsi + 3], 't'
+    jne  .token
+    cmp  byte [rsi + 4], 'e'
+    jne  .token
+    cmp  byte [rsi + 5], 0
+    jne  .token
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov  ebx, edi
+    cmp  byte [rel hv_live], 1
+    jne  .bad
+    cmp  byte [rel session_locked], SESSION_LOCKED
+    je   .bad
+    cmp  edi, [rel hv_ids + HV_W_VIEW * 4]
+    jne  .bad
+    call wgt_birth_lifetime
+    test rax, rax
+    jz   .bad
+    cmp  rax, [rel hv_birth]
+    jne  .bad
+    lea  ecx, [rbx + 1]
+    cmp  ecx, [rel hv_view]
+    jne  .bad
+    mov  edi, ebx
+    call wgt_slot_ptr
+    mov  ecx, [rel help_view_type]
+    cmp  ecx, -1
+    je   .bad
+    inc  ecx
+    cmp  [rax + WGI_TYPE], ecx
+    jne  .bad
+    mov  edi, [rel hv_slot]
+    cmp  [rax + WGI_WIN], edi
+    jne  .bad
+    call wmx_window_id
+    test eax, eax
+    jz   .bad
+    cmp  eax, [rel hv_host]
+    jne  .bad
+    call hv_help_page_count
+    mov  r12d, eax
+    mov  r13d, [rel hv_page]
+    mov  r14d, [rel hv_sel]
+    mov  r15d, [rel hv_first]
+    test eax, eax
+    jz   .empty
+    cmp  r14d, eax
+    jae  .bad
+    cmp  r13d, -1
+    je   .contents
+    cmp  r13d, eax
+    jae  .bad
+    mov  edi, r13d
+    call hv_help_page
+    test eax, eax
+    jz   .bad
+    cmp  ecx, HV_ITEMS_MAX
+    jae  .bad
+    cmp  r15d, ecx                     ; title=0, final block=block count
+    ja   .bad
+    jmp  .emit
+.empty:
+    test r14d, r14d
+    jnz  .bad
+    cmp  r13d, -1
+    jne  .bad
+.contents:
+    cmp  r15d, HV_ITEMS_MAX
+    jae  .bad
+    xor  r15d, r15d                    ; Contents has no first content block
+.emit:
+    lea  rbx, [rel hv_state_buf]
+    mov  rdi, rbx
+    lea  rsi, [rel hv_s_state]
+    call hv_state_put_str
+    cmp  r13d, -1
+    jne  .page
+    lea  rsi, [rel hv_s_contents]
+    call hv_state_put_str
+    jmp  .selection
+.page:
+    mov  eax, r13d
+    call hv_state_put_dec
+.selection:
+    lea  rsi, [rel hv_s_selected]
+    call hv_state_put_str
+    mov  eax, r14d
+    call hv_state_put_dec
+    lea  rsi, [rel hv_s_first]
+    call hv_state_put_str
+    mov  eax, r15d
+    call hv_state_put_dec
+    lea  rsi, [rel hv_s_pages]
+    call hv_state_put_str
+    mov  eax, r12d
+    call hv_state_put_dec
+    mov  byte [rdi], 0
+    mov  rax, rbx
+    jmp  .out
+.bad:
+    xor  eax, eax
+.out:
+    pop  r15
+    pop  r14
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+.token:
+    jmp  wgt_label_get
+
+; Only fixed protocol literals and bounded unsigned integers enter the 96-byte
+; scratch (maximum 75 bytes including NUL, even for ten-digit u32 numbers).
+hv_state_put_str:
+    mov  al, [rsi]
+    test al, al
+    jz   .out
+    mov  [rdi], al
+    inc  rsi
+    inc  rdi
+    jmp  hv_state_put_str
+.out:
+    ret
+
+hv_state_put_dec:
+    mov  r8d, 10
+    xor  ecx, ecx
+.div:
+    xor  edx, edx
+    div  r8d
+    add  dl, '0'
+    push rdx
+    inc  ecx
+    test eax, eax
+    jnz  .div
+.put:
+    pop  rdx
+    mov  [rdi], dl
+    inc  rdi
+    dec  ecx
+    jnz  .put
+    ret
+
 ; ---------------------------------------------------------------------------
+; help_view_hit(EDI widget id, ESI x, EDX y) -> EAX 1 inside its rectangle.
+; WT_HIT records the point for the following Contents click hook.
 help_view_hit:
     mov  [rel hv_hit_x], esi
     mov  [rel hv_hit_y], edx
     jmp  wgt_rect_hittest
 
-; hv_bind(EDI view widget id): a view the state does not belong to starts on
-; the Contents, first title selected. Touches memory only.
+; hv_bind(EDI view widget id): navigation belongs to this exact allocator
+; birth, not a slot number that a closed/reopened form can reuse. No widget
+; field is changed. An unavailable/retired identity retains no navigation.
 hv_bind:
-    lea  eax, [rdi + 1]
-    cmp  eax, [rel hv_view]
+    push rdi
+    call wgt_birth_lifetime
+    pop  rdi
+    test rax, rax
+    jz   .none
+    push rax                          ; keep the full allocator birth
+    push rdi
+    call wgt_slot_ptr
+    mov  edi, [rax + WGI_WIN]
+    call wmx_window_id
+    pop  rdi
+    mov  edx, eax
+    pop  rax
+    test edx, edx
+    jz   .none
+    lea  ecx, [rdi + 1]
+    cmp  ecx, [rel hv_view]
+    jne  .bind
+    cmp  rax, [rel hv_birth]
+    jne  .bind
+    cmp  edx, [rel hv_host]
     je   .out
-    mov  [rel hv_view], eax
+.bind:
+    mov  [rel hv_view], ecx
+    mov  [rel hv_birth], rax
+    mov  [rel hv_host], edx
+.reset:
     mov  dword [rel hv_page], -1
     mov  dword [rel hv_first], 0
     mov  dword [rel hv_sel], 0
 .out:
     ret
+.none:
+    mov  dword [rel hv_view], 0
+    mov  qword [rel hv_birth], 0
+    mov  dword [rel hv_host], 0
+    jmp  .reset
 
 ; hv_geom(EDI view widget id) -> EAX 1 and hv_gx/gy (text origin), hv_gcells /
 ; hv_grows (the text area: cells less the marker column, rows less the status
@@ -171,12 +359,19 @@ hv_measure:
     push r12
     push r13
     mov  r12d, edi
-    call l10n_help_page                 ; EAX title id, ECX blocks (0, 0: none)
+    call hv_help_page                 ; EAX title id, ECX blocks (0, 0: none)
     test eax, eax
     jz   .bad
     lea  r13d, [rcx + 1]                ; items
     cmp  r13d, HV_ITEMS_MAX
     ja   .bad
+    cmp  r13d, 16                      ; existing resource pages retain their cap
+    jbe  .size_ok
+    mov  edi, r12d
+    call hv_help_is_commands
+    test eax, eax
+    jz   .bad
+.size_ok:
     xor  ebx, ebx
 .item:
     cmp  ebx, r13d
@@ -184,7 +379,7 @@ hv_measure:
     mov  edi, r12d
     lea  esi, [rbx - 1]                 ; item 0 is the title (-1)
     mov  r10d, [rel hv_gcells]
-    call l10n_help_rows
+    call hv_help_rows
     test eax, eax
     jle  .bad                           ; -1, or a record of no rows
     cmp  eax, [rel hv_grows]
@@ -254,7 +449,7 @@ hv_contents:
     push rbx
     push r12
     push r13
-    call l10n_help_page_count
+    call hv_help_page_count
     mov  r13d, eax
     test eax, eax
     jz   .bad
@@ -267,7 +462,7 @@ hv_contents:
     mov  esi, -1
     mov  r10d, [rel hv_gcells]
     sub  r10d, HV_PREFIX_CELLS
-    call l10n_help_rows
+    call hv_help_rows
     test eax, eax
     jle  .bad
     lea  ecx, [r12 + rax]
@@ -353,7 +548,7 @@ help_view_draw:
     mov  ecx, HV_BG
     mov  r10d, [rel hv_gcells]
     mov  r11d, ebp
-    call l10n_help_paint
+    call hv_help_paint
     test eax, eax
     jz   .unavailable_refill            ; measured whole, not painted: never a partial page
     lea  r15d, [r15 + rbp + 1]
@@ -402,7 +597,7 @@ help_view_draw:
     mov  edx, '/'
     call wgt_draw_glyph
     add  r8d, HV_CELL_PX
-    call l10n_help_page_count
+    call hv_help_page_count
     lea  edx, [rax + '0']
     mov  ebx, HV_FG
     mov  ecx, HV_BG
@@ -413,7 +608,7 @@ help_view_draw:
     call hv_contents
     test eax, eax
     jz   .unavailable
-    call l10n_help_page_count
+    call hv_help_page_count
     mov  r13d, eax
     mov  eax, [rel hv_sel]
     cmp  eax, r13d
@@ -459,7 +654,7 @@ help_view_draw:
     mov  r10d, [rel hv_gcells]
     sub  r10d, HV_PREFIX_CELLS
     mov  r11d, ebp
-    call l10n_help_paint
+    call hv_help_paint
     test eax, eax
     jz   .unavailable_refill
     inc  r14d
@@ -522,7 +717,7 @@ hv_to_contents:
 hv_step:
     push rbx
     mov  ebx, esi
-    call l10n_help_page_count
+    call hv_help_page_count
     mov  ecx, [rel hv_page]
     cmp  ecx, -1
     jne  .page
@@ -598,7 +793,7 @@ help_view_key:
     cmp  dword [rel hv_page], -1
     jne  .page
     ; ---- Contents ----
-    call l10n_help_page_count
+    call hv_help_page_count
     lea  r13d, [rax - 1]                ; the last title (-1: no help, navigation does nothing)
     mov  ecx, [rel hv_sel]
     cmp  r12d, GUI_KEY_UP
@@ -835,7 +1030,7 @@ help_view_click:
     shr  eax, 3
     cmp  eax, [rel hv_gcells]
     jae  .taken                         ; the marker column is no title
-    call l10n_help_page_count
+    call hv_help_page_count
     xor  ecx, ecx
 .find:
     cmp  ecx, eax
@@ -865,6 +1060,115 @@ help_view_click:
     pop  rbx
     ret
 
+; The final page is native, generated command documentation. Existing pages
+; keep their validated resource format and unavailable-pack guard. Navigation,
+; sizing, whole-block painting and session lock handling are shared unchanged.
+hv_help_page_count:
+    call l10n_help_page_count
+    test eax, eax
+    jz   .out
+    cmp  eax, L10N_HELP_PAGES
+    ja   .bad
+    inc  eax
+.out:
+    ret
+.bad:
+    xor  eax, eax
+    ret
+
+hv_help_is_commands:
+    ; Preserve the page/block and paint geometry while querying the pack.
+    push rdi
+    call l10n_help_page_count
+    pop  rdi
+    test eax, eax
+    jz   .no
+    cmp  eax, L10N_HELP_PAGES
+    ja   .no
+    cmp  edi, eax
+    sete al
+    movzx eax, al
+    ret
+.no:
+    xor  eax, eax
+    ret
+
+hv_help_page:
+    call hv_help_is_commands
+    test eax, eax
+    jz   .old
+    call command_catalog_block_count
+    mov  ecx, eax
+    mov  eax, 1                        ; native title exists; not a catalog ID
+    ret
+.old:
+    call l10n_help_page
+    ret
+
+hv_help_rows:
+    call hv_help_is_commands
+    test eax, eax
+    jz   .old
+    push rdi
+    push rsi
+    mov  edi, esi
+    call command_catalog_block_text
+    test rsi, rsi
+    jz   .bad
+    push rdx
+    push r11
+    xor  edx, edx
+    mov  r11d, -1
+    call l10n_native_wrap
+    pop  r11
+    pop  rdx
+    pop  rsi
+    pop  rdi
+    ret
+.bad:
+    pop  rsi
+    pop  rdi
+    mov  eax, -1
+    ret
+.old:
+    call l10n_help_rows
+    ret
+
+hv_help_paint:
+    call hv_help_is_commands
+    test eax, eax
+    jz   .old
+    push rdi
+    push rsi
+    mov  edi, esi
+    call command_catalog_block_text
+    test rsi, rsi
+    jz   .bad
+    push rdx
+    mov  edx, 1                        ; l10n's existing DRAW flag
+    call l10n_native_wrap
+    pop  rdx
+    pop  rsi
+    pop  rdi
+    test eax, eax
+    setg al
+    movzx eax, al
+    ret
+.bad:
+    pop  rsi
+    pop  rdi
+    xor  eax, eax
+    ret
+.old:
+    call l10n_help_paint
+    ret
+
+; Machine-readable state fields; these are not displayed UI strings.
+hv_s_state:       db "help page=", 0
+hv_s_contents:    db "contents", 0
+hv_s_selected:    db " selected=", 0
+hv_s_first:       db " first=", 0
+hv_s_pages:       db " pages=", 0
 hv_str_type:       db "helptext", 0
 hv_s_unavailable:  db "Offline help is not available in this build.", 0
 
@@ -875,6 +1179,10 @@ help_view_type:    resd 1               ; the registered type index (-1: none)
 hv_ids:            resd HV_W_COUNT      ; the live Help window's widgets (sp_help_scan)
 hv_slot:           resd 1               ; its WM slot
 hv_view:           resd 1               ; the view id + 1 the state belongs to, 0 none
+alignb 8
+hv_birth:          resq 1               ; exact native allocator birth, 0 none
+hv_host:           resd 1               ; stamped WM identity captured with birth
+hv_state_buf:      resb 96              ; passive machine-readable state scratch
 hv_page:           resd 1               ; -1 the Contents, else the page shown
 hv_first:          resd 1               ; the first item shown (0 = the title)
 hv_sel:            resd 1               ; the selected Contents title
@@ -887,8 +1195,8 @@ hv_grows:          resd 1
 hv_acells:         resd 1
 hv_arows:          resd 1
 hv_h:              resd HV_ITEMS_MAX    ; rows of each item of the measured page
-hv_crow:           resd L10N_HELP_PAGES ; each Contents title's first row
-hv_cn:             resd L10N_HELP_PAGES ; and its rows
+hv_crow:           resd L10N_HELP_PAGES + 1 ; each Contents title's first row
+hv_cn:             resd L10N_HELP_PAGES + 1 ; and its rows
 hv_live:           resb 1               ; 1 while the whole Help form is open
 %endmacro
 WDATA_BSS_DEFER WDATA_BSS_gui_help_view
