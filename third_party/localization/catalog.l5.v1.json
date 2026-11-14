@@ -1,0 +1,681 @@
+{
+  "locales": {
+    "de": {
+      "site.0028511668410087929cab04": "F: {question}",
+      "site.116a7e3c26d78d8a3853fec6": "(nativ, keine Optionen)",
+      "site.13e4a2328b9ba427b6037632": "SSH-Sitzung ({programs})",
+      "site.1ec6fdc4b552025774ec8965": "dieses Terminal schließen",
+      "site.2b1523e735f45bef584b23c7": " beeinträchtigt",
+      "site.32b06b499a7da2178e02372a": " kein Gerät vorhanden",
+      "site.32c1282934eaeb2671632d2b": "beliebiger PaOS-Befehl (Groß-/Kleinschreibung egal)",
+      "site.3aba6655eccf645079a3679d": " Verzeichnis",
+      "site.3af44459c53c7def2adcd6b3": "lokalen Verlauf dieses Fensters anzeigen (keine Argumente)",
+      "site.4442fc8a6bbc2bbc1d4436d9": "ssh: Verbindung zu {endpoint} wird aufgebaut (TERM=xterm-256color) ...",
+      "site.4444a54547d64e9fa226bf32": "Textskalierung",
+      "site.4692b183accb9ade004f811d": "PaOS wird verlassen ...",
+      "site.51581e9b8b1ea228f1f6a187": "Gespeichert: {zone}; {layout}",
+      "site.57a293f94aa01080d1e4047a": " Zustand unbekannt",
+      "site.5976c96778e99edc8746343d": "Bildschirm leeren",
+      "site.5ad78ed7e22573b54d4b9526": "Akkuladung kritisch: Ausschalten in {seconds} s",
+      "site.62f2af00400d4074de85b875": "(Befehl für den Eigentümer, keine Optionen)",
+      "site.634f44c7acd50e4c992249b7": "A: {answer}",
+      "site.6a10bf3fa3af0d28514990c3": "zu Windows zurückkehren (fragt vorher nach)",
+      "site.6e1553996ad7d24beb0e76c4": "(leer)",
+      "site.6e8ca5005ca8aae5f7fc247c": "Unverändert: {zone}; {layout}",
+      "site.7ef5515f005f98e373717b02": "nicht zugeordnet; jeder nennt sein natives Verb",
+      "site.8e16bd2d9ffe0dc5b082d621": "^ {count} darüber",
+      "site.8e692573e849556079f0d96f": "in diesem Build noch nicht verfügbar (kein SSH-Client)",
+      "site.95dc2b521275780b40483f40": "(Befehl für den Eigentümer, keine Optionen)",
+      "site.99abe65c603a0cd3c9315077": "ausschalten (fragt vorher nach)",
+      "site.9a3b60a851d10f44bb9f9b4c": "(Befehl für den Eigentümer, keine Optionen)",
+      "site.9e9110df139810f929443b81": "natives {verb}: gibt die Zahl zurück (kein ICMP)",
+      "site.a9f76ae06b3ae6908ef4e093": " in Ordnung",
+      "site.ab9a28aa209e625498ad24b4": "Modell: {mode}",
+      "site.b388fdad27a1d934deb1a3ec": "Aktuell: {zone}; {layout}",
+      "site.b9e6795a0bf99ab33ca8481c": "Nachtmodus",
+      "site.bf40cc73958de7a874173578": " ausgefallen",
+      "site.bfbd95ed576579208a52affd": " ausgewählt ",
+      "site.c5c8b24a88b7b715604c934e": "{argument} ausgeben",
+      "site.cbda596925751bd0fcb43031": "wird ausgeschaltet ...",
+      "site.cd3a4238f96668f88fae8e5b": "(nativ, keine Optionen)",
+      "site.d391c825ad5565dbba12dd76": "des ausgewählten Volumes (keine Optionen, kein Pfad)",
+      "site.d4a87fbd5562b8153cac60a4": "ssh-Schlüssel dieses Starts (zu {file} auf dem Server hinzufügen)",
+      "site.d4a9cff18b1bf53957b55496": "(nativ, keine Optionen)",
+      "site.d6e4ff068a0aac7fcc492188": "startet einen Kopierauftrag (Befehl für den Eigentümer, keine Optionen)",
+      "site.d9fe803727358da4fa80ec7c": "Computer neu starten (fragt vorher nach)",
+      "site.e8bad120155dcb61550b63d7": " Datei",
+      "site.e9dc3a69800508762740b700": "(Befehl für den Eigentümer, keine Optionen)",
+      "site.ff656a0ef70213d552f3f9bf": "... {count} weitere"
+    },
+    "en": {
+      "site.0028511668410087929cab04": "Q: {question}",
+      "site.116a7e3c26d78d8a3853fec6": "(native, no flags)",
+      "site.13e4a2328b9ba427b6037632": "SSH session ({programs})",
+      "site.1ec6fdc4b552025774ec8965": "close this Terminal",
+      "site.2b1523e735f45bef584b23c7": " degraded",
+      "site.32b06b499a7da2178e02372a": " absent",
+      "site.32c1282934eaeb2671632d2b": "any PaOS command (case-insensitive)",
+      "site.3aba6655eccf645079a3679d": " D",
+      "site.3af44459c53c7def2adcd6b3": "list this window's local history (no arguments)",
+      "site.4442fc8a6bbc2bbc1d4436d9": "ssh: connecting to {endpoint} (TERM=xterm-256color) ...",
+      "site.4444a54547d64e9fa226bf32": "text_scale",
+      "site.4692b183accb9ade004f811d": "leaving PaOS ...",
+      "site.51581e9b8b1ea228f1f6a187": "Saved: {zone}; {layout}",
+      "site.57a293f94aa01080d1e4047a": " h?",
+      "site.5976c96778e99edc8746343d": "clear the screen",
+      "site.5ad78ed7e22573b54d4b9526": "Battery critical: shutting down in {seconds} s",
+      "site.62f2af00400d4074de85b875": "(owner verb, no flags)",
+      "site.634f44c7acd50e4c992249b7": "A: {answer}",
+      "site.6a10bf3fa3af0d28514990c3": "return to Windows (asks first)",
+      "site.6e1553996ad7d24beb0e76c4": "(empty)",
+      "site.6e8ca5005ca8aae5f7fc247c": "Unchanged: {zone}; {layout}",
+      "site.7ef5515f005f98e373717b02": "not mapped; each names its native verb",
+      "site.8e16bd2d9ffe0dc5b082d621": "^ {count} above",
+      "site.8e692573e849556079f0d96f": "not in this build yet (no SSH client)",
+      "site.95dc2b521275780b40483f40": "(owner verb, no flags)",
+      "site.99abe65c603a0cd3c9315077": "power off (asks first)",
+      "site.9a3b60a851d10f44bb9f9b4c": "(owner verb, no flags)",
+      "site.9e9110df139810f929443b81": "the native {verb}: echoes the number (no ICMP)",
+      "site.a9f76ae06b3ae6908ef4e093": " ok",
+      "site.ab9a28aa209e625498ad24b4": "model: {mode}",
+      "site.b388fdad27a1d934deb1a3ec": "Current: {zone}; {layout}",
+      "site.b9e6795a0bf99ab33ca8481c": "night_mode",
+      "site.bf40cc73958de7a874173578": " dead",
+      "site.bfbd95ed576579208a52affd": " sel ",
+      "site.c5c8b24a88b7b715604c934e": "print {argument}",
+      "site.cbda596925751bd0fcb43031": "powering off ...",
+      "site.cd3a4238f96668f88fae8e5b": "(native, no flags)",
+      "site.d391c825ad5565dbba12dd76": "of the selected volume (no flags, no path)",
+      "site.d4a87fbd5562b8153cac60a4": "this boot's ssh key (add it to the server's {file})",
+      "site.d4a9cff18b1bf53957b55496": "(native, no flags)",
+      "site.d6e4ff068a0aac7fcc492188": "starts a copy job (owner verb, no flags)",
+      "site.d9fe803727358da4fa80ec7c": "restart the computer (asks first)",
+      "site.e8bad120155dcb61550b63d7": " F",
+      "site.e9dc3a69800508762740b700": "(owner verb, no flags)",
+      "site.ff656a0ef70213d552f3f9bf": "... {count} more"
+    },
+    "es": {
+      "site.0028511668410087929cab04": "P: {question}",
+      "site.116a7e3c26d78d8a3853fec6": "(nativo, sin opciones)",
+      "site.13e4a2328b9ba427b6037632": "Sesión SSH ({programs})",
+      "site.1ec6fdc4b552025774ec8965": "cerrar este Terminal",
+      "site.2b1523e735f45bef584b23c7": " degradado",
+      "site.32b06b499a7da2178e02372a": " sin dispositivo",
+      "site.32c1282934eaeb2671632d2b": "cualquier comando de PaOS (sin distinguir mayúsculas y minúsculas)",
+      "site.3aba6655eccf645079a3679d": " directorio",
+      "site.3af44459c53c7def2adcd6b3": "listar el historial local de esta ventana (sin argumentos)",
+      "site.4442fc8a6bbc2bbc1d4436d9": "ssh: conectando a {endpoint} (TERM=xterm-256color) ...",
+      "site.4444a54547d64e9fa226bf32": "Escala del texto",
+      "site.4692b183accb9ade004f811d": "saliendo de PaOS ...",
+      "site.51581e9b8b1ea228f1f6a187": "Guardado: {zone}; {layout}",
+      "site.57a293f94aa01080d1e4047a": " estado desconocido",
+      "site.5976c96778e99edc8746343d": "borrar la pantalla",
+      "site.5ad78ed7e22573b54d4b9526": "Batería crítica: se apagará en {seconds} s",
+      "site.62f2af00400d4074de85b875": "(comando del propietario, sin opciones)",
+      "site.634f44c7acd50e4c992249b7": "R: {answer}",
+      "site.6a10bf3fa3af0d28514990c3": "volver a Windows (se pide confirmación primero)",
+      "site.6e1553996ad7d24beb0e76c4": "(vacío)",
+      "site.6e8ca5005ca8aae5f7fc247c": "Sin cambios: {zone}; {layout}",
+      "site.7ef5515f005f98e373717b02": "no están asociados; cada uno indica su verbo nativo",
+      "site.8e16bd2d9ffe0dc5b082d621": "^ {count} anteriores",
+      "site.8e692573e849556079f0d96f": "aún no está en esta compilación (sin cliente SSH)",
+      "site.95dc2b521275780b40483f40": "(comando del propietario, sin opciones)",
+      "site.99abe65c603a0cd3c9315077": "apagar (se pide confirmación primero)",
+      "site.9a3b60a851d10f44bb9f9b4c": "(comando del propietario, sin opciones)",
+      "site.9e9110df139810f929443b81": "{verb} nativo: devuelve el número (sin ICMP)",
+      "site.a9f76ae06b3ae6908ef4e093": " correcto",
+      "site.ab9a28aa209e625498ad24b4": "modelo: {mode}",
+      "site.b388fdad27a1d934deb1a3ec": "Actual: {zone}; {layout}",
+      "site.b9e6795a0bf99ab33ca8481c": "Modo nocturno",
+      "site.bf40cc73958de7a874173578": " fuera de servicio",
+      "site.bfbd95ed576579208a52affd": " seleccionado ",
+      "site.c5c8b24a88b7b715604c934e": "imprimir {argument}",
+      "site.cbda596925751bd0fcb43031": "apagando ...",
+      "site.cd3a4238f96668f88fae8e5b": "(nativo, sin opciones)",
+      "site.d391c825ad5565dbba12dd76": "del volumen seleccionado (sin opciones ni ruta)",
+      "site.d4a87fbd5562b8153cac60a4": "clave ssh de este arranque (añádala a {file} del servidor)",
+      "site.d4a9cff18b1bf53957b55496": "(nativo, sin opciones)",
+      "site.d6e4ff068a0aac7fcc492188": "inicia una tarea de copia (comando del propietario, sin opciones)",
+      "site.d9fe803727358da4fa80ec7c": "reiniciar el equipo (se pide confirmación primero)",
+      "site.e8bad120155dcb61550b63d7": " archivo",
+      "site.e9dc3a69800508762740b700": "(comando del propietario, sin opciones)",
+      "site.ff656a0ef70213d552f3f9bf": "... {count} más"
+    },
+    "fr": {
+      "site.0028511668410087929cab04": "Q: {question}",
+      "site.116a7e3c26d78d8a3853fec6": "(natif, sans options)",
+      "site.13e4a2328b9ba427b6037632": "Session SSH ({programs})",
+      "site.1ec6fdc4b552025774ec8965": "fermer ce Terminal",
+      "site.2b1523e735f45bef584b23c7": " dégradé",
+      "site.32b06b499a7da2178e02372a": " appareil absent",
+      "site.32c1282934eaeb2671632d2b": "toute commande PaOS (sans distinction de casse)",
+      "site.3aba6655eccf645079a3679d": " dossier",
+      "site.3af44459c53c7def2adcd6b3": "lister l'historique local de cette fenêtre (sans arguments)",
+      "site.4442fc8a6bbc2bbc1d4436d9": "ssh: connexion en cours à {endpoint} (TERM=xterm-256color) ...",
+      "site.4444a54547d64e9fa226bf32": "Échelle du texte",
+      "site.4692b183accb9ade004f811d": "sortie de PaOS ...",
+      "site.51581e9b8b1ea228f1f6a187": "Enregistré: {zone}; {layout}",
+      "site.57a293f94aa01080d1e4047a": " état inconnu",
+      "site.5976c96778e99edc8746343d": "effacer l'écran",
+      "site.5ad78ed7e22573b54d4b9526": "Batterie critique: arrêt dans {seconds} s",
+      "site.62f2af00400d4074de85b875": "(commande du propriétaire, sans options)",
+      "site.634f44c7acd50e4c992249b7": "R: {answer}",
+      "site.6a10bf3fa3af0d28514990c3": "revenir à Windows (confirmation demandée d'abord)",
+      "site.6e1553996ad7d24beb0e76c4": "(vide)",
+      "site.6e8ca5005ca8aae5f7fc247c": "Inchangé: {zone}; {layout}",
+      "site.7ef5515f005f98e373717b02": "non associés; chacun indique sa commande native",
+      "site.8e16bd2d9ffe0dc5b082d621": "^ {count} au-dessus",
+      "site.8e692573e849556079f0d96f": "pas encore dans cette version (pas de client SSH)",
+      "site.95dc2b521275780b40483f40": "(commande du propriétaire, sans options)",
+      "site.99abe65c603a0cd3c9315077": "éteindre l'ordinateur (confirmation demandée d'abord)",
+      "site.9a3b60a851d10f44bb9f9b4c": "(commande du propriétaire, sans options)",
+      "site.9e9110df139810f929443b81": "{verb} natif: renvoie le nombre (sans ICMP)",
+      "site.a9f76ae06b3ae6908ef4e093": " correct",
+      "site.ab9a28aa209e625498ad24b4": "modèle: {mode}",
+      "site.b388fdad27a1d934deb1a3ec": "Actuel: {zone}; {layout}",
+      "site.b9e6795a0bf99ab33ca8481c": "Mode nuit",
+      "site.bf40cc73958de7a874173578": " hors service",
+      "site.bfbd95ed576579208a52affd": " sélectionné ",
+      "site.c5c8b24a88b7b715604c934e": "afficher {argument}",
+      "site.cbda596925751bd0fcb43031": "arrêt en cours ...",
+      "site.cd3a4238f96668f88fae8e5b": "(natif, sans options)",
+      "site.d391c825ad5565dbba12dd76": "du volume sélectionné (sans options ni chemin)",
+      "site.d4a87fbd5562b8153cac60a4": "clé ssh de ce démarrage (à ajouter au fichier {file} du serveur)",
+      "site.d4a9cff18b1bf53957b55496": "(natif, sans options)",
+      "site.d6e4ff068a0aac7fcc492188": "démarre une tâche de copie (commande du propriétaire, sans options)",
+      "site.d9fe803727358da4fa80ec7c": "redémarrer l'ordinateur (confirmation demandée d'abord)",
+      "site.e8bad120155dcb61550b63d7": " fichier",
+      "site.e9dc3a69800508762740b700": "(commande du propriétaire, sans options)",
+      "site.ff656a0ef70213d552f3f9bf": "... {count} de plus"
+    },
+    "ja": {
+      "site.0028511668410087929cab04": "質問：{question}",
+      "site.116a7e3c26d78d8a3853fec6": "（ネイティブ、オプションなし）",
+      "site.13e4a2328b9ba427b6037632": "SSHセッション（{programs}）",
+      "site.1ec6fdc4b552025774ec8965": "このTerminalを閉じる",
+      "site.2b1523e735f45bef584b23c7": " 機能低下",
+      "site.32b06b499a7da2178e02372a": " デバイスなし",
+      "site.32c1282934eaeb2671632d2b": "任意のPaOSコマンド（大文字と小文字の区別なし）",
+      "site.3aba6655eccf645079a3679d": " ディレクトリ",
+      "site.3af44459c53c7def2adcd6b3": "このウィンドウのローカル履歴を表示（引数なし）",
+      "site.4442fc8a6bbc2bbc1d4436d9": "ssh：{endpoint}に接続中（TERM=xterm-256color）...",
+      "site.4444a54547d64e9fa226bf32": "文字の大きさ",
+      "site.4692b183accb9ade004f811d": "PaOSを終了しています...",
+      "site.51581e9b8b1ea228f1f6a187": "保存済み：{zone}、{layout}",
+      "site.57a293f94aa01080d1e4047a": " 状態不明",
+      "site.5976c96778e99edc8746343d": "画面を消去",
+      "site.5ad78ed7e22573b54d4b9526": "バッテリー残量が危険です：{seconds} s後にシャットダウン",
+      "site.62f2af00400d4074de85b875": "（所有者用コマンド、オプションなし）",
+      "site.634f44c7acd50e4c992249b7": "回答：{answer}",
+      "site.6a10bf3fa3af0d28514990c3": "Windowsに戻る（事前に確認します）",
+      "site.6e1553996ad7d24beb0e76c4": "（空）",
+      "site.6e8ca5005ca8aae5f7fc247c": "変更なし：{zone}、{layout}",
+      "site.7ef5515f005f98e373717b02": "未対応：それぞれに対応するネイティブコマンド名を案内",
+      "site.8e16bd2d9ffe0dc5b082d621": "^ 上に{count}件",
+      "site.8e692573e849556079f0d96f": "このビルドではまだ利用できません（SSHクライアントなし）",
+      "site.95dc2b521275780b40483f40": "（所有者用コマンド、オプションなし）",
+      "site.99abe65c603a0cd3c9315077": "電源を切る（事前に確認します）",
+      "site.9a3b60a851d10f44bb9f9b4c": "（所有者用コマンド、オプションなし）",
+      "site.9e9110df139810f929443b81": "ネイティブの{verb}：数値をそのまま返す（ICMPではありません）",
+      "site.a9f76ae06b3ae6908ef4e093": " 正常",
+      "site.ab9a28aa209e625498ad24b4": "モデル：{mode}",
+      "site.b388fdad27a1d934deb1a3ec": "現在：{zone}、{layout}",
+      "site.b9e6795a0bf99ab33ca8481c": "夜間モード",
+      "site.bf40cc73958de7a874173578": " 故障",
+      "site.bfbd95ed576579208a52affd": " 選択済み ",
+      "site.c5c8b24a88b7b715604c934e": "{argument}を表示",
+      "site.cbda596925751bd0fcb43031": "電源を切っています...",
+      "site.cd3a4238f96668f88fae8e5b": "（ネイティブ、オプションなし）",
+      "site.d391c825ad5565dbba12dd76": "選択したボリュームの情報（オプションなし、パスなし）",
+      "site.d4a87fbd5562b8153cac60a4": "この起動で使うssh鍵（サーバーの{file}に追加）",
+      "site.d4a9cff18b1bf53957b55496": "（ネイティブ、オプションなし）",
+      "site.d6e4ff068a0aac7fcc492188": "コピー処理を開始（所有者用コマンド、オプションなし）",
+      "site.d9fe803727358da4fa80ec7c": "コンピューターを再起動（事前に確認します）",
+      "site.e8bad120155dcb61550b63d7": " ファイル",
+      "site.e9dc3a69800508762740b700": "（所有者用コマンド、オプションなし）",
+      "site.ff656a0ef70213d552f3f9bf": "... さらに{count}件"
+    },
+    "zh-Hans": {
+      "site.0028511668410087929cab04": "问：{question}",
+      "site.116a7e3c26d78d8a3853fec6": "（原生命令，无选项）",
+      "site.13e4a2328b9ba427b6037632": "SSH会话（{programs}）",
+      "site.1ec6fdc4b552025774ec8965": "关闭此Terminal",
+      "site.2b1523e735f45bef584b23c7": " 降级",
+      "site.32b06b499a7da2178e02372a": " 无设备",
+      "site.32c1282934eaeb2671632d2b": "任意PaOS命令（不区分大小写）",
+      "site.3aba6655eccf645079a3679d": " 目录",
+      "site.3af44459c53c7def2adcd6b3": "列出此窗口的本地历史记录（无参数）",
+      "site.4442fc8a6bbc2bbc1d4436d9": "ssh：正在连接{endpoint}（TERM=xterm-256color）...",
+      "site.4444a54547d64e9fa226bf32": "文字缩放",
+      "site.4692b183accb9ade004f811d": "正在退出PaOS...",
+      "site.51581e9b8b1ea228f1f6a187": "已保存：{zone}；{layout}",
+      "site.57a293f94aa01080d1e4047a": " 状态未知",
+      "site.5976c96778e99edc8746343d": "清空屏幕",
+      "site.5ad78ed7e22573b54d4b9526": "电池电量严重不足：将在{seconds} s后关机",
+      "site.62f2af00400d4074de85b875": "（所有者命令，无选项）",
+      "site.634f44c7acd50e4c992249b7": "答：{answer}",
+      "site.6a10bf3fa3af0d28514990c3": "返回Windows（会先请求确认）",
+      "site.6e1553996ad7d24beb0e76c4": "（空）",
+      "site.6e8ca5005ca8aae5f7fc247c": "未更改：{zone}；{layout}",
+      "site.7ef5515f005f98e373717b02": "未映射；每个命令都会指出其原生命令",
+      "site.8e16bd2d9ffe0dc5b082d621": "^ 上方{count}项",
+      "site.8e692573e849556079f0d96f": "此构建尚未提供（无SSH客户端）",
+      "site.95dc2b521275780b40483f40": "（所有者命令，无选项）",
+      "site.99abe65c603a0cd3c9315077": "关闭电源（会先请求确认）",
+      "site.9a3b60a851d10f44bb9f9b4c": "（所有者命令，无选项）",
+      "site.9e9110df139810f929443b81": "原生{verb}：原样返回数字（非ICMP）",
+      "site.a9f76ae06b3ae6908ef4e093": " 正常",
+      "site.ab9a28aa209e625498ad24b4": "模型：{mode}",
+      "site.b388fdad27a1d934deb1a3ec": "当前：{zone}；{layout}",
+      "site.b9e6795a0bf99ab33ca8481c": "夜间模式",
+      "site.bf40cc73958de7a874173578": " 故障",
+      "site.bfbd95ed576579208a52affd": " 已选择 ",
+      "site.c5c8b24a88b7b715604c934e": "输出{argument}",
+      "site.cbda596925751bd0fcb43031": "正在关闭电源...",
+      "site.cd3a4238f96668f88fae8e5b": "（原生命令，无选项）",
+      "site.d391c825ad5565dbba12dd76": "所选卷的信息（无选项，无路径）",
+      "site.d4a87fbd5562b8153cac60a4": "本次启动的ssh密钥（添加到服务器的{file}）",
+      "site.d4a9cff18b1bf53957b55496": "（原生命令，无选项）",
+      "site.d6e4ff068a0aac7fcc492188": "启动复制任务（所有者命令，无选项）",
+      "site.d9fe803727358da4fa80ec7c": "重启计算机（会先请求确认）",
+      "site.e8bad120155dcb61550b63d7": " 文件",
+      "site.e9dc3a69800508762740b700": "（所有者命令，无选项）",
+      "site.ff656a0ef70213d552f3f9bf": "... 另有{count}项"
+    }
+  },
+  "messages": [
+    {
+      "critical": false,
+      "english": "Q: {question}",
+      "id": 315,
+      "key": "site.0028511668410087929cab04",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/chat_app.asm:str_chat_qpre",
+      "params": {
+        "question": "text"
+      }
+    },
+    {
+      "critical": false,
+      "english": "A: {answer}",
+      "id": 316,
+      "key": "site.634f44c7acd50e4c992249b7",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/chat_app.asm:str_chat_apre",
+      "params": {
+        "answer": "text"
+      }
+    },
+    {
+      "critical": false,
+      "english": "model: {mode}",
+      "id": 317,
+      "key": "site.ab9a28aa209e625498ad24b4",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/chat_app.asm:str_chat_mpre",
+      "params": {
+        "mode": "text"
+      }
+    },
+    {
+      "critical": false,
+      "english": "night_mode",
+      "id": 626,
+      "key": "site.b9e6795a0bf99ab33ca8481c",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/form_loader.asm:form_blob_sysprops",
+      "params": {}
+    },
+    {
+      "critical": false,
+      "english": "text_scale",
+      "id": 628,
+      "key": "site.4444a54547d64e9fa226bf32",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/form_loader.asm:form_blob_sysprops",
+      "params": {}
+    },
+    {
+      "critical": false,
+      "english": " F",
+      "id": 699,
+      "key": "site.e8bad120155dcb61550b63d7",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/form_loader.asm:str_fsroot_file",
+      "params": {}
+    },
+    {
+      "critical": false,
+      "english": " D",
+      "id": 700,
+      "key": "site.3aba6655eccf645079a3679d",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/form_loader.asm:str_fsroot_dir",
+      "params": {}
+    },
+    {
+      "critical": false,
+      "english": "(empty)",
+      "id": 701,
+      "key": "site.6e1553996ad7d24beb0e76c4",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/form_loader.asm:str_fsroot_empty",
+      "params": {}
+    },
+    {
+      "critical": false,
+      "english": "^ {count} above",
+      "id": 713,
+      "key": "site.8e16bd2d9ffe0dc5b082d621",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/form_loader.asm:str_exp_above_tail",
+      "params": {
+        "count": "uint"
+      }
+    },
+    {
+      "critical": false,
+      "english": "... {count} more",
+      "id": 714,
+      "key": "site.ff656a0ef70213d552f3f9bf",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/form_loader.asm:str_exp_more_tail",
+      "params": {
+        "count": "uint"
+      }
+    },
+    {
+      "critical": false,
+      "english": " ok",
+      "id": 1035,
+      "key": "site.a9f76ae06b3ae6908ef4e093",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/netmon_form.asm:nm_w_ok",
+      "params": {}
+    },
+    {
+      "critical": false,
+      "english": " degraded",
+      "id": 1036,
+      "key": "site.2b1523e735f45bef584b23c7",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/netmon_form.asm:nm_w_degraded",
+      "params": {}
+    },
+    {
+      "critical": false,
+      "english": " absent",
+      "id": 1037,
+      "key": "site.32b06b499a7da2178e02372a",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/netmon_form.asm:nm_w_absent",
+      "params": {}
+    },
+    {
+      "critical": false,
+      "english": " dead",
+      "id": 1038,
+      "key": "site.bf40cc73958de7a874173578",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/netmon_form.asm:nm_w_dead",
+      "params": {}
+    },
+    {
+      "critical": false,
+      "english": " h?",
+      "id": 1039,
+      "key": "site.57a293f94aa01080d1e4047a",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/netmon_form.asm:nm_w_unknown",
+      "params": {}
+    },
+    {
+      "critical": false,
+      "english": " sel ",
+      "id": 1040,
+      "key": "site.bfbd95ed576579208a52affd",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/netmon_form.asm:nm_w_sel",
+      "params": {}
+    },
+    {
+      "critical": false,
+      "english": "Current: {zone}; {layout}",
+      "id": 1098,
+      "key": "site.b388fdad27a1d934deb1a3ec",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/settings_prefs.asm:stp_s_current",
+      "params": {
+        "layout": "text",
+        "zone": "text"
+      }
+    },
+    {
+      "critical": false,
+      "english": "Saved: {zone}; {layout}",
+      "id": 1099,
+      "key": "site.51581e9b8b1ea228f1f6a187",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/settings_prefs.asm:stp_s_saved",
+      "params": {
+        "layout": "text",
+        "zone": "text"
+      }
+    },
+    {
+      "critical": false,
+      "english": "Unchanged: {zone}; {layout}",
+      "id": 1100,
+      "key": "site.6e8ca5005ca8aae5f7fc247c",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/settings_prefs.asm:stp_s_unchanged",
+      "params": {
+        "layout": "text",
+        "zone": "text"
+      }
+    },
+    {
+      "critical": false,
+      "english": "SSH session ({programs})",
+      "id": 1192,
+      "key": "site.13e4a2328b9ba427b6037632",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/terminal_app.asm:term_help_text",
+      "params": {
+        "programs": "text"
+      }
+    },
+    {
+      "critical": true,
+      "english": "this boot's ssh key (add it to the server's {file})",
+      "id": 1193,
+      "key": "site.d4a87fbd5562b8153cac60a4",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/terminal_app.asm:term_help_text",
+      "params": {
+        "file": "path"
+      }
+    },
+    {
+      "critical": false,
+      "english": "not in this build yet (no SSH client)",
+      "id": 1194,
+      "key": "site.8e692573e849556079f0d96f",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/terminal_app.asm:term_help_text",
+      "params": {}
+    },
+    {
+      "critical": false,
+      "english": "clear the screen",
+      "id": 1195,
+      "key": "site.5976c96778e99edc8746343d",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/terminal_app.asm:term_help_text",
+      "params": {}
+    },
+    {
+      "critical": false,
+      "english": "print {argument}",
+      "id": 1196,
+      "key": "site.c5c8b24a88b7b715604c934e",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/terminal_app.asm:term_help_text",
+      "params": {
+        "argument": "text"
+      }
+    },
+    {
+      "critical": false,
+      "english": "list this window's local history (no arguments)",
+      "id": 1197,
+      "key": "site.3af44459c53c7def2adcd6b3",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/terminal_app.asm:term_help_text",
+      "params": {}
+    },
+    {
+      "critical": false,
+      "english": "(native, no flags)",
+      "id": 1198,
+      "key": "site.d4a9cff18b1bf53957b55496",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/terminal_app.asm:term_help_text",
+      "params": {}
+    },
+    {
+      "critical": false,
+      "english": "(native, no flags)",
+      "id": 1199,
+      "key": "site.cd3a4238f96668f88fae8e5b",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/terminal_app.asm:term_help_text",
+      "params": {}
+    },
+    {
+      "critical": false,
+      "english": "(native, no flags)",
+      "id": 1200,
+      "key": "site.116a7e3c26d78d8a3853fec6",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/terminal_app.asm:term_help_text",
+      "params": {}
+    },
+    {
+      "critical": false,
+      "english": "(owner verb, no flags)",
+      "id": 1201,
+      "key": "site.95dc2b521275780b40483f40",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/terminal_app.asm:term_help_text",
+      "params": {}
+    },
+    {
+      "critical": false,
+      "english": "(owner verb, no flags)",
+      "id": 1202,
+      "key": "site.e9dc3a69800508762740b700",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/terminal_app.asm:term_help_text",
+      "params": {}
+    },
+    {
+      "critical": false,
+      "english": "(owner verb, no flags)",
+      "id": 1203,
+      "key": "site.9a3b60a851d10f44bb9f9b4c",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/terminal_app.asm:term_help_text",
+      "params": {}
+    },
+    {
+      "critical": false,
+      "english": "(owner verb, no flags)",
+      "id": 1204,
+      "key": "site.62f2af00400d4074de85b875",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/terminal_app.asm:term_help_text",
+      "params": {}
+    },
+    {
+      "critical": false,
+      "english": "starts a copy job (owner verb, no flags)",
+      "id": 1205,
+      "key": "site.d6e4ff068a0aac7fcc492188",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/terminal_app.asm:term_help_text",
+      "params": {}
+    },
+    {
+      "critical": false,
+      "english": "of the selected volume (no flags, no path)",
+      "id": 1206,
+      "key": "site.d391c825ad5565dbba12dd76",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/terminal_app.asm:term_help_text",
+      "params": {}
+    },
+    {
+      "critical": false,
+      "english": "not mapped; each names its native verb",
+      "id": 1207,
+      "key": "site.7ef5515f005f98e373717b02",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/terminal_app.asm:term_help_text",
+      "params": {}
+    },
+    {
+      "critical": false,
+      "english": "the native {verb}: echoes the number (no ICMP)",
+      "id": 1208,
+      "key": "site.9e9110df139810f929443b81",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/terminal_app.asm:term_help_text",
+      "params": {
+        "verb": "text"
+      }
+    },
+    {
+      "critical": false,
+      "english": "close this Terminal",
+      "id": 1209,
+      "key": "site.1ec6fdc4b552025774ec8965",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/terminal_app.asm:term_help_text",
+      "params": {}
+    },
+    {
+      "critical": true,
+      "english": "return to Windows (asks first)",
+      "id": 1210,
+      "key": "site.6a10bf3fa3af0d28514990c3",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/terminal_app.asm:term_help_text",
+      "params": {}
+    },
+    {
+      "critical": true,
+      "english": "restart the computer (asks first)",
+      "id": 1211,
+      "key": "site.d9fe803727358da4fa80ec7c",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/terminal_app.asm:term_help_text",
+      "params": {}
+    },
+    {
+      "critical": true,
+      "english": "power off (asks first)",
+      "id": 1212,
+      "key": "site.99abe65c603a0cd3c9315077",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/terminal_app.asm:term_help_text",
+      "params": {}
+    },
+    {
+      "critical": false,
+      "english": "any PaOS command (case-insensitive)",
+      "id": 1213,
+      "key": "site.32c1282934eaeb2671632d2b",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/terminal_app.asm:term_help_text",
+      "params": {}
+    },
+    {
+      "critical": true,
+      "english": "leaving PaOS ...",
+      "id": 1223,
+      "key": "site.4692b183accb9ade004f811d",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/terminal_app.asm:term_power_leaving",
+      "params": {}
+    },
+    {
+      "critical": true,
+      "english": "powering off ...",
+      "id": 1224,
+      "key": "site.cbda596925751bd0fcb43031",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/terminal_app.asm:term_power_off",
+      "params": {}
+    },
+    {
+      "critical": true,
+      "english": "ssh: connecting to {endpoint} (TERM=xterm-256color) ...",
+      "id": 1243,
+      "key": "site.4442fc8a6bbc2bbc1d4436d9",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/terminal_app.asm:term_ssh_connecting",
+      "params": {
+        "endpoint": "text"
+      }
+    },
+    {
+      "critical": true,
+      "english": "Battery critical: shutting down in {seconds} s",
+      "id": 1577,
+      "key": "site.5ad78ed7e22573b54d4b9526",
+      "notes": "machine-authored, agent-reviewed; L5 DATA only; boot ID acceptance19:53:29, sec flag/split ruling19:53:43; src/gui/window.asm:str_lock_notice_battery",
+      "params": {
+        "seconds": "uint"
+      }
+    }
+  ],
+  "revision": 1,
+  "schema": "paos.pcat.source.v1"
+}

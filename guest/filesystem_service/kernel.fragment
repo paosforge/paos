@@ -1,0 +1,22 @@
+# F11 appliance additions to the maintained direct-boot Linux profile.
+# This is source configuration, not a claim that a kernel was built/loaded.
+CONFIG_BLOCK=y
+CONFIG_VIRTIO=y
+CONFIG_VIRTIO_MMIO=y
+CONFIG_VIRTIO_MMIO_CMDLINE_DEVICES=y
+CONFIG_VIRTIO_BLK=y
+CONFIG_HVC_DRIVER=y
+CONFIG_VIRTIO_CONSOLE=y
+CONFIG_DEVTMPFS=y
+CONFIG_PROC_FS=y
+CONFIG_SYSFS=y
+CONFIG_FUSE_FS=y
+CONFIG_FILE_LOCKING=y
+CONFIG_UNIX=y
+CONFIG_BINFMT_ELF=y
+CONFIG_BINFMT_SCRIPT=y
+CONFIG_BLK_DEV_INITRD=y
+CONFIG_RD_GZIP=y
+# Uncompressed root plus Python exceeds a tiny guest's RAM/2 tmpfs limit.
+# Native owner supplies rootfstype=ramfs, verifies real expanded footprint and
+# selects its existing admitted RAM profile; no load-fit inference here.

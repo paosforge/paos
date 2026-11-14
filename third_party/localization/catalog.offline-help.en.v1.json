@@ -1,0 +1,657 @@
+{
+  "schema": "paos.pcat.source.v1",
+  "revision": 1,
+  "messages": [
+    {
+      "id": 6000,
+      "key": "help.offline.first_boot.title",
+      "english": "First boot",
+      "params": {},
+      "critical": false,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6001,
+      "key": "help.offline.first_boot.start",
+      "english": "Start from your prepared PaOS drive. Use the computer's one-time boot menu and choose {volume}. The boot-menu key depends on the computer.",
+      "params": {
+        "volume": "text"
+      },
+      "critical": true,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6002,
+      "key": "help.offline.first_boot.secure_boot",
+      "english": "Keep Secure Boot on. If key enrollment is needed, read the Secure Boot and MOK help page. Use a drive you prepared from a verified PaOS download, or one prepared by someone you trust.",
+      "params": {},
+      "critical": true,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6003,
+      "key": "help.offline.first_boot.manager",
+      "english": "Let the PaOS Manager boot screen start PaOS. If startup is refused, write down the exact message and read the Recovery help page.",
+      "params": {},
+      "critical": true,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6004,
+      "key": "help.offline.sign_in.title",
+      "english": "Sign in and enrollment",
+      "params": {},
+      "critical": false,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6005,
+      "key": "help.offline.sign_in.account",
+      "english": "The Owner field is filled in as {owner}. The Password label shows the keyboard layout in use, for example {layout_label}.",
+      "params": {
+        "owner": "text",
+        "layout_label": "text"
+      },
+      "critical": true,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6006,
+      "key": "help.offline.sign_in.submit",
+      "english": "Enter your enrolled password, then choose Sign in or press {enter}. If sign-in is refused, wait before trying again.",
+      "params": {
+        "enter": "text"
+      },
+      "critical": true,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6007,
+      "key": "help.offline.sign_in.enroll",
+      "english": "This form does not enroll a password. Enrollment requires the existing authenticated owner setup. If you have not enrolled, ask the person who prepared your installation.",
+      "params": {},
+      "critical": true,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6008,
+      "key": "help.offline.language_keyboard.title",
+      "english": "Language and keyboard",
+      "params": {},
+      "critical": false,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6009,
+      "key": "help.offline.language_keyboard.separate",
+      "english": "Display language, keyboard layout and time zone are separate choices. Changing the keyboard layout does not select a display language.",
+      "params": {},
+      "critical": false,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6010,
+      "key": "help.offline.language_keyboard.language",
+      "english": "The language chooser and language setting are pending in this build. The installer's language hint has no effect yet; the interface stays in English.",
+      "params": {},
+      "critical": false,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6011,
+      "key": "help.offline.language_keyboard.choose",
+      "english": "Open Settings and choose a keyboard layout. Check the time-zone choice too: Apply acts on both. If Settings refuses a layout, the layout in force stays and the status line says so.",
+      "params": {},
+      "critical": false,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6012,
+      "key": "help.offline.language_keyboard.result",
+      "english": "Choose Apply and read the result. A change may apply only until restart if saving is unavailable or fails. Cancel restores the choices shown to those in force.",
+      "params": {},
+      "critical": false,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6013,
+      "key": "help.offline.network.title",
+      "english": "Network",
+      "params": {},
+      "critical": false,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6014,
+      "key": "help.offline.network.inspect",
+      "english": "Network Monitor shows whether an adapter is missing, degraded or not responding. That is different from a cable link that is down.",
+      "params": {},
+      "critical": false,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6015,
+      "key": "help.offline.network.cable",
+      "english": "For a wired connection, check the cable and whether your adapter is supported. A link shown as up does not by itself prove Internet access.",
+      "params": {},
+      "critical": false,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6016,
+      "key": "help.offline.network.help",
+      "english": "When asking for help, include the adapter and link state.",
+      "params": {},
+      "critical": false,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6017,
+      "key": "help.offline.update_rollback.title",
+      "english": "Update and previous version",
+      "params": {},
+      "critical": false,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6018,
+      "key": "help.offline.update_rollback.slots",
+      "english": "PaOS keeps A and B system slots. An update is staged in the inactive slot and starts as a trial through Manager.",
+      "params": {},
+      "critical": true,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6019,
+      "key": "help.offline.update_rollback.trial",
+      "english": "Manager accepts a trial only after verified readiness. If a trial fails, Manager can select a verified previous version; if no safe version is available, recovery may be needed.",
+      "params": {},
+      "critical": true,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6020,
+      "key": "help.offline.update_rollback.previous",
+      "english": "When Manager shows {label}, press {key} to select that verified previous version for boot. This choice does not promise to restore personal files.",
+      "params": {
+        "label": "text",
+        "key": "text"
+      },
+      "critical": true,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6021,
+      "key": "help.offline.update_rollback.protect",
+      "english": "Do not replace boot files by hand or turn Secure Boot off to get around a refusal.",
+      "params": {},
+      "critical": true,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6022,
+      "key": "help.offline.recovery.title",
+      "english": "Recovery",
+      "params": {},
+      "critical": false,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6023,
+      "key": "help.offline.recovery.previous",
+      "english": "If Manager shows {label}, press {key} to boot that verified previous version. The option appears only when a usable previous version is available.",
+      "params": {
+        "label": "text",
+        "key": "text"
+      },
+      "critical": true,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6024,
+      "key": "help.offline.recovery.rescue",
+      "english": "When the PaOS Manager menu shows {label}, press {key}. The entry appears only when Rescue passes its check. If PaOS starts Rescue by itself and the check fails, it stops with an error.",
+      "params": {
+        "key": "text",
+        "label": "text"
+      },
+      "critical": true,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6025,
+      "key": "help.offline.recovery.observe",
+      "english": "Rescue begins with read-only checks and diagnostics. This path does not offer an unauthenticated command shell or automatic repair.",
+      "params": {},
+      "critical": true,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6026,
+      "key": "help.offline.recovery.repair",
+      "english": "Write down the diagnostic or refusal message and ask the person responsible for your installation. Repair and return actions require authenticated authority; do not edit boot files yourself.",
+      "params": {},
+      "critical": true,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6027,
+      "key": "help.offline.secure_boot_mok.title",
+      "english": "Secure Boot and MOK",
+      "params": {},
+      "critical": false,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6028,
+      "key": "help.offline.secure_boot_mok.guide",
+      "english": "Before enrolling a key, read {guide} on the {volume} drive. Use that drive's own fingerprint, not an example from another computer.",
+      "params": {
+        "guide": "path",
+        "volume": "text"
+      },
+      "critical": true,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6029,
+      "key": "help.offline.secure_boot_mok.labels",
+      "english": "The guide uses MokManager labels such as {enroll} and {view}. These labels belong to the firmware or shim screen and are shown verbatim.",
+      "params": {
+        "enroll": "text",
+        "view": "text"
+      },
+      "critical": true,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6030,
+      "key": "help.offline.secure_boot_mok.compare",
+      "english": "Compare both lines under {fingerprint} with the guide's MokManager fingerprint. If any character differs, press {escape} and choose {continue_boot} without enrolling.",
+      "params": {
+        "fingerprint": "text",
+        "escape": "text",
+        "continue_boot": "text"
+      },
+      "critical": true,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6031,
+      "key": "help.offline.secure_boot_mok.password",
+      "english": "The guide's enrollment-from-disk route asks for no password. If a password is requested, choose {continue_boot} and ask whoever prepared the computer. Keep Secure Boot on.",
+      "params": {
+        "continue_boot": "text"
+      },
+      "critical": true,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6032,
+      "key": "help.offline.getting_help.title",
+      "english": "Getting help and feedback",
+      "params": {},
+      "critical": false,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6033,
+      "key": "help.offline.getting_help.note",
+      "english": "Privately note your PaOS version, computer model, exact message and what led to it. Add the network state if relevant. Remove network addresses and machine identifiers before sharing publicly.",
+      "params": {},
+      "critical": false,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6034,
+      "key": "help.offline.getting_help.private",
+      "english": "Do not share passwords, private signing keys, personal files or network addresses in a public report.",
+      "params": {},
+      "critical": true,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6035,
+      "key": "help.offline.getting_help.contact",
+      "english": "Ask the person who prepared your installation for its verified support or feedback contact. If you are offline, keep your note until you can reach that contact.",
+      "params": {},
+      "critical": false,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6036,
+      "key": "help.offline.getting_help.security",
+      "english": "Use a private reporting channel for a suspected security problem. Confirm the channel with your installation's support contact before sending sensitive details.",
+      "params": {},
+      "critical": true,
+      "notes": "English offline-help authoring DATA. Reserved numeric band6000-6099; source binding and native delivery pending. Static tokens in companion data must stay verbatim and unbroken."
+    },
+    {
+      "id": 6037,
+      "key": "help.offline.sign_in.keyboard_hint",
+      "english": "Your password is typed with that layout. If it differs from the one you used when you enrolled, the same keys make different characters.",
+      "params": {},
+      "critical": false,
+      "notes": "rc-input N1 keyboard-layout explanation; ordinary per rc-sec23:47:07. Separate whole message for the translated255-byte limit."
+    },
+    {
+      "id": 6038,
+      "key": "help.offline.getting_help.password",
+      "english": "Support never needs your PaOS password. Do not put it in a report or message, and do not type it where someone else asks you to.",
+      "params": {},
+      "critical": true,
+      "notes": "rc-sec H1-H3 wording condition. Reserved offline-help numeric band; whole-message rendering and255-byte ceiling apply."
+    },
+    {
+      "id": 6039,
+      "key": "help.offline.secure_boot_mok.origin",
+      "english": "A matching fingerprint shows only that the key matches the guide on the same drive. Use a drive you prepared from a verified PaOS download, or one prepared by someone you trust.",
+      "params": {},
+      "critical": true,
+      "notes": "rc-sec H1-H3 wording condition. Reserved offline-help numeric band; whole-message rendering and255-byte ceiling apply."
+    },
+    {
+      "id": 6040,
+      "key": "help.offline.recovery.failure_retained",
+      "english": "When a later PaOS boot can save it, PaOSFailureCheckpoint retains one sanitized failed or interrupted startup record. It is a diagnostic snapshot, not a complete history or proof of the cause.",
+      "params": {},
+      "critical": true,
+      "notes": "RCQ-41 failure-record guidance. New English fallback; existing five-locale translations remain unchanged and new translations are pending. Real Rescue readout only; no new shell, recovery authority or data-restoration promise."
+    },
+    {
+      "id": 6041,
+      "key": "help.offline.recovery.failure_readout",
+      "english": "In Rescue, copy the PAOS_FAILURE_V1 lines from the console or diagnostic beacon. They identify the archive or current checkpoint, phase, subsystem and payload hash. Keep these with the exact boot-screen message.",
+      "params": {},
+      "critical": true,
+      "notes": "RCQ-41 failure-record guidance. New English fallback; existing five-locale translations remain unchanged and new translations are pending. Real Rescue readout only; no new shell, recovery authority or data-restoration promise."
+    },
+    {
+      "id": 6042,
+      "key": "help.offline.recovery.failure_support_read",
+      "english": "For support tooling, the read-only command is {tool} {flag} {root}. Rescue has no public shell; the signed recovery service remains required for repair.",
+      "params": {
+        "tool": "text",
+        "flag": "text",
+        "root": "text"
+      },
+      "critical": true,
+      "notes": "RCQ-41 failure-record guidance. New English fallback; existing five-locale translations remain unchanged and new translations are pending. Real Rescue readout only; no new shell, recovery authority or data-restoration promise."
+    },
+    {
+      "id": 6043,
+      "key": "help.offline.recovery.failure_meaning",
+      "english": "error=interrupted means a prior phase began without a completion record; error=failed means failure was recorded. Neither identifies the root cause. gate=unknown means no external boot gate was saved.",
+      "params": {},
+      "critical": true,
+      "notes": "RCQ-41 failure-record guidance. New English fallback; existing five-locale translations remain unchanged and new translations are pending. Real Rescue readout only; no new shell, recovery authority or data-restoration promise."
+    },
+    {
+      "id": 6044,
+      "key": "help.offline.recovery.failure_limits",
+      "english": "A missing or invalid record is not proof of success. Firmware may refuse a save. This record does not cover every crash, pre-checkpoint failure or rollback, and cannot restore files.",
+      "params": {},
+      "critical": true,
+      "notes": "RCQ-41 failure-record guidance. New English fallback; existing five-locale translations remain unchanged and new translations are pending. Real Rescue readout only; no new shell, recovery authority or data-restoration promise."
+    }
+  ],
+  "locales": {
+    "en": {
+      "help.offline.first_boot.title": "First boot",
+      "help.offline.first_boot.start": "Start from your prepared PaOS drive. Use the computer's one-time boot menu and choose {volume}. The boot-menu key depends on the computer.",
+      "help.offline.first_boot.secure_boot": "Keep Secure Boot on. If key enrollment is needed, read the Secure Boot and MOK help page. Use a drive you prepared from a verified PaOS download, or one prepared by someone you trust.",
+      "help.offline.first_boot.manager": "Let the PaOS Manager boot screen start PaOS. If startup is refused, write down the exact message and read the Recovery help page.",
+      "help.offline.sign_in.title": "Sign in and enrollment",
+      "help.offline.sign_in.account": "The Owner field is filled in as {owner}. The Password label shows the keyboard layout in use, for example {layout_label}.",
+      "help.offline.sign_in.submit": "Enter your enrolled password, then choose Sign in or press {enter}. If sign-in is refused, wait before trying again.",
+      "help.offline.sign_in.enroll": "This form does not enroll a password. Enrollment requires the existing authenticated owner setup. If you have not enrolled, ask the person who prepared your installation.",
+      "help.offline.language_keyboard.title": "Language and keyboard",
+      "help.offline.language_keyboard.separate": "Display language, keyboard layout and time zone are separate choices. Changing the keyboard layout does not select a display language.",
+      "help.offline.language_keyboard.language": "The language chooser and language setting are pending in this build. The installer's language hint has no effect yet; the interface stays in English.",
+      "help.offline.language_keyboard.choose": "Open Settings and choose a keyboard layout. Check the time-zone choice too: Apply acts on both. If Settings refuses a layout, the layout in force stays and the status line says so.",
+      "help.offline.language_keyboard.result": "Choose Apply and read the result. A change may apply only until restart if saving is unavailable or fails. Cancel restores the choices shown to those in force.",
+      "help.offline.network.title": "Network",
+      "help.offline.network.inspect": "Network Monitor shows whether an adapter is missing, degraded or not responding. That is different from a cable link that is down.",
+      "help.offline.network.cable": "For a wired connection, check the cable and whether your adapter is supported. A link shown as up does not by itself prove Internet access.",
+      "help.offline.network.help": "When asking for help, include the adapter and link state.",
+      "help.offline.update_rollback.title": "Update and previous version",
+      "help.offline.update_rollback.slots": "PaOS keeps A and B system slots. An update is staged in the inactive slot and starts as a trial through Manager.",
+      "help.offline.update_rollback.trial": "Manager accepts a trial only after verified readiness. If a trial fails, Manager can select a verified previous version; if no safe version is available, recovery may be needed.",
+      "help.offline.update_rollback.previous": "When Manager shows {label}, press {key} to select that verified previous version for boot. This choice does not promise to restore personal files.",
+      "help.offline.update_rollback.protect": "Do not replace boot files by hand or turn Secure Boot off to get around a refusal.",
+      "help.offline.recovery.title": "Recovery",
+      "help.offline.recovery.previous": "If Manager shows {label}, press {key} to boot that verified previous version. The option appears only when a usable previous version is available.",
+      "help.offline.recovery.rescue": "When the PaOS Manager menu shows {label}, press {key}. The entry appears only when Rescue passes its check. If PaOS starts Rescue by itself and the check fails, it stops with an error.",
+      "help.offline.recovery.observe": "Rescue begins with read-only checks and diagnostics. This path does not offer an unauthenticated command shell or automatic repair.",
+      "help.offline.recovery.repair": "Write down the diagnostic or refusal message and ask the person responsible for your installation. Repair and return actions require authenticated authority; do not edit boot files yourself.",
+      "help.offline.secure_boot_mok.title": "Secure Boot and MOK",
+      "help.offline.secure_boot_mok.guide": "Before enrolling a key, read {guide} on the {volume} drive. Use that drive's own fingerprint, not an example from another computer.",
+      "help.offline.secure_boot_mok.labels": "The guide uses MokManager labels such as {enroll} and {view}. These labels belong to the firmware or shim screen and are shown verbatim.",
+      "help.offline.secure_boot_mok.compare": "Compare both lines under {fingerprint} with the guide's MokManager fingerprint. If any character differs, press {escape} and choose {continue_boot} without enrolling.",
+      "help.offline.secure_boot_mok.password": "The guide's enrollment-from-disk route asks for no password. If a password is requested, choose {continue_boot} and ask whoever prepared the computer. Keep Secure Boot on.",
+      "help.offline.getting_help.title": "Getting help and feedback",
+      "help.offline.getting_help.note": "Privately note your PaOS version, computer model, exact message and what led to it. Add the network state if relevant. Remove network addresses and machine identifiers before sharing publicly.",
+      "help.offline.getting_help.private": "Do not share passwords, private signing keys, personal files or network addresses in a public report.",
+      "help.offline.getting_help.contact": "Ask the person who prepared your installation for its verified support or feedback contact. If you are offline, keep your note until you can reach that contact.",
+      "help.offline.getting_help.security": "Use a private reporting channel for a suspected security problem. Confirm the channel with your installation's support contact before sending sensitive details.",
+      "help.offline.sign_in.keyboard_hint": "Your password is typed with that layout. If it differs from the one you used when you enrolled, the same keys make different characters.",
+      "help.offline.getting_help.password": "Support never needs your PaOS password. Do not put it in a report or message, and do not type it where someone else asks you to.",
+      "help.offline.secure_boot_mok.origin": "A matching fingerprint shows only that the key matches the guide on the same drive. Use a drive you prepared from a verified PaOS download, or one prepared by someone you trust.",
+      "help.offline.recovery.failure_retained": "When a later PaOS boot can save it, PaOSFailureCheckpoint retains one sanitized failed or interrupted startup record. It is a diagnostic snapshot, not a complete history or proof of the cause.",
+      "help.offline.recovery.failure_readout": "In Rescue, copy the PAOS_FAILURE_V1 lines from the console or diagnostic beacon. They identify the archive or current checkpoint, phase, subsystem and payload hash. Keep these with the exact boot-screen message.",
+      "help.offline.recovery.failure_support_read": "For support tooling, the read-only command is {tool} {flag} {root}. Rescue has no public shell; the signed recovery service remains required for repair.",
+      "help.offline.recovery.failure_meaning": "error=interrupted means a prior phase began without a completion record; error=failed means failure was recorded. Neither identifies the root cause. gate=unknown means no external boot gate was saved.",
+      "help.offline.recovery.failure_limits": "A missing or invalid record is not proof of success. Firmware may refuse a save. This record does not cover every crash, pre-checkpoint failure or rollback, and cannot restore files."
+    },
+    "es": {
+      "help.offline.first_boot.title": "Primer arranque",
+      "help.offline.first_boot.start": "Arranque desde la unidad PaOS que preparó. En el menú de arranque para este inicio, elija {volume}. La tecla del menú depende del equipo.",
+      "help.offline.first_boot.secure_boot": "Mantenga Secure Boot activado. Si debe registrar una clave, lea la ayuda de Secure Boot y MOK. Use una unidad que preparó con una descarga PaOS verificada, o que preparó alguien de confianza.",
+      "help.offline.first_boot.manager": "Deje que la pantalla de arranque de PaOS Manager inicie PaOS. Si se rechaza el inicio, anote el mensaje exacto y lea la ayuda de recuperación.",
+      "help.offline.sign_in.title": "Inicio de sesión y registro",
+      "help.offline.sign_in.account": "El campo Owner ya contiene {owner}. La etiqueta Password indica la distribución de teclado en uso, por ejemplo {layout_label}.",
+      "help.offline.sign_in.submit": "Escriba la contraseña que registró y elija Sign in o pulse {enter}. Si se rechaza el acceso, espere antes de reintentarlo.",
+      "help.offline.sign_in.enroll": "Este formulario no registra contraseñas. El registro requiere la configuración existente del propietario autenticado. Si no se ha registrado, consulte a quien preparó su instalación.",
+      "help.offline.language_keyboard.title": "Idioma y teclado",
+      "help.offline.language_keyboard.separate": "El idioma de la interfaz, la distribución de teclado y la zona horaria se eligen por separado. Cambiar el teclado no elige un idioma de interfaz.",
+      "help.offline.language_keyboard.language": "El selector y el ajuste de idioma están pendientes en esta versión. La indicación de idioma del instalador aún no tiene efecto; la interfaz sigue en inglés.",
+      "help.offline.language_keyboard.choose": "En Settings, elija la distribución de teclado y revise la zona horaria: Apply afecta a ambas. Si se rechaza una distribución, se conserva la actual y la línea de estado lo indica.",
+      "help.offline.language_keyboard.result": "Elija Apply y lea el resultado. Si no se puede guardar o falla el guardado, el cambio puede durar solo hasta reiniciar. Cancel vuelve a mostrar las opciones vigentes.",
+      "help.offline.network.title": "Red",
+      "help.offline.network.inspect": "El monitor de red indica si falta un adaptador, está degradado o no responde. Eso es distinto de un enlace por cable caído.",
+      "help.offline.network.cable": "Para una conexión por cable, revise el cable y si su adaptador es compatible. Un enlace activo no demuestra por sí solo que haya acceso a Internet.",
+      "help.offline.network.help": "Al pedir ayuda, indique el adaptador y el estado del enlace.",
+      "help.offline.update_rollback.title": "Actualización y versión anterior",
+      "help.offline.update_rollback.slots": "PaOS mantiene las ranuras de sistema A y B. Una actualización se prepara en la ranura inactiva y arranca como prueba mediante Manager.",
+      "help.offline.update_rollback.trial": "Manager acepta una prueba solo tras verificar que está lista. Si falla, Manager puede elegir una versión anterior verificada. Si no hay una versión segura, puede hacer falta recuperación.",
+      "help.offline.update_rollback.previous": "Cuando Manager muestre {label}, pulse {key} para arrancar esa versión anterior verificada. Esta elección no promete restaurar archivos personales.",
+      "help.offline.update_rollback.protect": "No sustituya a mano archivos de arranque ni desactive Secure Boot para eludir un rechazo.",
+      "help.offline.recovery.title": "Recuperación",
+      "help.offline.recovery.previous": "Si Manager muestra {label}, pulse {key} para arrancar esa versión anterior verificada. La opción solo aparece si hay una versión anterior utilizable.",
+      "help.offline.recovery.rescue": "Si el menú de PaOS Manager muestra {label}, pulse {key}. Solo aparece si Rescue supera su comprobación. Si PaOS inicia Rescue automáticamente y la comprobación falla, se detiene con un error.",
+      "help.offline.recovery.observe": "Rescue empieza con comprobaciones y diagnósticos de solo lectura. Esta vía no ofrece una consola de comandos sin autenticar ni reparación automática.",
+      "help.offline.recovery.repair": "Anote el mensaje de diagnóstico o rechazo y consulte al responsable de su instalación. Reparar y volver requieren autoridad autenticada; no edite usted los archivos de arranque.",
+      "help.offline.secure_boot_mok.title": "Secure Boot y MOK",
+      "help.offline.secure_boot_mok.guide": "Antes de registrar una clave, lea {guide} en la unidad {volume}. Use la huella digital del certificado de esa unidad, no un ejemplo de otro equipo.",
+      "help.offline.secure_boot_mok.labels": "La guía usa etiquetas de MokManager como {enroll} y {view}. Pertenecen a la pantalla del firmware o shim y se muestran literalmente.",
+      "help.offline.secure_boot_mok.compare": "Compare ambas líneas bajo {fingerprint} con la huella digital MokManager de la guía. Si difiere cualquier carácter, pulse {escape} y elija {continue_boot} sin registrar la clave.",
+      "help.offline.secure_boot_mok.password": "La vía de registro desde disco de la guía no pide contraseña. Si se pide una, elija {continue_boot} y consulte a quien preparó el equipo. Mantenga Secure Boot activado.",
+      "help.offline.getting_help.title": "Ayuda y comentarios",
+      "help.offline.getting_help.note": "Anote en privado su versión PaOS, modelo, mensaje exacto y pasos previos. Añada el estado de red si procede. Quite direcciones de red e identificadores del equipo antes de compartirlo en público.",
+      "help.offline.getting_help.private": "No comparta contraseñas, claves privadas de firma, archivos personales ni direcciones de red en un informe público.",
+      "help.offline.getting_help.contact": "Pida a quien preparó su instalación un contacto verificado de soporte o comentarios. Si está fuera de línea, conserve su nota hasta poder contactar.",
+      "help.offline.getting_help.security": "Si sospecha un problema de seguridad, use un canal privado. Confírmelo con el contacto de soporte de su instalación antes de enviar detalles sensibles.",
+      "help.offline.sign_in.keyboard_hint": "La contraseña se escribe con esa distribución. Si difiere de la usada al registrarse, las mismas teclas producen caracteres distintos.",
+      "help.offline.getting_help.password": "El soporte nunca necesita su contraseña PaOS. No la incluya en informes ni mensajes, ni la escriba donde otra persona se lo pida.",
+      "help.offline.secure_boot_mok.origin": "Una huella digital coincidente solo prueba que la clave coincide con la guía de la misma unidad. Use una unidad que preparó con una descarga PaOS verificada, o que preparó alguien de confianza."
+    },
+    "fr": {
+      "help.offline.first_boot.title": "Premier démarrage",
+      "help.offline.first_boot.start": "Démarrez sur le support PaOS que vous avez préparé. Dans le menu de démarrage ponctuel, choisissez {volume}. La touche du menu dépend de l'ordinateur.",
+      "help.offline.first_boot.secure_boot": "Gardez Secure Boot activé. Si une clé doit être inscrite, lisez l'aide Secure Boot et MOK. Utilisez un support préparé par vous avec un téléchargement PaOS vérifié, ou par une personne de confiance.",
+      "help.offline.first_boot.manager": "Laissez l'écran de démarrage de PaOS Manager lancer PaOS. Si le démarrage est refusé, notez le message exact et lisez l'aide de récupération.",
+      "help.offline.sign_in.title": "Connexion et inscription",
+      "help.offline.sign_in.account": "Le champ Owner contient déjà {owner}. Le libellé Password indique la disposition du clavier utilisée, par exemple {layout_label}.",
+      "help.offline.sign_in.submit": "Saisissez le mot de passe que vous avez inscrit, puis choisissez Sign in ou appuyez sur {enter}. Si l'accès est refusé, attendez avant de réessayer.",
+      "help.offline.sign_in.enroll": "Ce formulaire n'inscrit aucun mot de passe. L'inscription exige la configuration existante du propriétaire authentifié. Si vous n'êtes pas inscrit, contactez la personne qui a préparé l'installation.",
+      "help.offline.language_keyboard.title": "Langue et clavier",
+      "help.offline.language_keyboard.separate": "La langue d'affichage, le clavier et le fuseau horaire se choisissent séparément. Changer la disposition du clavier ne choisit pas la langue d'affichage.",
+      "help.offline.language_keyboard.language": "Le sélecteur et le réglage de langue restent à venir dans cette version. L'indication de langue de l'installateur est sans effet ; l'interface reste en anglais.",
+      "help.offline.language_keyboard.choose": "Dans Settings, choisissez la disposition du clavier. Vérifiez aussi le fuseau horaire : Apply agit sur les deux. Si une disposition est refusée, l'actuelle reste en vigueur et la ligne d'état le signale.",
+      "help.offline.language_keyboard.result": "Choisissez Apply et lisez le résultat. Si l'enregistrement est indisponible ou échoue, le changement peut ne durer que jusqu'au redémarrage. Cancel réaffiche les choix en vigueur.",
+      "help.offline.network.title": "Réseau",
+      "help.offline.network.inspect": "Le moniteur réseau indique si un adaptateur est absent, dégradé ou ne répond pas. Cela diffère d'une liaison câblée inactive.",
+      "help.offline.network.cable": "Pour une liaison câblée, vérifiez le câble et la prise en charge de l'adaptateur. Une liaison active ne prouve pas à elle seule l'accès à Internet.",
+      "help.offline.network.help": "Lors d'une demande d'aide, indiquez l'adaptateur et l'état de la liaison.",
+      "help.offline.update_rollback.title": "Mise à jour et version précédente",
+      "help.offline.update_rollback.slots": "PaOS conserve deux emplacements système, A et B. Une mise à jour est préparée dans l'emplacement inactif et démarre à l'essai via Manager.",
+      "help.offline.update_rollback.trial": "Manager n'accepte un essai qu'après vérification de son état prêt. S'il échoue, Manager peut choisir une version précédente vérifiée. Sans version sûre disponible, une récupération peut être nécessaire.",
+      "help.offline.update_rollback.previous": "Quand Manager affiche {label}, appuyez sur {key} pour démarrer cette version précédente vérifiée. Ce choix ne promet pas de restaurer vos fichiers personnels.",
+      "help.offline.update_rollback.protect": "Ne remplacez pas les fichiers de démarrage à la main et ne désactivez pas Secure Boot pour contourner un refus.",
+      "help.offline.recovery.title": "Récupération",
+      "help.offline.recovery.previous": "Si Manager affiche {label}, appuyez sur {key} pour démarrer cette version précédente vérifiée. L'option n'apparaît que si une version précédente utilisable est disponible.",
+      "help.offline.recovery.rescue": "Si le menu PaOS Manager affiche {label}, appuyez sur {key}. L'entrée n'apparaît que si Rescue réussit son contrôle. Si PaOS lance seul Rescue et que le contrôle échoue, il s'arrête avec une erreur.",
+      "help.offline.recovery.observe": "Rescue commence par des contrôles et diagnostics en lecture seule. Cette voie n'offre ni interpréteur de commandes sans authentification, ni réparation automatique.",
+      "help.offline.recovery.repair": "Notez le message de diagnostic ou de refus et contactez le responsable de l'installation. Réparer et revenir exigent une autorité authentifiée ; ne modifiez pas vous-même les fichiers de démarrage.",
+      "help.offline.secure_boot_mok.title": "Secure Boot et MOK",
+      "help.offline.secure_boot_mok.guide": "Avant d'inscrire une clé, lisez {guide} sur le support {volume}. Utilisez l'empreinte du certificat de ce support, jamais un exemple d'un autre ordinateur.",
+      "help.offline.secure_boot_mok.labels": "Le guide emploie des libellés MokManager tels que {enroll} et {view}. Ils appartiennent à l'écran du micrologiciel ou de shim et sont reproduits tels quels.",
+      "help.offline.secure_boot_mok.compare": "Comparez les deux lignes sous {fingerprint} à l'empreinte MokManager du guide. Si un seul caractère diffère, appuyez sur {escape} et choisissez {continue_boot} sans inscrire la clé.",
+      "help.offline.secure_boot_mok.password": "La voie d'inscription depuis le disque du guide ne demande aucun mot de passe. Si l'on en demande un, choisissez {continue_boot} et contactez la personne qui a préparé l'ordinateur. Gardez Secure Boot activé.",
+      "help.offline.getting_help.title": "Aide et commentaires",
+      "help.offline.getting_help.note": "Notez en privé la version PaOS, le modèle, le message exact et les étapes précédentes. Ajoutez l'état réseau si utile. Retirez adresses réseau et identifiants de machine avant toute publication.",
+      "help.offline.getting_help.private": "Ne publiez ni mots de passe, ni clés privées de signature, ni fichiers personnels, ni adresses réseau dans un rapport public.",
+      "help.offline.getting_help.contact": "Demandez à la personne qui a préparé l'installation un contact vérifié d'aide ou de retour. Hors ligne, conservez votre note jusqu'à pouvoir le joindre.",
+      "help.offline.getting_help.security": "Signalez tout problème de sécurité présumé par un canal privé. Confirmez ce canal auprès du contact d'aide de votre installation avant d'envoyer des détails sensibles.",
+      "help.offline.sign_in.keyboard_hint": "Votre mot de passe se tape avec cette disposition. Si elle diffère de celle utilisée lors de l'inscription, les mêmes touches produisent d'autres caractères.",
+      "help.offline.getting_help.password": "L'assistance n'a jamais besoin de votre mot de passe PaOS. Ne le mettez dans aucun rapport ni message, et ne le tapez pas là où quelqu'un d'autre vous le demande.",
+      "help.offline.secure_boot_mok.origin": "Une empreinte identique prouve seulement que la clé correspond au guide du même support. Utilisez un support préparé par vous avec un téléchargement PaOS vérifié, ou par une personne de confiance."
+    },
+    "de": {
+      "help.offline.first_boot.title": "Erster Start",
+      "help.offline.first_boot.start": "Starten Sie vom vorbereiteten PaOS-Laufwerk. Wählen Sie im Bootmenü für diesen Start {volume}. Die Menütaste hängt vom Computer ab.",
+      "help.offline.first_boot.secure_boot": "Lassen Sie Secure Boot an. Lesen Sie bei nötiger Schlüsselregistrierung die Hilfe zu Secure Boot und MOK. Nutzen Sie ein selbst aus verifiziertem PaOS-Download vorbereitetes Laufwerk oder eines von einer vertrauenswürdigen Person.",
+      "help.offline.first_boot.manager": "Lassen Sie den Startbildschirm von PaOS Manager PaOS starten. Wird der Start abgelehnt, notieren Sie die genaue Meldung und lesen Sie die Hilfe zur Wiederherstellung.",
+      "help.offline.sign_in.title": "Anmeldung und Registrierung",
+      "help.offline.sign_in.account": "Im Feld Owner steht bereits {owner}. Die Beschriftung Password zeigt die aktive Tastaturbelegung, etwa {layout_label}.",
+      "help.offline.sign_in.submit": "Geben Sie Ihr registriertes Passwort ein. Wählen Sie Sign in oder drücken Sie {enter}. Wird die Anmeldung abgelehnt, warten Sie vor dem nächsten Versuch.",
+      "help.offline.sign_in.enroll": "Dieses Formular registriert kein Passwort. Dazu ist die bestehende Einrichtung durch den authentifizierten Eigentümer nötig. Sind Sie nicht registriert, fragen Sie die Person, die Ihre Installation vorbereitet hat.",
+      "help.offline.language_keyboard.title": "Sprache und Tastatur",
+      "help.offline.language_keyboard.separate": "Anzeigesprache, Tastaturbelegung und Zeitzone werden getrennt gewählt. Eine andere Tastaturbelegung wählt keine Anzeigesprache.",
+      "help.offline.language_keyboard.language": "Sprachauswahl und Spracheinstellung stehen in diesem Build noch aus. Der Sprachhinweis des Installers wirkt noch nicht; die Oberfläche bleibt Englisch.",
+      "help.offline.language_keyboard.choose": "Wählen Sie in Settings die Tastaturbelegung. Prüfen Sie auch die Zeitzone: Apply betrifft beide. Bei abgelehnter Belegung bleibt die aktive bestehen; die Statuszeile meldet dies.",
+      "help.offline.language_keyboard.result": "Wählen Sie Apply und lesen Sie das Ergebnis. Fehlt das Speichern oder schlägt es fehl, gilt die Änderung eventuell nur bis zum Neustart. Cancel zeigt wieder die geltenden Optionen.",
+      "help.offline.network.title": "Netzwerk",
+      "help.offline.network.inspect": "Die Netzwerküberwachung zeigt, ob ein Adapter fehlt, beeinträchtigt ist oder nicht antwortet. Das ist etwas anderes als eine ausgefallene Kabelverbindung.",
+      "help.offline.network.cable": "Prüfen Sie bei Kabelverbindung das Kabel und die Unterstützung Ihres Adapters. Eine aktive Verbindung allein beweist keinen Internetzugang.",
+      "help.offline.network.help": "Nennen Sie bei Hilfsanfragen den Adapter und den Verbindungszustand.",
+      "help.offline.update_rollback.title": "Update und vorherige Version",
+      "help.offline.update_rollback.slots": "PaOS hält die Systemplätze A und B vor. Ein Update wird im inaktiven Platz vorbereitet und über Manager als Test gestartet.",
+      "help.offline.update_rollback.trial": "Manager akzeptiert einen Test erst nach geprüfter Bereitschaft. Scheitert er, kann Manager eine verifizierte Vorgängerversion wählen. Gibt es keine sichere Version, kann Wiederherstellung nötig sein.",
+      "help.offline.update_rollback.previous": "Zeigt Manager {label}, drücken Sie {key}, um diese verifizierte Vorgängerversion zu starten. Die Wahl verspricht keine Wiederherstellung persönlicher Dateien.",
+      "help.offline.update_rollback.protect": "Ersetzen Sie keine Startdateien von Hand und schalten Sie Secure Boot nicht aus, um eine Ablehnung zu umgehen.",
+      "help.offline.recovery.title": "Wiederherstellung",
+      "help.offline.recovery.previous": "Zeigt Manager {label}, drücken Sie {key}, um diese verifizierte Vorgängerversion zu starten. Die Option erscheint nur bei nutzbarer Vorgängerversion.",
+      "help.offline.recovery.rescue": "Zeigt das Menü von PaOS Manager {label}, drücken Sie {key}. Der Eintrag erscheint nur, wenn Rescue seine Prüfung besteht. Startet PaOS Rescue selbst und scheitert die Prüfung, stoppt es mit Fehler.",
+      "help.offline.recovery.observe": "Rescue beginnt mit nur lesenden Prüfungen und Diagnosen. Dieser Weg bietet weder eine unauthentifizierte Befehlsshell noch automatische Reparatur.",
+      "help.offline.recovery.repair": "Notieren Sie Diagnose- oder Ablehnungsmeldung und fragen Sie den Installationsverantwortlichen. Reparatur und Rückkehr erfordern authentifizierte Befugnis; ändern Sie keine Startdateien selbst.",
+      "help.offline.secure_boot_mok.title": "Secure Boot und MOK",
+      "help.offline.secure_boot_mok.guide": "Lesen Sie vor der Schlüsselregistrierung {guide} auf Laufwerk {volume}. Nutzen Sie dessen eigenen Zertifikat-Fingerabdruck, kein Beispiel von einem anderen Computer.",
+      "help.offline.secure_boot_mok.labels": "Die Anleitung nutzt MokManager-Texte wie {enroll} und {view}. Sie stammen vom Firmware- oder Shim-Bildschirm und werden wortgetreu gezeigt.",
+      "help.offline.secure_boot_mok.compare": "Vergleichen Sie beide Zeilen unter {fingerprint} mit dem MokManager-Fingerabdruck der Anleitung. Weicht ein Zeichen ab, drücken Sie {escape} und wählen {continue_boot}, ohne den Schlüssel zu registrieren.",
+      "help.offline.secure_boot_mok.password": "Die Registrierung vom Datenträger laut Anleitung verlangt kein Passwort. Wird eines verlangt, wählen Sie {continue_boot} und fragen Sie die Person, die den Computer vorbereitet hat. Lassen Sie Secure Boot an.",
+      "help.offline.getting_help.title": "Hilfe und Rückmeldungen",
+      "help.offline.getting_help.note": "Notieren Sie privat PaOS-Version, Computermodell, genaue Meldung und vorherige Schritte. Bei Bedarf auch den Netzwerkzustand. Entfernen Sie vor Veröffentlichung Netzwerkadressen und Gerätekennungen.",
+      "help.offline.getting_help.private": "Teilen Sie in öffentlichen Berichten keine Passwörter, privaten Signaturschlüssel, persönlichen Dateien oder Netzwerkadressen.",
+      "help.offline.getting_help.contact": "Fragen Sie die Person, die Ihre Installation vorbereitet hat, nach dem verifizierten Hilfe- oder Rückmeldekontakt. Offline bewahren Sie die Notiz auf, bis Sie den Kontakt erreichen.",
+      "help.offline.getting_help.security": "Melden Sie vermutete Sicherheitsprobleme über einen privaten Kanal. Bestätigen Sie ihn beim Hilfekontakt Ihrer Installation, bevor Sie sensible Details senden.",
+      "help.offline.sign_in.keyboard_hint": "Ihr Passwort wird mit dieser Belegung getippt. Weicht sie von der bei der Registrierung genutzten ab, ergeben dieselben Tasten andere Zeichen.",
+      "help.offline.getting_help.password": "Der Support braucht Ihr PaOS-Passwort nie. Schreiben Sie es in keinen Bericht oder keine Nachricht und tippen Sie es nicht dort ein, wo jemand anderes es verlangt.",
+      "help.offline.secure_boot_mok.origin": "Ein gleicher Fingerabdruck belegt nur: Schlüssel und Anleitung desselben Laufwerks passen zusammen. Nutzen Sie ein selbst aus verifiziertem PaOS-Download vorbereitetes Laufwerk oder eines von einer vertrauenswürdigen Person."
+    },
+    "ja": {
+      "help.offline.first_boot.title": "初回起動",
+      "help.offline.first_boot.start": "準備したPaOSドライブから起動します。今回の起動先を選ぶメニューで{volume}を選択します。メニューのキーは機種により異なります。",
+      "help.offline.first_boot.secure_boot": "Secure Bootは有効のままにします。鍵の登録が必要ならSecure BootとMOKのヘルプを読みます。検証済みPaOSダウンロードから自分で準備したドライブか、信頼する人が準備したものを使います。",
+      "help.offline.first_boot.manager": "PaOS Managerの起動画面からPaOSを起動させます。起動が拒否されたら正確なメッセージを記録し、復旧のヘルプを読みます。",
+      "help.offline.sign_in.title": "サインインと登録",
+      "help.offline.sign_in.account": "Owner欄には{owner}が入力済みです。Passwordの表示は使用中のキーボード配列を示します。例：{layout_label}。",
+      "help.offline.sign_in.submit": "登録したパスワードを入力し、Sign inを選ぶか{enter}を押します。拒否されたら、少し待ってから再試行します。",
+      "help.offline.sign_in.enroll": "このフォームではパスワードを登録できません。登録には既存の認証済み所有者設定が必要です。未登録なら、インストールを準備した人に相談します。",
+      "help.offline.language_keyboard.title": "言語とキーボード",
+      "help.offline.language_keyboard.separate": "表示言語、キーボード配列、タイムゾーンは別々に選びます。配列を変えても表示言語は選択されません。",
+      "help.offline.language_keyboard.language": "このビルドの言語選択と設定は未実装です。インストーラーの言語ヒントはまだ反映されず、画面は英語のままです。",
+      "help.offline.language_keyboard.choose": "Settingsでキーボード配列を選びます。Applyは両方に作用するのでタイムゾーンも確認します。配列が拒否されたら現在の配列が維持され、状態欄に表示されます。",
+      "help.offline.language_keyboard.result": "Applyを選び結果を読みます。保存が利用不可または失敗なら、変更は再起動までの場合があります。Cancelで表示の選択肢が現在有効なものに戻ります。",
+      "help.offline.network.title": "ネットワーク",
+      "help.offline.network.inspect": "ネットワークモニターはアダプターの不在、機能低下、応答なしを示します。ケーブルのリンク切断とは別の状態です。",
+      "help.offline.network.cable": "有線接続ではケーブルとアダプターの対応を確認します。リンクが有効でも、それだけではインターネット接続の証明になりません。",
+      "help.offline.network.help": "相談時はアダプターとリンクの状態を伝えます。",
+      "help.offline.update_rollback.title": "更新と以前のバージョン",
+      "help.offline.update_rollback.slots": "PaOSにはシステムスロットAとBがあります。更新は非使用側に準備され、Manager経由で試行起動します。",
+      "help.offline.update_rollback.trial": "Managerは準備完了の検証後にのみ試行を承認します。失敗時はManagerが検証済みの以前の版を選べます。安全な版がなければ復旧が必要な場合があります。",
+      "help.offline.update_rollback.previous": "Managerに{label}と出たら{key}で検証済みの以前の版を起動します。個人ファイルの復元を保証する選択ではありません。",
+      "help.offline.update_rollback.protect": "拒否を回避するため、起動ファイルを手で置き換えたりSecure Bootを無効にしたりしないでください。",
+      "help.offline.recovery.title": "復旧",
+      "help.offline.recovery.previous": "Managerに{label}と出たら{key}で検証済みの以前の版を起動します。この項目は利用可能な以前の版がある場合だけ表示されます。",
+      "help.offline.recovery.rescue": "PaOS Managerに{label}と出たら{key}を押します。Rescueの検証合格時だけ表示されます。PaOSが自動でRescueを起動して検証に失敗した場合はエラーで停止します。",
+      "help.offline.recovery.observe": "Rescueは読み取り専用の検査と診断から始まります。この経路に未認証のコマンドシェルや自動修復はありません。",
+      "help.offline.recovery.repair": "診断や拒否のメッセージを記録し、インストールの責任者に相談します。修復と復帰には認証済みの権限が必要です。起動ファイルを自分で編集しないでください。",
+      "help.offline.secure_boot_mok.title": "Secure BootとMOK",
+      "help.offline.secure_boot_mok.guide": "鍵の登録前に{volume}の{guide}を読みます。他機の例ではなく、そのドライブの証明書のフィンガープリントを使います。",
+      "help.offline.secure_boot_mok.labels": "ガイドの{enroll}や{view}はMokManagerの表示です。ファームウェアやshimの画面の文字列をそのまま示しています。",
+      "help.offline.secure_boot_mok.compare": "ガイドのMokManagerのフィンガープリントと{fingerprint}下の両行を照合します。1文字でも違えば{escape}を押し、登録せず{continue_boot}を選びます。",
+      "help.offline.secure_boot_mok.password": "ガイドのディスクからの登録経路ではパスワードを求めません。求められたら{continue_boot}を選び、準備した人に相談します。Secure Bootは有効のままにします。",
+      "help.offline.getting_help.title": "ヘルプと意見",
+      "help.offline.getting_help.note": "PaOS版、機種、正確なメッセージ、直前の操作を非公開で記録します。必要ならネットワーク状態も記録します。公開前にネットワークアドレスと機器識別子を削除します。",
+      "help.offline.getting_help.private": "公開報告でパスワード、署名用秘密鍵、個人ファイル、ネットワークアドレスを共有しないでください。",
+      "help.offline.getting_help.contact": "インストールを準備した人に、確認済みのサポートや意見の連絡先を尋ねます。オフラインなら連絡できるまでメモを保管します。",
+      "help.offline.getting_help.security": "セキュリティ問題の疑いは非公開の窓口で報告します。機密の詳細を送る前に、インストールのサポート連絡先に窓口を確認します。",
+      "help.offline.sign_in.keyboard_hint": "パスワードはその配列で入力されます。登録時の配列と異なると、同じキーでも別の文字になります。",
+      "help.offline.getting_help.password": "サポートがPaOSパスワードを必要とすることはありません。報告やメッセージに書かず、他人に指定された場所へ入力しないでください。",
+      "help.offline.secure_boot_mok.origin": "フィンガープリントの一致は同じドライブの鍵とガイドの一致だけを示します。検証済みPaOSダウンロードで自分で準備したドライブか、信頼する人が準備したものを使います。"
+    },
+    "zh-Hans": {
+      "help.offline.first_boot.title": "首次启动",
+      "help.offline.first_boot.start": "从准备好的PaOS驱动器启动。在电脑的本次启动菜单中选择{volume}。菜单按键因电脑而异。",
+      "help.offline.first_boot.secure_boot": "保持Secure Boot开启。如需登记密钥，请阅读Secure Boot与MOK帮助。使用您从已验证的PaOS下载自行准备的驱动器，或由可信的人准备的驱动器。",
+      "help.offline.first_boot.manager": "让PaOS Manager启动界面启动PaOS。如启动被拒绝，请记下准确提示并阅读恢复帮助。",
+      "help.offline.sign_in.title": "登录与登记",
+      "help.offline.sign_in.account": "Owner栏已填入{owner}。Password标签显示当前键盘布局，例如{layout_label}。",
+      "help.offline.sign_in.submit": "输入已登记的密码，然后选择Sign in或按{enter}。如登录被拒绝，请等待后再试。",
+      "help.offline.sign_in.enroll": "此表单不能登记密码。登记须使用现有的已认证所有者设置。如尚未登记，请询问准备您安装环境的人。",
+      "help.offline.language_keyboard.title": "语言与键盘",
+      "help.offline.language_keyboard.separate": "显示语言、键盘布局和时区分别选择。更改键盘布局不会选择显示语言。",
+      "help.offline.language_keyboard.language": "此构建的语言选择器和语言设置尚未完成。安装器的语言提示尚无效果；界面仍为英语。",
+      "help.offline.language_keyboard.choose": "打开Settings并选择键盘布局。同时检查时区：Apply会作用于两者。如布局被拒绝，当前布局保持不变，状态行会说明。",
+      "help.offline.language_keyboard.result": "选择Apply并阅读结果。如无法保存或保存失败，更改可能仅持续至重启。Cancel会把显示的选项恢复为当前生效的选项。",
+      "help.offline.network.title": "网络",
+      "help.offline.network.inspect": "网络监视器显示适配器是否缺失、功能降级或无响应。这与网线链路断开是不同的状态。",
+      "help.offline.network.cable": "有线连接请检查网线和适配器是否受支持。显示链路已连接本身不能证明可访问互联网。",
+      "help.offline.network.help": "求助时，请说明适配器和链路状态。",
+      "help.offline.update_rollback.title": "更新与先前版本",
+      "help.offline.update_rollback.slots": "PaOS保留A、B两个系统槽位。更新准备在非活动槽位中，通过Manager进行试运行启动。",
+      "help.offline.update_rollback.trial": "Manager仅在验证就绪后接受试运行。如试运行失败，Manager可选择已验证的先前版本；如无安全版本可用，可能需要恢复。",
+      "help.offline.update_rollback.previous": "Manager显示{label}时，按{key}启动该已验证的先前版本。此选择不保证恢复个人文件。",
+      "help.offline.update_rollback.protect": "请勿手动替换启动文件，也勿关闭Secure Boot来绕过拒绝。",
+      "help.offline.recovery.title": "恢复",
+      "help.offline.recovery.previous": "如Manager显示{label}，按{key}启动该已验证的先前版本。仅有可用的先前版本时才显示此选项。",
+      "help.offline.recovery.rescue": "PaOS Manager菜单显示{label}时，按{key}。仅Rescue检查通过才显示该项。如PaOS自动启动Rescue而检查失败，则报错停止。",
+      "help.offline.recovery.observe": "Rescue先进行只读检查和诊断。此路径不提供未经认证的命令行环境或自动修复。",
+      "help.offline.recovery.repair": "记下诊断或拒绝提示并询问安装负责人。修复和返回操作需要已认证的权限；请勿自行编辑启动文件。",
+      "help.offline.secure_boot_mok.title": "Secure Boot与MOK",
+      "help.offline.secure_boot_mok.guide": "登记密钥前，请阅读{volume}驱动器上的{guide}。使用该驱动器自身的证书指纹，而非其他电脑上的示例。",
+      "help.offline.secure_boot_mok.labels": "指南使用{enroll}和{view}等MokManager标签。这些属于固件或shim界面，按原文显示。",
+      "help.offline.secure_boot_mok.compare": "将{fingerprint}下的两行与指南中的MokManager证书指纹对照。如任何字符不同，按{escape}并选择{continue_boot}，不要登记密钥。",
+      "help.offline.secure_boot_mok.password": "指南中的从磁盘登记路径不要求密码。如被要求输入密码，请选择{continue_boot}并询问准备电脑的人。保持Secure Boot开启。",
+      "help.offline.getting_help.title": "求助与反馈",
+      "help.offline.getting_help.note": "私下记下PaOS版本、电脑型号、准确提示及之前的操作。必要时附上网络状态。公开分享前删除网络地址和机器标识符。",
+      "help.offline.getting_help.private": "请勿在公开报告中分享密码、签名私钥、个人文件或网络地址。",
+      "help.offline.getting_help.contact": "向准备您安装环境的人询问经确认的支持或反馈联系方式。如离线，请保留记录直到能够联系。",
+      "help.offline.getting_help.security": "疑似安全问题请通过私密渠道报告。发送敏感详情前，向安装环境的支持联系人确认该渠道。",
+      "help.offline.sign_in.keyboard_hint": "您的密码按该布局输入。如与登记时的布局不同，相同按键会产生不同字符。",
+      "help.offline.getting_help.password": "支持人员从不需要您的PaOS密码。请勿将其写入报告或消息，也勿在他人指定的地方输入。",
+      "help.offline.secure_boot_mok.origin": "证书指纹一致仅表明密钥与同一驱动器上的指南相符。使用您从已验证的PaOS下载自行准备的驱动器，或由可信的人准备的驱动器。"
+    }
+  }
+}

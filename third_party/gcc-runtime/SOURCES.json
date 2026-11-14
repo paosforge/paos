@@ -1,0 +1,58 @@
+{
+  "files": {
+    "LICENSE": {
+      "bytes": 1339,
+      "sha256": "1f5cd2125879facec810601c53e8cb35bf7d0314c9d9127e2acb7b7fdf4885d3"
+    },
+    "third_party/gcc-runtime/BUILD_CONFIG.json": {
+      "bytes": 1123,
+      "sha256": "065f9e47b2c726283144ee90748a05bf95e1afa12f3b9782eb1c7710cd4ed3ea"
+    },
+    "third_party/gcc-runtime/COPYING": {
+      "bytes": 18002,
+      "sha256": "231f7edcc7352d7734a96eef0b8030f77982678c516876fcb81e25b32d68564c"
+    },
+    "third_party/gcc-runtime/COPYING.LIB": {
+      "bytes": 26527,
+      "sha256": "a9bdde5616ecdd1e980b44f360600ee8783b1f99b8cc83a2beb163a0a390e861"
+    },
+    "third_party/gcc-runtime/COPYING.RUNTIME": {
+      "bytes": 3324,
+      "sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74"
+    },
+    "third_party/gcc-runtime/COPYING3": {
+      "bytes": 35147,
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+    },
+    "third_party/gcc-runtime/COPYING3.LIB": {
+      "bytes": 7639,
+      "sha256": "a853c2ffec17057872340eee242ae4d96cbf2b520ae27d903e1b2fef1a5f9d1c"
+    },
+    "third_party/gcc-runtime/SELECTED_RUNTIME.json": {
+      "bytes": 2997,
+      "sha256": "71a491c1c64d73079bffbfb6aa629a3244014da3a460f07ae35695a17db4fdbc"
+    },
+    "third_party/gcc-runtime/SOURCE.md": {
+      "bytes": 4203,
+      "sha256": "8e139d50c49f01bf83d5bdeb5ced1249202e010b592c677a6549e78d583b7a68"
+    },
+    "third_party/gcc-runtime/debian-copyright": {
+      "bytes": 69100,
+      "sha256": "08c6f3dee4c19aa1e57eb7d4ad45829b2e99656313bd07fa0922e2553f500be5"
+    },
+    "third_party/gcc-runtime/gcc-13_13.3.0-6ubuntu2~24.04.1.debian.tar.xz": {
+      "bytes": 646156,
+      "sha256": "5523658f272ad6d15a83b6e26d178fbd5cb7709ec7ce2ca52b0c843e19c228e3"
+    },
+    "third_party/gcc-runtime/gcc-13_13.3.0-6ubuntu2~24.04.1.dsc": {
+      "bytes": 39540,
+      "sha256": "86b4012c312ac13e3e092877719a62a5b5dbab082ae7e9680780a25c6a13ddc6"
+    },
+    "third_party/gcc-runtime/gcc-13_13.3.0.orig.tar.gz": {
+      "bytes": 92761021,
+      "sha256": "3b85d91bf38d1b858d9d01134f4046b3359731968ed4e6e912d29717a35d1a46"
+    }
+  },
+  "schema": "paos.gcc-corresponding-source.v1",
+  "version": "13.3.0-6ubuntu2~24.04.1"
+}

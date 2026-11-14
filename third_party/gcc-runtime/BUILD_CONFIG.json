@@ -1,0 +1,22 @@
+{
+  "distribution_build": [
+    "dpkg-buildpackage",
+    "-us",
+    "-uc",
+    "-b"
+  ],
+  "limits": "Preparation unpacks exact complete upstream source and retains every distribution patch/rule, source archive and bundled newlib input. It does not apply a guessed patch subset, run a compiler, promise a bounded full GCC bootstrap, or reproduce a historical archive. The complete distribution build uses its own debian/rules and configured dependencies.",
+  "mode": "complete-source-preparation",
+  "outer_top": "gcc-13-13.3.0",
+  "prerequisites": [
+    "CPython 3.12+ standard library on Linux",
+    "For a full distribution binary rebuild: Ubuntu noble amd64 build environment with the complete Build-Depends/Build-Depends-Indep declared in the retained .dsc; dpkg-dev and distribution build tools.",
+    "No network is needed for source preparation. Distribution dependency installation is separate and explicit."
+  ],
+  "schema": "paos.gcc-source-config.v1",
+  "source_package": "gcc-13",
+  "target": "x86_64-linux-gnu",
+  "upstream": "13.3.0",
+  "upstream_top": "gcc-13.3.0",
+  "version": "13.3.0-6ubuntu2~24.04.1"
+}

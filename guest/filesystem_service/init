@@ -1,0 +1,8 @@
+#!/bin/busybox sh
+# Dedicated F11 appliance only; no shell/listener or credential fallback.
+set -eu
+/bin/busybox mkdir -p /proc /sys /dev /mnt/paos-fs /tmp
+/bin/busybox mount -t proc proc /proc
+/bin/busybox mount -t sysfs sysfs /sys
+/bin/busybox mount -t devtmpfs devtmpfs /dev
+exec /usr/bin/python3.12 -I -S -B /opt/paos/fs/supervisor.py

@@ -1,0 +1,46 @@
+{
+ "schema": "paos.rescue-sysroot-lock.v1",
+ "purpose": "Pinned, vendored inputs for the Rescue image so a host package update can neither change nor break it (ADMIN 18:56: the 2026-10-01 04:18 unattended libssl3t64/libssl-dev 3.0.13-0ubuntu3.15 -> .16 update changed the host libcrypto.so.3 and libcrypto.a). Runtime: sbverify + its direct ELF dependencies for the initramfs trust preflight. Link time: the OpenSSL headers + static libcrypto.a for paos-rescue-controller. The runtime file hashes equal the pins the build carried before this change. Every .deb is verified against Ubuntu's archive-key-signed index (InRelease -> Packages.xz -> .deb SHA-256) at the recorded snapshot. A version bump is a deliberate edit of this file (new .deb, snapshot, hashes), never a copy of whatever the host has. Still host-supplied (recorded per build in BUILDINFO, follow-up = pinned build chroot): gcc, libc6-dev (libc.a), libblkid-dev (libblkid.a), static busybox.",
+ "cache_default": "build/rescue-sysroot",
+ "archive_keyring": "/usr/share/keyrings/ubuntu-archive-keyring.gpg",
+ "debs": [
+  {"package": "libssl3t64", "version": "3.0.13-0ubuntu3.15", "arch": "amd64", "source_package": "openssl",
+   "file": "libssl3t64_3.0.13-0ubuntu3.15_amd64.deb",
+   "url": "https://snapshot.ubuntu.com/ubuntu/20260915T000000Z/pool/main/o/openssl/libssl3t64_3.0.13-0ubuntu3.15_amd64.deb",
+   "provenance": {"snapshot": "https://snapshot.ubuntu.com/ubuntu/20260915T000000Z", "suite": "noble-updates", "index": "main/binary-amd64/Packages.xz"},
+   "size": 1944134, "sha256": "3d0955bc049bbcca0f4c3e78a3a8b994593d96db7d84f4320217224433844534"},
+  {"package": "libssl-dev", "version": "3.0.13-0ubuntu3.15", "arch": "amd64", "source_package": "openssl",
+   "file": "libssl-dev_3.0.13-0ubuntu3.15_amd64.deb",
+   "url": "https://snapshot.ubuntu.com/ubuntu/20260915T000000Z/pool/main/o/openssl/libssl-dev_3.0.13-0ubuntu3.15_amd64.deb",
+   "provenance": {"snapshot": "https://snapshot.ubuntu.com/ubuntu/20260915T000000Z", "suite": "noble-updates", "index": "main/binary-amd64/Packages.xz"},
+   "size": 2408494, "sha256": "cefc6371d90d953a4cbb35d72d871f057e4b961a3107186f67fe96a88040cdb8"},
+  {"package": "libc6", "version": "2.39-0ubuntu8.9", "arch": "amd64", "source_package": "glibc",
+   "file": "libc6_2.39-0ubuntu8.9_amd64.deb",
+   "url": "https://snapshot.ubuntu.com/ubuntu/20260915T000000Z/pool/main/g/glibc/libc6_2.39-0ubuntu8.9_amd64.deb",
+   "provenance": {"snapshot": "https://snapshot.ubuntu.com/ubuntu/20260915T000000Z", "suite": "noble-updates", "index": "main/binary-amd64/Packages.xz"},
+   "size": 3264314, "sha256": "ff5557d99b51f761c4b7c92368b9cc45565eda17df9bf9eb4b134d09825008be"},
+  {"package": "sbsigntool", "version": "0.9.4-3.1ubuntu7", "arch": "amd64", "source_package": "sbsigntool",
+   "file": "sbsigntool_0.9.4-3.1ubuntu7_amd64.deb",
+   "url": "https://snapshot.ubuntu.com/ubuntu/20260930T000000Z/pool/main/s/sbsigntool/sbsigntool_0.9.4-3.1ubuntu7_amd64.deb",
+   "provenance": {"snapshot": "https://snapshot.ubuntu.com/ubuntu/20260930T000000Z", "suite": "noble", "index": "main/binary-amd64/Packages.xz"},
+   "size": 52398, "sha256": "ae14776b92b5ae136c1a122086eadedd2110075319df4f54632fba717c85c35f"}
+ ],
+ "files": [
+  {"deb": "sbsigntool", "member": "usr/bin/sbverify", "ramfs": "sbin/sbverify", "mode": "0755",
+   "sha256": "54d2941c21cc7414ec2d4a3c80690ff0e7c205939b85b1736cc70f0d60b4ff6f"},
+  {"deb": "libssl3t64", "member": "usr/lib/x86_64-linux-gnu/libcrypto.so.3", "ramfs": "lib/x86_64-linux-gnu/libcrypto.so.3", "mode": "0644",
+   "sha256": "6a66c3ba6b3749aacc9497973fff00f6ba61c703ba7015d0d7ab3fd9510974b6"},
+  {"deb": "libc6", "member": "usr/lib/x86_64-linux-gnu/libc.so.6", "ramfs": "lib/x86_64-linux-gnu/libc.so.6", "mode": "0755",
+   "sha256": "3a15d66867d83762c7f2f1e37359cb8f6c5743edb369c65285cb0b1c4f7498bf"},
+  {"deb": "libc6", "member": "usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2", "ramfs": "lib64/ld-linux-x86-64.so.2", "mode": "0755",
+   "sha256": "c20a2dc8917c755f02b94049356320fe1f62ac7d9f8994731f807d9df39302da"},
+  {"deb": "libssl-dev", "member": "usr/lib/x86_64-linux-gnu/libcrypto.a", "ramfs": "dev/lib/libcrypto.a", "mode": "0644",
+   "sha256": "b80b24f71e4b4f0e084e4dc2f92b28f30dc9e576be3c970d2deac24120322da2"}
+ ],
+ "trees": [
+  {"deb": "libssl-dev", "member_dir": "usr/include/openssl", "dest": "dev/include/openssl", "files": 133,
+   "tree_sha256": "338f7a9fb78550ffc08b317eb012583d5d55e8c6c53ec18af2160535f2e16ee9"},
+  {"deb": "libssl-dev", "member_dir": "usr/include/x86_64-linux-gnu/openssl", "dest": "dev/include/x86_64-linux-gnu/openssl", "files": 2,
+   "tree_sha256": "1805cc4b941a8e19b9f1ae00608cf9e76cead91e676dea6db4c978b1b0aab56a"}
+ ]
+}

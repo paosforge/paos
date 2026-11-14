@@ -1,0 +1,30 @@
+{
+  "schema": "paos.musl-config.v1",
+  "upstream": "1.2.4",
+  "distribution": "1.2.4-2",
+  "target": "x86_64-linux-gnu",
+  "configure": [
+    "--host=x86_64-linux-gnu",
+    "--disable-shared",
+    "--enable-wrapper=gcc"
+  ],
+  "cflags": "-O2",
+  "patches": [
+    "static-pie.patch"
+  ],
+  "fts_files": [
+    "fts.c",
+    "config.h",
+    "fts.h"
+  ],
+  "prerequisites": [
+    "Linux x86-64",
+    "CPython 3.12+ standard library",
+    "GCC at /usr/bin/gcc (including libgcc and compiler headers)",
+    "GNU binutils ar/ranlib/nm/strip",
+    "GNU make",
+    "POSIX sh and standard utilities",
+    "patch"
+  ],
+  "source_prefix_map": "musl-1.2.4"
+}

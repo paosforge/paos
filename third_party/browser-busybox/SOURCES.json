@@ -1,0 +1,142 @@
+{
+  "creator": "rc-codex-relops / Codex, 2026-10-16",
+  "limits": [
+    "dpkg-source could not verify the descriptor signature because its signing public key was unavailable; prior HTTPS checksums and exact selected binary pins are retained without a new authenticity claim.",
+    "configure-static builds/runs the trusted host Kconfig utility; no BusyBox executable was rebuilt or run.",
+    "The original binary Built-Using requires glibc2.39-0ubuntu8.2 source; installed host glibc2.39-0ubuntu8.9 is a different input. This matching static-library source and its original notices/relinking obligations remain open.",
+    "debhelper13 build dependency and the historical complete compiler/build environment remain open. No package install or full binary build occurred.",
+    "This local source/config input bundle does not establish a legal source offer, historical byte reproducibility, full appliance closure or distribution clearance."
+  ],
+  "observed_preparation": {
+    "binary_and_source_copyright_exact": true,
+    "commands_completed": [
+      [
+        "dpkg-source",
+        "-x",
+        "busybox_1.36.1-6ubuntu3.1.dsc",
+        "source"
+      ],
+      [
+        "make",
+        "-f",
+        "debian/rules",
+        "configure-static"
+      ]
+    ],
+    "note": "Saved first preparation, not performed by the offline bundler.",
+    "patches_applied": [
+      "shell-ash-export-HOME.patch",
+      "version.patch",
+      "init-console.patch",
+      "stop-checking-ancient-kernel-version.patch",
+      "revert-9c143ce52da11ec3d21a3491c3749841d3dc10f0.patch",
+      "temp-deb-installer-hack.patch",
+      "install-readlink-in-bin.patch",
+      "spelling.diff",
+      "test-bin.patch",
+      "static-sh-alias.patch",
+      "platform-linux.diff",
+      "fix-non-linux-build.patch",
+      "syslogd-decrease-stack-usage-50-bytes.patch",
+      "syslogd-daemonize-after-init-make-errs-visible.patch",
+      "syslogd-fix-breakage-caused-by-daemonize-_after_-ini.patch",
+      "syslogd-option_mask32.patch",
+      "syslogd-make-it-optionally-systemd-socket-activated.patch",
+      "install-fix-chown-resetting-suid-sgid-bits-from-chmod.patch",
+      "reverse-cbq.patch",
+      "CVE-2023-42364.patch",
+      "CVE-2022-48174.patch",
+      "CVE-2023-42363.patch",
+      "fix-awk-assignment-precedence.patch"
+    ],
+    "source_descriptor_signature_verified": false,
+    "static_config_exact": {
+      "bytes": 31870,
+      "sha256": "d2d5f13922b26b070453cd3eb3c5992a233463a1b76cde59b324c688d088b0a4"
+    }
+  },
+  "package": {
+    "architecture": "amd64",
+    "binary": {
+      "bytes": 2124608,
+      "sha256": "dbac288c29ba568459550a2da9e7ae0ded6b1fc728ee9fad3044c44e62d6ac14"
+    },
+    "built_using": {
+      "glibc": "2.39-0ubuntu8.2"
+    },
+    "name": "busybox-static",
+    "version": "1:1.36.1-6ubuntu3.1"
+  },
+  "schema": "paos.browser-busybox-source-selection.v1",
+  "scope": "Pinned complete BusyBox source package and observed static configuration inputs; matching glibc Built-Using source and historical reproduction remain open.",
+  "selected": {
+    "selected/LICENSE": {
+      "archive": "busybox_1.36.1.orig.tar.bz2",
+      "bytes": 18348,
+      "member": "busybox-1.36.1/LICENSE",
+      "sha256": "bbfc9843646d483c334664f651c208b9839626891d8f17604db2146962f43548"
+    },
+    "selected/debian/config/os/linux": {
+      "archive": "busybox_1.36.1-6ubuntu3.1.debian.tar.xz",
+      "bytes": 24,
+      "member": "debian/config/os/linux",
+      "sha256": "2bdb1f13d27346a2141b62d2c073a9f2315f4e4c4102e7dab7cebf12ba0cf5e9"
+    },
+    "selected/debian/config/pkg/static": {
+      "archive": "busybox_1.36.1-6ubuntu3.1.debian.tar.xz",
+      "bytes": 31870,
+      "member": "debian/config/pkg/static",
+      "sha256": "d2d5f13922b26b070453cd3eb3c5992a233463a1b76cde59b324c688d088b0a4"
+    },
+    "selected/debian/copyright": {
+      "archive": "busybox_1.36.1-6ubuntu3.1.debian.tar.xz",
+      "bytes": 1110,
+      "member": "debian/copyright",
+      "sha256": "336d995e819d3a7a3fdbf3f5041c07094f75ee849acb3bb742b7503d45786329"
+    },
+    "selected/debian/patches/series": {
+      "archive": "busybox_1.36.1-6ubuntu3.1.debian.tar.xz",
+      "bytes": 897,
+      "member": "debian/patches/series",
+      "sha256": "72b2800108aef900e7fb26d10d3217d33c3cc80f80de03c48fcc027a0e8c36dc"
+    },
+    "selected/debian/rules": {
+      "archive": "busybox_1.36.1-6ubuntu3.1.debian.tar.xz",
+      "bytes": 6814,
+      "member": "debian/rules",
+      "sha256": "118334dcef8bbbd07bf5e1c7eaad2675e58738820be01ad1c3eef86df862fbc5"
+    },
+    "selected/debian/source/format": {
+      "archive": "busybox_1.36.1-6ubuntu3.1.debian.tar.xz",
+      "bytes": 12,
+      "member": "debian/source/format",
+      "sha256": "1be7080d72e6b566df3e236ce2c55efdfbbb8fa1c972d825e5b672ff8773be1a"
+    }
+  },
+  "source_package": {
+    "files": {
+      "busybox_1.36.1-6ubuntu3.1.debian.tar.xz": {
+        "bytes": 84488,
+        "sha256": "1c7d785cf1e1d5d09ddc22fe755e14327fb3799878a5d840fc611044ff05f022",
+        "url": "https://archive.ubuntu.com/ubuntu/pool/main/b/busybox/busybox_1.36.1-6ubuntu3.1.debian.tar.xz"
+      },
+      "busybox_1.36.1-6ubuntu3.1.dsc": {
+        "bytes": 2711,
+        "sha256": "ffbee3f0383ea5a3e77033c2bcc1978dc9ae00ff8c9d0a362ee32f6e84254be8",
+        "url": "https://archive.ubuntu.com/ubuntu/pool/main/b/busybox/busybox_1.36.1-6ubuntu3.1.dsc"
+      },
+      "busybox_1.36.1.orig.tar.bz2": {
+        "bytes": 2525473,
+        "sha256": "b8cc24c9574d809e7279c3be349795c5d5ceb6fdf19ca709f80cde50e47de314",
+        "url": "https://archive.ubuntu.com/ubuntu/pool/main/b/busybox/busybox_1.36.1.orig.tar.bz2"
+      },
+      "busybox_1.36.1.orig.tar.bz2.asc": {
+        "bytes": 195,
+        "sha256": "d4a7082ba3cbc35b2fdb4f132a32e3789de66ce468b7b4858563f5f157c28afe",
+        "url": "https://archive.ubuntu.com/ubuntu/pool/main/b/busybox/busybox_1.36.1.orig.tar.bz2.asc"
+      }
+    },
+    "name": "busybox",
+    "version": "1:1.36.1-6ubuntu3.1"
+  }
+}

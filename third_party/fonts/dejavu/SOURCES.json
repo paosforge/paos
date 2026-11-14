@@ -1,0 +1,67 @@
+{
+  "schema": "paos.dejavu-aa.source.v1",
+  "font_version": "2.37-8-ubuntu",
+  "freetype_version": "2.14.1",
+  "origins": [
+    {
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/f/fonts-dejavu/fonts-dejavu-mono_2.37-8_all.deb",
+      "sha256": "8a599d6553307db7ecb795d2f0e5a301e03234afc75c7358b0ba43466454c89a",
+      "member": "usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
+    },
+    {
+      "url": "https://deb.debian.org/debian/pool/main/f/fonts-dejavu/fonts-dejavu_2.37.orig.tar.bz2",
+      "sha256": "4b21c5203f792343d5e90ab1cb0cf07e99887218abe3d83cd9a98cea9085e799",
+      "members": "src/DejaVuSansMono.sfd (selected); full archive retains upstream Makefile/scripts"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/dejavu-fonts/dejavu-fonts/0eda8a319c08835009849583cd090bb5b141ce25/src/DejaVuSansMono.sfd",
+      "sha256": "2b0f6180dce3f16e2e63c6fcb81c4ad5736ce2c9a18cee8bdaec2ab1f118b533"
+    },
+    {
+      "url": "https://deb.debian.org/debian/pool/main/f/fonts-dejavu/fonts-dejavu_2.37-8.debian.tar.xz",
+      "sha256": "2401402245dec8a59fc5f0f8eff76d203a38440797f7f223e1d044e07c2d41fb"
+    },
+    {
+      "url": "https://download.savannah.gnu.org/releases/freetype/freetype-2.14.1.tar.xz",
+      "sha256": "32427e8c471ac095853212a37aef816c60b42052d4d9e48230bab3bdf2936ccc"
+    }
+  ],
+  "files": {
+    "LICENSE": {
+      "bytes": 1339,
+      "sha256": "1f5cd2125879facec810601c53e8cb35bf7d0314c9d9127e2acb7b7fdf4885d3"
+    },
+    "third_party/fonts/dejavu/DejaVuSansMono.sfd": {
+      "bytes": 2238578,
+      "sha256": "2b0f6180dce3f16e2e63c6fcb81c4ad5736ce2c9a18cee8bdaec2ab1f118b533"
+    },
+    "third_party/fonts/dejavu/DejaVuSansMono.ttf": {
+      "bytes": 343140,
+      "sha256": "c805f9436dbc268644c1d9584f01a601a653e028e08fd74b9b949f6cf8304d88"
+    },
+    "third_party/fonts/dejavu/FreeType-FTL.txt": {
+      "bytes": 6743,
+      "sha256": "5a5ee54c5001bbad1cdc1a57cc3dd4c42199b2da09d39c7ee41fab002d02967f"
+    },
+    "third_party/fonts/dejavu/FreeType-LICENSE.txt": {
+      "bytes": 2149,
+      "sha256": "bd36c8b474855fa294c2ec5c184544478ef3720aad37d65a6296a4f264fd2d3b"
+    },
+    "third_party/fonts/dejavu/LICENSE": {
+      "bytes": 8816,
+      "sha256": "7a083b136e64d064794c3419751e5c7dd10d2f64c108fe5ba161eae5e5958a93"
+    },
+    "third_party/fonts/dejavu/SOURCE.md": {
+      "bytes": 4172,
+      "sha256": "cb7df19d76a1e8391c9a8fa47b752e62947fc46271eae0b443810112f09891a8"
+    },
+    "third_party/fonts/dejavu/freetype-2.14.1.tar.xz": {
+      "bytes": 2664948,
+      "sha256": "32427e8c471ac095853212a37aef816c60b42052d4d9e48230bab3bdf2936ccc"
+    },
+    "tools/fonts/raster_aa.c": {
+      "bytes": 1741,
+      "sha256": "ebcf539581a998e8fb2baad64baf70ff590dffd3f772d3312276caa8905bf5a8"
+    }
+  }
+}

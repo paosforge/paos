@@ -1,0 +1,30 @@
+{
+  "files": {
+    "LICENSE": "1f5cd2125879facec810601c53e8cb35bf7d0314c9d9127e2acb7b7fdf4885d3",
+    "LICENSES/MPL-2.0.txt": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+    "LICENSES/Unicode-15.0.0-NOTICE.txt": "53672c0d0b5185e3cf04c8e970d544c3af81ae7c8eeba0b9cf6d355aa954ae1f",
+    "LICENSES/Unicode-3.0.txt": "e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96",
+    "third_party/fonts/unifont/LICENSE": "ddd1809be6c7da406c9969515f6877ecdccf2bc194a2ff21088398565c2863fd",
+    "third_party/fonts/unifont/OFL-1.1.txt": "869692af094c57fb7258c57fe26820c759319603321d0ffeb278de3651763ded",
+    "third_party/fonts/unifont/SOURCE.md": "9953d77caa6204328ed413d426fa76961fa0ac1845b8d5224045765725617ac8",
+    "third_party/fonts/unifont/Unifont.COPYING": "5a65797606332f2f63057fd81ea0ff35f74043583515bf900ee9b42efa8176a6",
+    "third_party/fonts/unifont/unifont-ui-subset.hex": "6c4b16cf4cb8f53e3d8d9bf8da012271547c10bf0fb2bec60dfebac042b42d73",
+    "third_party/localization/Unihan_IRGSources.level1.txt": "c5442d5bcf916d7682f5f0567dae30183df9950e7fc8b5e3d295dd1719a0a865",
+    "third_party/localization/catalog.l5.v1.json": "d17b88a904985f2078196ccbbb865f39d67d6496f9f111249cb1b43c3637625d",
+    "third_party/localization/catalog.offline-help.en.v1.json": "4e334d40a9b0ce8a9c3ddf406bd4cb5b6518ed5a53a7f1e5788829f0f0cb1762",
+    "third_party/localization/catalog.rc1.v1.json": "586a333dc44e7a39c0e331e3924f99b50e46098a2621c3eeb448995342b2d5bb",
+    "third_party/localization/glossary.installer-mok.rc1.v1.json": "89bfdc43a88f76b231c21cdd0a716d86a0eea4611fd517f3f016251ed1f8a85f",
+    "third_party/localization/glossary.rc1.v1.json": "40c2cb3da6ec96472cb15a08a626a8213f28b88fd8967c94dda18d35fa4fbdd9",
+    "third_party/localization/offline_help.pages.v1.json": "f3f5ae05c654dd7676dd2a4c54c403615f3637143609b4af30171bfe847b89c3",
+    "third_party/localization/source_sites.v1.json": "37a42d0e7a8bd7ebc553140f63bd786e89a38e252f4b8defc6776af5e1a5a8c8",
+    "third_party/unicode/ucd-15.0.0/DerivedGeneralCategory.txt": "fe29a45c0882500e591140aaa5c4f5067e6a5d746806148af34400c48b9c06f9",
+    "third_party/unicode/ucd-15.0.0/EastAsianWidth.txt": "743e7bc435c04ab1a8459710b1c3cad56eedced5b806b4659b6e69b85d0adf2a",
+    "tools/l10n/catalog.py": "6b4f76bb2e19dcdd7c613d4e6597bd17531e9920f84ca42851739913376a4b7a",
+    "tools/l10n/emitter.py": "876997eb5cb609876f474165d74b6e1f8bc8d6d34d1365856f7161541f894f4e",
+    "tools/l10n/site_map.py": "1763baace0061abf620740f395c2fef7738bb387748ddc9fa03826b9b031b239",
+    "tools/unicode/widths.py": "ea1e8691655c89464cb271a31b516e3cbb19bea3471ebaac185e279377384870"
+  },
+  "format": 1,
+  "unicode_version": "15.0.0",
+  "unifont_version": "15.1.01"
+}

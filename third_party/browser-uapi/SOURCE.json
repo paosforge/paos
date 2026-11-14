@@ -1,0 +1,32 @@
+{
+  "files": {
+    "GPL-2.0": {
+      "bytes": 18729,
+      "sha256": "f6b78c087c3ebdf0f3c13415070dd480a3f35d8fc76f3d02180a407c1c812f79",
+      "url": "https://raw.githubusercontent.com/gregkh/linux/v6.6.32/LICENSES/preferred/GPL-2.0"
+    },
+    "Linux-syscall-note": {
+      "bytes": 1258,
+      "sha256": "8e378ab93586eb55135d3bc119cce787f7324f48394777d00c34fa3d0be3303f",
+      "url": "https://raw.githubusercontent.com/gregkh/linux/v6.6.32/LICENSES/exceptions/Linux-syscall-note"
+    },
+    "fb.h": {
+      "bytes": 16517,
+      "sha256": "cdc6d0e027bc89c422fac10b1edadc880e30b55902c88e750836ba27d869a210",
+      "url": "https://raw.githubusercontent.com/gregkh/linux/v6.6.32/include/uapi/linux/fb.h"
+    },
+    "input-event-codes.h": {
+      "bytes": 30015,
+      "sha256": "200f9813a217d75759cb9b34e746906c81b1942bc6d8cdbaba64bc148b05a96a",
+      "url": "https://raw.githubusercontent.com/gregkh/linux/v6.6.32/include/uapi/linux/input-event-codes.h"
+    },
+    "input.h": {
+      "bytes": 16265,
+      "sha256": "0a5f1fff18970a9e535eacad80677bb4b06e90cec4fc6eb0894d5d5ced51301b",
+      "url": "https://raw.githubusercontent.com/gregkh/linux/v6.6.32/include/uapi/linux/input.h"
+    }
+  },
+  "schema": "paos.browser-uapi-origin.v1",
+  "scope": "Upstream UAPI references and full license/exception texts for the adapted uapi_min.h subset; not full kernel corresponding source",
+  "upstream": "Linux stable v6.6.32"
+}

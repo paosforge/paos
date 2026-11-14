@@ -1,0 +1,1069 @@
+{
+  "schema": "paos.offline_help.pages.v1",
+  "revision": 1,
+  "catalog": "catalog.offline-help.en.v1.json",
+  "source_revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+  "status": "translated-DATA-review-fold-unbound",
+  "numeric_id_allocation": {
+    "first": 6000,
+    "last_used": 6044,
+    "proposed_range_last": 6099,
+    "status": "reserved by rc-boot 2026-10-10T23:42:51-07:00",
+    "condition": "UI catalog must not use 6000-6099; all help message IDs must stay in 6000-6099."
+  },
+  "glossary": {
+    "path": "gauntlet_v2/docs/localization/glossary.rc1.v1.json",
+    "sha256": "40c2cb3da6ec96472cb15a08a626a8213f28b88fd8967c94dda18d35fa4fbdd9"
+  },
+  "render_contract": {
+    "whole_message": true,
+    "static_params_are_data_only": true,
+    "translate_param_values": false,
+    "escape_param_values": true,
+    "carrier": "pending rc-boot / rc-input design",
+    "native_surface": "pending rc-input design",
+    "budget_glyph_and_layout_delivery": "pending; no image or translated fit claimed",
+    "max_rendered_message_utf8_bytes": 255,
+    "static_tokens_wrap": "atomic: each static token must stay unbroken on one line; refuse layout rather than split a token",
+    "width_unit": "display cells; CJK scalars use two cells",
+    "translation_fit": "check all rendered paragraphs <=255 UTF-8 bytes; ja and zh-Hans also need their own cell-wrap check"
+  },
+  "review": {
+    "english": "srcreview ACCEPT2026-10-11T00:43:00; n1/n2 folded as DATA nit to admin",
+    "trust_recovery_authentication": "English accepted; translations rc-sec ACCEPT_WITH_NITS01:01:26, n1-n3 folded for changed-record confirmation",
+    "surface_fit": "Input01:02:51 CHANGES_REQUIRED F1/F2 folded; corrected label and wrap evidence pending confirmation; native surface not designed",
+    "translations": "40whole messages x5 locales machine-authored; source review and input F1/F2 confirmation pending; no native-language evaluation claimed",
+    "numeric_allocation": "rc-boot accepted reserved band 6000-6099; English PCAT carrier implementation remains pending root GO"
+  },
+  "coverage_limits": [
+    "No password-enrollment wizard is described: this build requires an already authenticated owner setup.",
+    "No display-language chooser or language Settings control is claimed at the pinned base; recheck this paragraph when those land.",
+    "No Wi-Fi setup wizard, updater launch path, Feedback app, support URL or reporting address is invented. Network advice is conditional.",
+    "Manager menu selection instructions apply only when the menu is visible; healthy blind-window key handling is not generalized to any key.",
+    "Previous-version boot is not a promise to restore personal files. Rescue is not a public root shell.",
+    "General reporting and cable-check advice is identified as advice; citations establish the associated product state/security boundary, not a feedback implementation.",
+    "This DATA draft alone does not satisfy offline-help delivery. Native binding, reachability, release contacts and page/glyph/budget acceptance are still required.",
+    "RCQ-41 failure-record guidance6040-6044 uses embedded English fallback; five-locale translations pending. One best-effort diagnostic archive, not every crash/rollback or file recovery."
+  ],
+  "pages": [
+    {
+      "id": "help.offline.first_boot",
+      "title_key": "help.offline.first_boot.title",
+      "blocks": [
+        {
+          "message_key": "help.offline.first_boot.start",
+          "kind": "instruction",
+          "static_params": {
+            "volume": {
+              "type": "text",
+              "value": "PAOS-BOOT",
+              "translate_value": false,
+              "escape_for_display": true
+            }
+          },
+          "source_refs": [
+            "gauntlet_v2/docs/secure-boot/PAOS_ENROLL_GUIDE.md:17-24"
+          ]
+        },
+        {
+          "message_key": "help.offline.first_boot.secure_boot",
+          "kind": "instruction",
+          "static_params": {},
+          "source_refs": [
+            "gauntlet_v2/docs/secure-boot/PAOS_ENROLL_GUIDE.md:49-56"
+          ]
+        },
+        {
+          "message_key": "help.offline.first_boot.manager",
+          "kind": "advice",
+          "static_params": {},
+          "source_refs": [
+            "src/boot/boot_v2_health.asm:8-11",
+            "src/bootmgr/paos_bootmgr.asm:8220-8235",
+            "src/bootmgr/paos_bootmgr.asm:5464-5472",
+            "src/bootmgr/paos_bootmgr.asm:7874-7874",
+            "src/bootmgr/paos_bootmgr.asm:8310-8311"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "help.offline.sign_in",
+      "title_key": "help.offline.sign_in.title",
+      "blocks": [
+        {
+          "message_key": "help.offline.sign_in.account",
+          "kind": "instruction",
+          "static_params": {
+            "owner": {
+              "type": "text",
+              "value": "paos",
+              "translate_value": false,
+              "escape_for_display": true
+            },
+            "layout_label": {
+              "type": "text",
+              "value": "Password (Keyboard: FR)",
+              "translate_value": false,
+              "escape_for_display": true
+            }
+          },
+          "source_refs": [
+            "src/gui/forms/lock_screen.frm:5-11",
+            "src/gui/lock_screen.asm:804-808",
+            "src/gui/lock_screen.asm:951-990",
+            "src/gui/lock_screen.asm:315-328"
+          ]
+        },
+        {
+          "message_key": "help.offline.sign_in.keyboard_hint",
+          "kind": "explanation",
+          "static_params": {},
+          "source_refs": [
+            "src/gui/forms/lock_screen.frm:5-11",
+            "src/gui/lock_screen.asm:804-808",
+            "src/gui/lock_screen.asm:951-990",
+            "src/gui/lock_screen.asm:315-328"
+          ]
+        },
+        {
+          "message_key": "help.offline.sign_in.submit",
+          "kind": "instruction",
+          "static_params": {
+            "enter": {
+              "type": "text",
+              "value": "Enter",
+              "translate_value": false,
+              "escape_for_display": true
+            }
+          },
+          "source_refs": [
+            "src/gui/forms/lock_screen.frm:5-11",
+            "src/gui/lock_screen.asm:804-808",
+            "src/gui/lock_screen.asm:951-990",
+            "src/gui/lock_screen.asm:1255-1261",
+            "src/sec/principal.asm:552-553"
+          ]
+        },
+        {
+          "message_key": "help.offline.sign_in.enroll",
+          "kind": "limitation",
+          "static_params": {},
+          "source_refs": [
+            "src/sec/principal.asm:2109-2127"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "help.offline.language_keyboard",
+      "title_key": "help.offline.language_keyboard.title",
+      "blocks": [
+        {
+          "message_key": "help.offline.language_keyboard.separate",
+          "kind": "explanation",
+          "static_params": {},
+          "source_refs": [
+            "src/gui/kbd_prefs.asm:8-9",
+            "src/gui/settings_prefs.asm:47-52"
+          ]
+        },
+        {
+          "message_key": "help.offline.language_keyboard.language",
+          "kind": "limitation",
+          "static_params": {},
+          "source_refs": [
+            "VERSIONS.md:1280-1285"
+          ]
+        },
+        {
+          "message_key": "help.offline.language_keyboard.choose",
+          "kind": "instruction",
+          "static_params": {},
+          "source_refs": [
+            "src/gui/forms/settings.frm:1-10",
+            "src/gui/start_programs.asm:165-186",
+            "src/gui/settings_prefs.asm:47-52",
+            "src/gui/settings_prefs.asm:302-313"
+          ]
+        },
+        {
+          "message_key": "help.offline.language_keyboard.result",
+          "kind": "instruction",
+          "static_params": {},
+          "source_refs": [
+            "src/gui/settings_prefs.asm:17-27",
+            "src/gui/settings_prefs.asm:280-323",
+            "src/gui/settings_prefs.asm:337-342"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "help.offline.network",
+      "title_key": "help.offline.network.title",
+      "blocks": [
+        {
+          "message_key": "help.offline.network.inspect",
+          "kind": "instruction",
+          "static_params": {},
+          "source_refs": [
+            "src/gui/netmon_app.asm:7-13",
+            "src/gui/netmon_form.asm:439-451",
+            "src/gui/netmon_form.asm:765-776"
+          ]
+        },
+        {
+          "message_key": "help.offline.network.cable",
+          "kind": "advice",
+          "static_params": {},
+          "source_refs": [
+            "src/gui/netmon_app.asm:7-13",
+            "src/gui/netmon_form.asm:439-451",
+            "src/gui/netmon_form.asm:765-776"
+          ]
+        },
+        {
+          "message_key": "help.offline.network.help",
+          "kind": "advice",
+          "static_params": {},
+          "source_refs": [
+            "src/gui/netmon_app.asm:7-13",
+            "src/gui/netmon_form.asm:439-451",
+            "src/gui/netmon_form.asm:765-776"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "help.offline.update_rollback",
+      "title_key": "help.offline.update_rollback.title",
+      "blocks": [
+        {
+          "message_key": "help.offline.update_rollback.slots",
+          "kind": "explanation",
+          "static_params": {},
+          "source_refs": [
+            "gauntlet_v2/docs/boot_v2_deployment.md:28-31"
+          ]
+        },
+        {
+          "message_key": "help.offline.update_rollback.trial",
+          "kind": "explanation",
+          "static_params": {},
+          "source_refs": [
+            "src/boot/boot_v2_health.asm:8-11",
+            "src/bootmgr/paos_bootmgr.asm:8220-8235"
+          ]
+        },
+        {
+          "message_key": "help.offline.update_rollback.previous",
+          "kind": "instruction",
+          "static_params": {
+            "label": {
+              "type": "text",
+              "value": "O - PaOS (previous version)",
+              "translate_value": false,
+              "escape_for_display": true
+            },
+            "key": {
+              "type": "text",
+              "value": "O",
+              "translate_value": false,
+              "escape_for_display": true
+            }
+          },
+          "source_refs": [
+            "src/bootmgr/paos_bootmgr.asm:5391-5447",
+            "src/bootmgr/paos_bootmgr.asm:7871-7874"
+          ]
+        },
+        {
+          "message_key": "help.offline.update_rollback.protect",
+          "kind": "instruction",
+          "static_params": {},
+          "source_refs": [
+            "AGENTS.md:23-28",
+            "gauntlet_v2/docs/secure-boot/PAOS_ENROLL_GUIDE.md:49-56"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "help.offline.recovery",
+      "title_key": "help.offline.recovery.title",
+      "blocks": [
+        {
+          "message_key": "help.offline.recovery.previous",
+          "kind": "instruction",
+          "static_params": {
+            "label": {
+              "type": "text",
+              "value": "O - PaOS (previous version)",
+              "translate_value": false,
+              "escape_for_display": true
+            },
+            "key": {
+              "type": "text",
+              "value": "O",
+              "translate_value": false,
+              "escape_for_display": true
+            }
+          },
+          "source_refs": [
+            "src/bootmgr/paos_bootmgr.asm:5391-5447",
+            "src/bootmgr/paos_bootmgr.asm:7871-7874"
+          ]
+        },
+        {
+          "message_key": "help.offline.recovery.rescue",
+          "kind": "instruction",
+          "static_params": {
+            "key": {
+              "type": "text",
+              "value": "R",
+              "translate_value": false,
+              "escape_for_display": true
+            },
+            "label": {
+              "type": "text",
+              "value": "R - PaOS Rescue",
+              "translate_value": false,
+              "escape_for_display": true
+            }
+          },
+          "source_refs": [
+            "src/bootmgr/paos_bootmgr.asm:5464-5472",
+            "src/bootmgr/paos_bootmgr.asm:7874-7874",
+            "src/bootmgr/paos_bootmgr.asm:8310-8311",
+            "src/bootmgr/paos_bootmgr.asm:5620-5626",
+            "src/bootmgr/paos_bootmgr.asm:5747-5749",
+            "src/bootmgr/paos_bootmgr.asm:574-576"
+          ]
+        },
+        {
+          "message_key": "help.offline.recovery.observe",
+          "kind": "explanation",
+          "static_params": {},
+          "source_refs": [
+            "src/rescue/init:111-132"
+          ]
+        },
+        {
+          "message_key": "help.offline.recovery.repair",
+          "kind": "advice",
+          "static_params": {},
+          "source_refs": [
+            "src/rescue/init:111-132",
+            "AGENTS.md:23-28"
+          ]
+        },
+        {
+          "message_key": "help.offline.recovery.failure_retained",
+          "kind": "explanation",
+          "static_params": {},
+          "source_refs": [
+            "src/boot/boot_v2_health.asm:479-695",
+            "src/rescue/controller.c:174-273",
+            "src/rescue/controller.c:1102-1103",
+            "src/rescue/init:109-138"
+          ]
+        },
+        {
+          "message_key": "help.offline.recovery.failure_readout",
+          "kind": "advice",
+          "static_params": {},
+          "source_refs": [
+            "src/boot/boot_v2_health.asm:479-695",
+            "src/rescue/controller.c:174-273",
+            "src/rescue/controller.c:1102-1103",
+            "src/rescue/init:109-138"
+          ]
+        },
+        {
+          "message_key": "help.offline.recovery.failure_support_read",
+          "kind": "explanation",
+          "static_params": {
+            "tool": {
+              "type": "text",
+              "value": "/sbin/paos-rescue-controller",
+              "translate_value": false,
+              "escape_for_display": true
+            },
+            "flag": {
+              "type": "text",
+              "value": "--failure-record",
+              "translate_value": false,
+              "escape_for_display": true
+            },
+            "root": {
+              "type": "text",
+              "value": "/sys/firmware/efi/efivars",
+              "translate_value": false,
+              "escape_for_display": true
+            }
+          },
+          "source_refs": [
+            "src/boot/boot_v2_health.asm:479-695",
+            "src/rescue/controller.c:174-273",
+            "src/rescue/controller.c:1102-1103",
+            "src/rescue/init:109-138"
+          ]
+        },
+        {
+          "message_key": "help.offline.recovery.failure_meaning",
+          "kind": "explanation",
+          "static_params": {},
+          "source_refs": [
+            "src/boot/boot_v2_health.asm:479-695",
+            "src/rescue/controller.c:174-273",
+            "src/rescue/controller.c:1102-1103",
+            "src/rescue/init:109-138"
+          ]
+        },
+        {
+          "message_key": "help.offline.recovery.failure_limits",
+          "kind": "limitation",
+          "static_params": {},
+          "source_refs": [
+            "src/boot/boot_v2_health.asm:479-695",
+            "src/rescue/controller.c:174-273",
+            "src/rescue/controller.c:1102-1103",
+            "src/rescue/init:109-138"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "help.offline.secure_boot_mok",
+      "title_key": "help.offline.secure_boot_mok.title",
+      "blocks": [
+        {
+          "message_key": "help.offline.secure_boot_mok.guide",
+          "kind": "instruction",
+          "static_params": {
+            "guide": {
+              "type": "path",
+              "value": "PAOS_ENROLL_GUIDE.txt",
+              "translate_value": false,
+              "escape_for_display": true
+            },
+            "volume": {
+              "type": "text",
+              "value": "PAOS-BOOT",
+              "translate_value": false,
+              "escape_for_display": true
+            }
+          },
+          "source_refs": [
+            "gauntlet_v2/docs/secure-boot/PAOS_ENROLL_GUIDE.md:7-12"
+          ]
+        },
+        {
+          "message_key": "help.offline.secure_boot_mok.origin",
+          "kind": "advice",
+          "static_params": {},
+          "source_refs": [
+            "gauntlet_v2/docs/secure-boot/PAOS_ENROLL_GUIDE.md:7-12"
+          ]
+        },
+        {
+          "message_key": "help.offline.secure_boot_mok.labels",
+          "kind": "explanation",
+          "static_params": {
+            "enroll": {
+              "type": "text",
+              "value": "Enroll key from disk",
+              "translate_value": false,
+              "escape_for_display": true
+            },
+            "view": {
+              "type": "text",
+              "value": "View key 0",
+              "translate_value": false,
+              "escape_for_display": true
+            }
+          },
+          "source_refs": [
+            "gauntlet_v2/docs/secure-boot/PAOS_ENROLL_GUIDE.md:27-31"
+          ]
+        },
+        {
+          "message_key": "help.offline.secure_boot_mok.compare",
+          "kind": "instruction",
+          "static_params": {
+            "fingerprint": {
+              "type": "text",
+              "value": "[Fingerprint]",
+              "translate_value": false,
+              "escape_for_display": true
+            },
+            "escape": {
+              "type": "text",
+              "value": "Esc",
+              "translate_value": false,
+              "escape_for_display": true
+            },
+            "continue_boot": {
+              "type": "text",
+              "value": "Continue boot",
+              "translate_value": false,
+              "escape_for_display": true
+            }
+          },
+          "source_refs": [
+            "gauntlet_v2/docs/secure-boot/PAOS_ENROLL_GUIDE.md:7-12",
+            "gauntlet_v2/docs/secure-boot/PAOS_ENROLL_GUIDE.md:30-30",
+            "gauntlet_v2/docs/secure-boot/PAOS_ENROLL_GUIDE.md:49-53"
+          ]
+        },
+        {
+          "message_key": "help.offline.secure_boot_mok.password",
+          "kind": "instruction",
+          "static_params": {
+            "continue_boot": {
+              "type": "text",
+              "value": "Continue boot",
+              "translate_value": false,
+              "escape_for_display": true
+            }
+          },
+          "source_refs": [
+            "gauntlet_v2/docs/secure-boot/PAOS_ENROLL_GUIDE.md:30-30",
+            "gauntlet_v2/docs/secure-boot/PAOS_ENROLL_GUIDE.md:49-53",
+            "gauntlet_v2/docs/secure-boot/PAOS_ENROLL_GUIDE.md:49-56"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "help.offline.getting_help",
+      "title_key": "help.offline.getting_help.title",
+      "blocks": [
+        {
+          "message_key": "help.offline.getting_help.note",
+          "kind": "advice",
+          "static_params": {},
+          "source_refs": [
+            "src/gui/netmon_app.asm:7-13",
+            "src/gui/netmon_form.asm:439-451",
+            "src/gui/netmon_form.asm:765-776",
+            "src/rescue/init:111-132"
+          ]
+        },
+        {
+          "message_key": "help.offline.getting_help.private",
+          "kind": "advice",
+          "static_params": {},
+          "source_refs": [
+            "src/gui/lock_screen.asm:784-790",
+            "src/sec/principal.asm:3123-3123"
+          ]
+        },
+        {
+          "message_key": "help.offline.getting_help.password",
+          "kind": "advice",
+          "static_params": {},
+          "source_refs": [
+            "src/gui/lock_screen.asm:784-790",
+            "src/sec/principal.asm:3123-3123",
+            "src/gui/lock_screen.asm:1255-1261"
+          ]
+        },
+        {
+          "message_key": "help.offline.getting_help.contact",
+          "kind": "advice",
+          "static_params": {},
+          "source_refs": [
+            "src/sec/principal.asm:2109-2127",
+            "gauntlet_v2/docs/secure-boot/PAOS_ENROLL_GUIDE.md:30-30",
+            "gauntlet_v2/docs/secure-boot/PAOS_ENROLL_GUIDE.md:49-53"
+          ]
+        },
+        {
+          "message_key": "help.offline.getting_help.security",
+          "kind": "advice",
+          "static_params": {},
+          "source_refs": [
+            "src/gui/lock_screen.asm:784-790",
+            "src/sec/principal.asm:3123-3123"
+          ]
+        }
+      ]
+    }
+  ],
+  "sources": {
+    "gauntlet_v2/docs/secure-boot/PAOS_ENROLL_GUIDE.md:17-24": {
+      "path": "gauntlet_v2/docs/secure-boot/PAOS_ENROLL_GUIDE.md",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "e449be8305fed6157e8445d992eb0531a1555c809197340c9d475a99d0f31adf",
+      "line_start": 17,
+      "line_end": 24,
+      "excerpt": "**Before you start:** find your computer's one-time boot-menu key. The maker's logo shows it briefly when the\ncomputer starts, for example \"Press <F7> to Boot Menu\". It's often F7, F8, F11 or F12, and F7 on AMI firmware.\nMany computers ship with **Fast Boot** on. With Fast Boot on, a plain restart can skip the USB drive entirely and\nstart your usual system again, so use the boot-menu key.\n\n## Steps\n\n1. Plug in the PAOS-BOOT drive and restart. While the maker's logo shows, press the one-time boot-menu key it names (often F7, F8, F11 or F12; F7 on AMI firmware) and choose the USB / PAOS-BOOT entry. With Fast Boot on, a plain restart can skip the USB drive and start your usual system again: if that happens, restart and press the boot-menu key."
+    },
+    "gauntlet_v2/docs/secure-boot/PAOS_ENROLL_GUIDE.md:49-56": {
+      "path": "gauntlet_v2/docs/secure-boot/PAOS_ENROLL_GUIDE.md",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "e449be8305fed6157e8445d992eb0531a1555c809197340c9d475a99d0f31adf",
+      "line_start": 49,
+      "line_end": 56,
+      "excerpt": "- **The fingerprint looks different.** First check the format: MokManager prints two lines of upper-case pairs, and the\n  guide prints the same two lines. If the bytes differ, don't enroll: press Esc and choose \"Continue boot\".\n- **The screen asks for a password.** You're on a different route: someone staged a request, for example with\n  `mokutil --import`. This guide never asks for a password. Choose \"Continue boot\", and ask whoever prepared the\n  computer.\n- **You cancelled.** Nothing changed. Repeat from step 1 whenever you like.\n\nDon't turn Secure Boot off, and don't enroll a key whose fingerprint is different."
+    },
+    "gauntlet_v2/docs/secure-boot/PAOS_ENROLL_GUIDE.md:7-12": {
+      "path": "gauntlet_v2/docs/secure-boot/PAOS_ENROLL_GUIDE.md",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "e449be8305fed6157e8445d992eb0531a1555c809197340c9d475a99d0f31adf",
+      "line_start": 7,
+      "line_end": 12,
+      "excerpt": "**What you need:** the drive (volume) named **PAOS-BOOT**, with the file **PAOS_ENROLL_THIS_KEY.cer** at its top level,\nand the `PAOS_ENROLL_GUIDE.txt` from that drive. That file shows this key's subject, its full SHA-256 fingerprint, and\nthe SHA-1 fingerprint that MokManager's \"View key\" screen displays. MokManager shows that SHA-1 under `[Fingerprint]`\nas **two lines of upper-case byte pairs, 10 pairs per line** (for example `9D 71 33 19 9B 90 5F F9 17 9C` over\n`F9 0B C7 2D FC 68 9F 83 11 6B`). The guide prints it the same way, as the two lines under its\n`MokManager [Fingerprint]` heading. Compare the SHA-1; MokManager doesn't show the SHA-256."
+    },
+    "gauntlet_v2/docs/secure-boot/PAOS_ENROLL_GUIDE.md:27-31": {
+      "path": "gauntlet_v2/docs/secure-boot/PAOS_ENROLL_GUIDE.md",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "e449be8305fed6157e8445d992eb0531a1555c809197340c9d475a99d0f31adf",
+      "line_start": 27,
+      "line_end": 31,
+      "excerpt": "4. The \"Perform MOK management\" menu opens. Choose \"Enroll key from disk\".\n5. Choose the volume whose name starts with PAOS-BOOT. Ignore long technical lines such as PciRoot(0)/Pci(...)/HD(...): those are your computer's other disks.\n6. Choose the file PAOS_ENROLL_THIS_KEY.cer. It is listed first; do not choose the guide or manifest files.\n7. Choose \"View key 0\". Check that the subject contains \"PaOS Forge\" and that the two lines under [Fingerprint] match the two \"MokManager [Fingerprint]\" lines printed in this guide (upper case, 10 byte pairs per line). If they do not match, press Esc and choose \"Continue boot\" without enrolling.\n8. Press Esc to leave the key view, choose \"Continue\", then \"Yes\" to \"Enroll the key(s)?\". No password is asked on this route."
+    },
+    "gauntlet_v2/docs/secure-boot/PAOS_ENROLL_GUIDE.md:30-30": {
+      "path": "gauntlet_v2/docs/secure-boot/PAOS_ENROLL_GUIDE.md",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "e449be8305fed6157e8445d992eb0531a1555c809197340c9d475a99d0f31adf",
+      "line_start": 30,
+      "line_end": 30,
+      "excerpt": "7. Choose \"View key 0\". Check that the subject contains \"PaOS Forge\" and that the two lines under [Fingerprint] match the two \"MokManager [Fingerprint]\" lines printed in this guide (upper case, 10 byte pairs per line). If they do not match, press Esc and choose \"Continue boot\" without enrolling."
+    },
+    "gauntlet_v2/docs/secure-boot/PAOS_ENROLL_GUIDE.md:49-53": {
+      "path": "gauntlet_v2/docs/secure-boot/PAOS_ENROLL_GUIDE.md",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "e449be8305fed6157e8445d992eb0531a1555c809197340c9d475a99d0f31adf",
+      "line_start": 49,
+      "line_end": 53,
+      "excerpt": "- **The fingerprint looks different.** First check the format: MokManager prints two lines of upper-case pairs, and the\n  guide prints the same two lines. If the bytes differ, don't enroll: press Esc and choose \"Continue boot\".\n- **The screen asks for a password.** You're on a different route: someone staged a request, for example with\n  `mokutil --import`. This guide never asks for a password. Choose \"Continue boot\", and ask whoever prepared the\n  computer."
+    },
+    "src/gui/forms/lock_screen.frm:5-11": {
+      "path": "src/gui/forms/lock_screen.frm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "e7835aeaae48d2d064308ea8ad7d27a49f4bbb99c374e7a28036e1fe03f2e144",
+      "line_start": 5,
+      "line_end": 11,
+      "excerpt": "widget type=label id=identity x=160 y=128 w=320 h=24 text=Sign_in_to_your_keep role=label\nwidget type=label id=user_label x=160 y=176 w=320 h=24 text=Owner role=label\nwidget type=textfield id=user x=160 y=204 w=320 h=28 text=paos role=textbox\nwidget type=label id=password_label x=160 y=248 w=320 h=24 text=Password role=label\nwidget type=secret id=password x=160 y=276 w=320 h=28 role=password\nwidget type=button id=submit x=160 y=328 w=320 h=32 text=Sign_in role=button\nwidget type=label id=result x=160 y=384 w=320 h=24 text=Enter_your_password role=status"
+    },
+    "src/gui/lock_screen.asm:804-808": {
+      "path": "src/gui/lock_screen.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "28f733c585041dfe20d73ea4c7488dac4354d3717d43804ebca0e082125b0117",
+      "line_start": 804,
+      "line_end": 808,
+      "excerpt": "    cmp  eax, GUI_KEY_TAB\n    je   .tab\n    cmp  eax, GUI_KEY_ENTER\n    jne  .identity\n    call lock_screen_submit"
+    },
+    "src/gui/lock_screen.asm:951-990": {
+      "path": "src/gui/lock_screen.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "28f733c585041dfe20d73ea4c7488dac4354d3717d43804ebca0e082125b0117",
+      "line_start": 951,
+      "line_end": 990,
+      "excerpt": "lock_screen_submit:\n    push r12\n    push r13\n    mov  edi, [rel lock_widget_first]\n    add  edi, 4\n    call wgt_slot_ptr\n    lea  rdi, [rax + WGI_VAL]\n    lea  rsi, [rel str_lock_user]\n    call strcmp\n    mov  esi, [rel wgt_secret_len]\n    test eax, eax\n    jz   .user\n    xor  esi, esi                      ; invalid identity cannot bind the owner\n.user:\n    lea  rdi, [rel wgt_secret_bytes]\n    call principal_local_password\n    mov  r12, rax\n    mov  r13, rdx\n    call wgt_secret_clear\n    test r12, r12\n    jz   .denied\n    mov  rdi, r12\n    mov  rsi, r13\n    call session_shell_offer_bind\n    test eax, eax\n    jnz  .denied\n    call session_shell_unlock\n    test eax, eax\n    jz   .sync\n.denied:\n    mov  edi, [rel lock_widget_first]\n    add  edi, 8\n    lea  rsi, [rel str_lock_retry]\n    call wgt_set_text\n    mov  edi, LOCK_SLOT\n    call wmx_draw_one\n    call fb_present_all\n.sync:\n    call lock_screen_sync\n    pop  r13"
+    },
+    "src/gui/lock_screen.asm:315-328": {
+      "path": "src/gui/lock_screen.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "28f733c585041dfe20d73ea4c7488dac4354d3717d43804ebca0e082125b0117",
+      "line_start": 315,
+      "line_end": 328,
+      "excerpt": ";; lock_screen_layout_tag: the sign-in form names the keyboard layout in\n;; force (rc-sec K6) on the password field's own label, so the owner knows\n;; which characters the keys make while the password stays ASCII-only. No\n;; widget is added (the boot widget ratchet). Clobbers caller-saved.\nlock_screen_layout_tag:\n    movzx eax, byte [rel input_layout_id]\n    imul eax, eax, LOCK_LAYOUT_TEXT_SLOT\n    lea  rsi, [rel lock_layout_texts]\n    add  rsi, rax\n    mov  edi, [rel lock_widget_first]\n    add  edi, LOCK_W_PASSWORD_LABEL\n    jmp  wgt_set_text\nlock_layout_texts: db \"Password (Keyboard: US)\", 0, \"Password (Keyboard: ES)\", 0\n                   db \"Password (Keyboard: FR)\", 0, \"Password (Keyboard: DE)\", 0"
+    },
+    "src/gui/lock_screen.asm:1255-1261": {
+      "path": "src/gui/lock_screen.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "28f733c585041dfe20d73ea4c7488dac4354d3717d43804ebca0e082125b0117",
+      "line_start": 1255,
+      "line_end": 1261,
+      "excerpt": "str_lock_user: db \"paos\",0\nstr_lock_user_legacy: db \"user\",0\nstr_login_label_ok: db \"[PAOS64] login owner label: one authenticate_bind path and data-preserving rotation KAT PASS [login.owner.label.migration]\", 13, 10, 0\nstr_login_label_fail: db \"[PAOS64] login owner label: rotation KAT FAIL [login.owner.label.migration.fail]\", 13, 10, 0\nstr_lock_prompt: db \"Enter your password\",0\nstr_lock_prompt_files: db \"Enter password to open files\",0   ; WGI_VAL_MAX 31\nstr_lock_retry: db \"Sign-in refused; wait and retry\",0"
+    },
+    "src/sec/principal.asm:552-553": {
+      "path": "src/sec/principal.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "52d0933d583567e1ebb32466f1a71a1acbfbd64e7e215a4f1bedcef105710818",
+      "line_start": 552,
+      "line_end": 553,
+      "excerpt": "    cmp  rax, [rel prin_password_backoff_until]\n    jb   .password_fail"
+    },
+    "src/sec/principal.asm:2109-2127": {
+      "path": "src/sec/principal.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "52d0933d583567e1ebb32466f1a71a1acbfbd64e7e215a4f1bedcef105710818",
+      "line_start": 2109,
+      "line_end": 2127,
+      "excerpt": "; AUTHENROLL <password> — reachable only through the existing owner AUTH1 gate.\ncmd_verb_authenroll:\n    call cmd_handler_prologue\n    push rbx\n    push r12\n    mov  rbx, rdi\n    mov  rdi, [rbx + REQ_ARG]\n    call prin_token_len\n    mov  rsi, rax\n    mov  rdi, [rbx + REQ_ARG]\n    call principal_enroll_password\n    mov  r12, rax\n    mov  rdi, [rbx + REQ_ARG]\n    call prin_token_len\n    mov  rsi, rax\n    mov  rdi, [rbx + REQ_ARG]\n    lea  rdx, [rel str_pr_audit_enroll]\n    mov  ecx, str_pr_audit_enroll.len\n    call principal_scrub_wire_secret"
+    },
+    "src/gui/kbd_prefs.asm:8-9": {
+      "path": "src/gui/kbd_prefs.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "0384d84af1d29d1f349e35b0a6b95cb219619c73516c957a857526eb7b0c19c5",
+      "line_start": 8,
+      "line_end": 9,
+      "excerpt": "; RCQ-38 L2 (root 10:15:35 ruling 2, GRANT 12:30:39): the keyboard layout is a\n; third preference, separate from language and time zone. The reviewed"
+    },
+    "src/gui/settings_prefs.asm:47-52": {
+      "path": "src/gui/settings_prefs.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "cf4e30744fe8101bb75a8e782fe791ad099be59c9e7439184ab687976721750e",
+      "line_start": 47,
+      "line_end": 52,
+      "excerpt": "; RCQ-38 L2: a second list chooses the keyboard layout (en-US, es, fr, de),\n; separate from the zone. Left/Right move it from any Settings control, as\n; Up/Down move the zone. Apply applies the zone, then the layout\n; (kbd_prefs_select: the same captured login, saved only when it changed);\n; Reset also returns to en-US; Cancel shows both in force. A layout this build\n; has no text consumers for is refused visibly (root 12:04:44)."
+    },
+    "VERSIONS.md:1280-1285": {
+      "path": "VERSIONS.md",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "263a3e5942bb9ebf01702f89afe6bf128a09fb703f0219e0b62ebe6deb4321c8",
+      "line_start": 1280,
+      "line_end": 1285,
+      "excerpt": "**First-boot language:** `paos-install --language <tag>` accepts `en`, `es`,\n`fr`, `de`, `ja`, or `zh-Hans`. It writes `EFI/PaOS/lang.hint` (the tag and a\nnewline). The first-boot language chooser that reads this hint, and a language\nsetting in PaOS, are not in this build yet (pending); until they land, the hint\nhas no effect and PaOS uses English.\n"
+    },
+    "src/gui/forms/settings.frm:1-10": {
+      "path": "src/gui/forms/settings.frm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "6b4bb5b7f22e67a59eda05554e7ea0369cc14d94f21cc4884a7d6ef02c107081",
+      "line_start": 1,
+      "line_end": 10,
+      "excerpt": "form settings spec=v1\nwindow title=Settings w=500 h=580 x=720 y=80 resizable=1 min_w=420 min_h=320 chrome=standard restore=fresh\nwidget type=listview id=facts x=24 y=56 w=452 h=288 text=machine_facts role=table bind=sysprops.live scroll=0\nwidget type=label id=pref_heading x=24 y=356 w=452 h=24 text=Preferences role=label\nwidget type=label id=pref_state x=24 y=384 w=452 h=24 text=Time_zone role=status_text\nwidget type=listview id=zone x=24 y=416 w=220 h=104 text=UTC,Phoenix,New_York,Fixed role=radiogroup value=0 min=0 max=3 step=1 mode=radio\nwidget type=button id=zone_apply x=24 y=532 w=140 h=32 text=Apply role=button\nwidget type=button id=zone_cancel x=180 y=532 w=140 h=32 text=Cancel role=button\nwidget type=button id=zone_reset x=336 y=532 w=140 h=32 text=Reset role=button\nwidget type=listview id=kbd x=256 y=416 w=220 h=104 text=US,Espanol,Francais,Deutsch role=radiogroup value=0 min=0 max=3 step=1 mode=radio"
+    },
+    "src/gui/start_programs.asm:165-186": {
+      "path": "src/gui/start_programs.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "c0694fa87138b55f097e4820c8c6f5ec74354f1f28deb48530d18555ac59eecf",
+      "line_start": 165,
+      "line_end": 186,
+      "excerpt": "    lea  rsi, [rel sp_name_settings]\n    call sp_token_is\n    test eax, eax\n    jnz  .settings\n    pop  rsi\n    pop  rdi\n.fallback:\n    jmp  qword [rel sp_formload_fallback]\n\n.settings:\n    ; the established handler loads (or raises) it; then the Preferences show\n    ; the zone in force (form text cannot hold spaces, so the status line gets\n    ; its readable wording here, as lock_screen does)\n    pop  rsi\n    pop  rdi\n    call qword [rel sp_formload_fallback]\n    push rax\n    cmp  dword [rel form_error], FORM_ERR_NONE\n    jne  .settings_out\n    call sp_settings_scan\n    call settings_prefs_show                ; nothing unless the whole form is there\n.settings_out:"
+    },
+    "src/gui/settings_prefs.asm:17-27": {
+      "path": "src/gui/settings_prefs.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "cf4e30744fe8101bb75a8e782fe791ad099be59c9e7439184ab687976721750e",
+      "line_start": 17,
+      "line_end": 27,
+      "excerpt": ";   Apply   the chosen zone takes effect through the check TZSET uses\n;           (clock_zone_select: a seeded wall outside the pinned rule interval\n;           refuses and nothing changes) and is saved the way TZSET saves it\n;           (clock_prefs_persist: the MACed PaOSClockPrefs record, written only\n;           when the zone changed, then read back). Fixed keeps the fixed offset\n;           already in force.\n;   Cancel  the list shows the zone in force again. Nothing is written.\n;   Reset   the shipped default (fixed UTC-07:00) is applied and saved.\n; The status line says what happened: Current / Saved / Unchanged <zone>, or\n; that the zone applies until restart only (no store this boot), or that the\n; save failed (the zone still applies), or the refusal."
+    },
+    "src/gui/settings_prefs.asm:280-323": {
+      "path": "src/gui/settings_prefs.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "cf4e30744fe8101bb75a8e782fe791ad099be59c9e7439184ab687976721750e",
+      "line_start": 280,
+      "line_end": 323,
+      "excerpt": "    jc   .repick\n    call stp_sel                        ; Apply\n    test eax, eax\n    js   .choose\n    cmp  eax, STP_ROW_FIXED\n    je   .fixed\n    lea  edi, [rax + 1]\n    call clock_zone_select\n    jc   .refused\n    jmp  .applied\n.fixed:\n    mov  byte [rel clock_tz_zone], 0    ; the fixed offset in force stays\n    jmp  .applied\n.reset:\n    mov  dword [rel clock_tz_min], STP_DEFAULT_MIN\n    mov  byte [rel clock_tz_zone], 0\n    xor  eax, eax                       ; L2: and the layout list to en-US\n    call stp_kbd_mark\n.applied:\n    mov  word [rel clock_last_hhmm], 0xFFFF ; the next taskbar tick repaints, as after TZSET\n    call clock_prefs_persist            ; EAX -1: the write or its readback failed\n    push rax\n    call stp_zone_row\n    call stp_mark_row\n    call stp_kbd_apply                  ; RCQ-38 L2: then the layout -> ECX its answer\n    pop  rax\n    lea  rsi, [rel stp_s_save_failed]\n    test eax, eax\n    jnz  stp_say\n    lea  rsi, [rel stp_s_kbd_refused]\n    cmp  ecx, -5\n    je   stp_say                        ; this build has no text consumers for it\n    lea  rsi, [rel stp_s_kbd_failed]\n    cmp  ecx, -1\n    jl   stp_say                        ; refused: the layout in force stays\n    lea  rsi, [rel stp_s_save_failed]\n    je   stp_say                        ; the layout applies; its record did not save\n    lea  rsi, [rel stp_s_not_saved]\n    cmp  byte [rel clock_prefs_state], CKP_ST_NVRAM\n    jne  stp_say                        ; no runtime services or no machine secret\n    cmp  ecx, 1\n    je   stp_say\n    lea  rsi, [rel stp_s_saved]\n    jmp  stp_say_zone"
+    },
+    "src/gui/settings_prefs.asm:337-342": {
+      "path": "src/gui/settings_prefs.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "cf4e30744fe8101bb75a8e782fe791ad099be59c9e7439184ab687976721750e",
+      "line_start": 337,
+      "line_end": 342,
+      "excerpt": ".cancel:\n    call stp_zone_row\n    call stp_mark_row\n    call stp_kbd_mark_in_force\n    lea  rsi, [rel stp_s_unchanged]\n    jmp  stp_say_zone"
+    },
+    "src/gui/netmon_app.asm:7-13": {
+      "path": "src/gui/netmon_app.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "f79f910f6690475c3129789a81b6b2b7709157f7c0380d0f244651055f8667ab",
+      "line_start": 7,
+      "line_end": 13,
+      "excerpt": ";; RETIRED by GUI F2 contract 2111.\n;;\n;; The task-1035 private painter and NETMON_TICK_MS loop were never included in\n;; the product image. Network Monitor now lives in gui/forms/netmon.frm, loads\n;; through gui/form_loader.asm, renders only through stock widgets, and refreshes\n;; through netmon.refresh in the single core cadence registry. NETMON_STAT and\n;; LAUNCH compatibility are provided by gui/netmon_form.asm."
+    },
+    "src/gui/netmon_form.asm:439-451": {
+      "path": "src/gui/netmon_form.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "e099f924a0a558158c1733352c099a911a0dca2593cb325501c4491ad605470f",
+      "line_start": 439,
+      "line_end": 451,
+      "excerpt": "nm_export: db \"NETMON_STAT\",0\n    dd nm_form, nm_form_end-nm_form\nnm_rx: db \" netmon rx=\",0\nnm_tx: db \" tx=\",0\nnm_link: db \" link=\",0\nnm_nic: db \" nic=\",0\nnm_idx: db \" idx=\",0\nnm_unavailable: db \"unavailable\",0\nnm_nonce: db \" nonce=\",0\nnm_live_nic: db \"nic=\",0\nnm_live_rx: db \",rx=\",0\nnm_live_tx: db \",tx=\",0\nnm_live_drops_link: db \",drops=unavailable,link=\",0"
+    },
+    "src/gui/netmon_form.asm:765-776": {
+      "path": "src/gui/netmon_form.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "e099f924a0a558158c1733352c099a911a0dca2593cb325501c4491ad605470f",
+      "line_start": 765,
+      "line_end": 776,
+      "excerpt": "str_verb_launch: db \"LAUNCH\",0\nnm_w_ok:       db \" ok\",0\nnm_w_degraded: db \" degraded\",0\nnm_w_absent:   db \" absent\",0\nnm_w_dead:     db \" dead\",0\nnm_w_unknown:  db \" h?\",0\nnm_w_sel:      db \" sel \",0\nnm_w_nosel:    db \" - \",0\nnm_w_unprobed: db \"-\",0\nnm_w_err:      db \"err\",0\nnm_w_down:     db \"down\",0\nnm_w_up:       db \"up\",0"
+    },
+    "gauntlet_v2/docs/boot_v2_deployment.md:28-31": {
+      "path": "gauntlet_v2/docs/boot_v2_deployment.md",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "de0a2ce43307a09a83bd2b4b18461a72cd7a8cdba6f086919ec0eeb4eb4d472a",
+      "line_start": 28,
+      "line_end": 31,
+      "excerpt": "- **Ordinary candidate/update work:** build and QEMU-gate, stage only the\n  inactive slot, bind the exact candidate identity, boot Trial through Manager,\n  grade behavior, promote or roll back, and end in healthy PaOS. This is the\n  normal autonomous loop path."
+    },
+    "src/boot/boot_v2_health.asm:8-11": {
+      "path": "src/boot/boot_v2_health.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "8616eb88d18411a25a0214982c3cb46444b707b65b05d3e344fd9eb4fab0cd2b",
+      "line_start": 8,
+      "line_end": 11,
+      "excerpt": "; runtime variable. The Manager remains the only writer of its disk journal:\n; it validates and consumes this record on the next boot, then performs the\n; durable promotion/health commit. Direct boots, Rescue, Safe Mode, and old\n; read-only Manager handoffs cannot publish."
+    },
+    "src/bootmgr/paos_bootmgr.asm:8220-8235": {
+      "path": "src/bootmgr/paos_bootmgr.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "8d3fed0dd206303a1ea05086907194721ea729eae02caa1dda4a053c08acb567",
+      "line_start": 8220,
+      "line_end": 8235,
+      "excerpt": "str_state_previous:  db \"[PBM] journal: previous BIP/invalid Active selected verified Previous\",13,10,0\nstr_state_ambiguous: db \"[PBM] journal: equal-generation split brain; refusing to guess\",13,10,0\nstr_state_needs_write: db \"[PBM] journal: pending/Trial requires atomic mutation; read-only rung refuses replay\",13,10,0\n%ifdef PBM_ROLLBACK_FIXTURE\n%ifdef PBM_FEATURE_MANIFEST\n%ifndef PBM_FEATURE_MUTABLE\nstr_state_pax1_fixture_pending: db \"[PBM] rollback fixture: exact manifest-bound internal PAX1 route selected [boot.v2.pax1.fixture-route]\",13,10,0\n%endif\n%endif\n%endif\nstr_state_rescue:    db \"[PBM] journal: no safe stable selection; fail-closed Rescue\",13,10,0\nstr_policy_active:   db \"[PBM] mutable policy selected verified Active [boot.v2.policy.active]\",13,10,0\nstr_policy_trial:    db \"[PBM] mutable policy selected bounded Trial [boot.v2.policy.trial]\",13,10,0\nstr_policy_rescue_deliberate: db \"[PBM] owner-chosen Rescue attempt cleared failure-neutral [boot.v2.policy.rescue-deliberate]\",13,10,0\nstr_policy_safe:     db \"[PBM] mutable policy selected one bounded Safe attempt [boot.v2.policy.safe]\",13,10,0\nstr_policy_rollback: db \"[PBM] mutable policy selected verified rollback [boot.v2.policy.rollback]\",13,10,0"
+    },
+    "src/bootmgr/paos_bootmgr.asm:5391-5447": {
+      "path": "src/bootmgr/paos_bootmgr.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "8d3fed0dd206303a1ea05086907194721ea729eae02caa1dda4a053c08acb567",
+      "line_start": 5391,
+      "line_end": 5447,
+      "excerpt": "menu_apply_key:\n    push rbx\n    push r12\n    cmp  ax, 13\n    je   .accept_default\n    or   al, 0x20\n    cmp  al, 'r'\n    je   .rescue\n    cmp  al, 's'\n    je   .safe\n%ifdef PBM_FEATURE_EXTERNAL\n    cmp  al, 'w'\n    je   .windows\n    cmp  al, 'l'\n    je   .linux\n%endif\n    cmp  al, 'p'\n    je   .active\n    cmp  al, 'o'\n    je   .standby\n    cmp  al, 'a'\n    je   .a\n    cmp  al, 'b'\n    je   .b\n    jmp  .ignore\n.active:\n    movzx ebx, byte [rel menu_active_entry]\n    cmp  byte [rel menu_show_active], 1\n    jne  .ignore\n    jmp  .paos\n.standby:\n    movzx ebx, byte [rel menu_standby_entry]\n    cmp  byte [rel menu_show_standby], 1\n    jne  .ignore\n    jmp  .paos\n.a:\n    mov  ebx, PBM_ENTRY_PAOS_A\n    jmp  .paos\n.b:\n    mov  ebx, PBM_ENTRY_PAOS_B\n.paos:\n    mov  r12, [rel attempt_state_ptr]\n    test r12, r12\n    jz   .ignore\n    mov  edi, ebx\n    call slot_unquarantined\n    test eax, eax\n    jz   .ignore\n    mov  edi, ebx\n    call integrity_vault_select_entry\n    test rax, rax\n    jz   .ignore\n    mov  [rel selected_entry], bl\n    mov  byte [rel selected_profile], PBM_PROFILE_NORMAL\n    mov  byte [rel selected_reason], PBM_REASON_OWNER_REQUEST\n    mov  edi, ebx\n    call set_fallback_other_verified"
+    },
+    "src/bootmgr/paos_bootmgr.asm:7871-7874": {
+      "path": "src/bootmgr/paos_bootmgr.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "8d3fed0dd206303a1ea05086907194721ea729eae02caa1dda4a053c08acb567",
+      "line_start": 7871,
+      "line_end": 7874,
+      "excerpt": "face_entry_active:   db \"P - PaOS\",0\nface_entry_standby:  db \"O - PaOS (previous version)\",0\nface_entry_safe:     db \"S - Safe Mode\",0\nface_entry_rescue:   db \"R - PaOS Rescue\",0"
+    },
+    "src/bootmgr/paos_bootmgr.asm:5464-5472": {
+      "path": "src/bootmgr/paos_bootmgr.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "8d3fed0dd206303a1ea05086907194721ea729eae02caa1dda4a053c08acb567",
+      "line_start": 5464,
+      "line_end": 5472,
+      "excerpt": ".rescue:\n    mov  edi, PBM_ENTRY_RESCUE\n    call integrity_vault_select_entry\n    test rax, rax\n    jz   .ignore\n    mov  byte [rel selected_entry], PBM_ENTRY_RESCUE\n    mov  byte [rel selected_profile], PBM_PROFILE_RESCUE\n    mov  byte [rel selected_reason], PBM_REASON_OWNER_REQUEST\n    mov  byte [rel fallback_entry], PBM_ENTRY_NONE"
+    },
+    "src/bootmgr/paos_bootmgr.asm:7874-7874": {
+      "path": "src/bootmgr/paos_bootmgr.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "8d3fed0dd206303a1ea05086907194721ea729eae02caa1dda4a053c08acb567",
+      "line_start": 7874,
+      "line_end": 7874,
+      "excerpt": "face_entry_rescue:   db \"R - PaOS Rescue\",0"
+    },
+    "src/bootmgr/paos_bootmgr.asm:8310-8311": {
+      "path": "src/bootmgr/paos_bootmgr.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "8d3fed0dd206303a1ea05086907194721ea729eae02caa1dda4a053c08acb567",
+      "line_start": 8310,
+      "line_end": 8311,
+      "excerpt": "str_recovery_descriptor_valid: db \"[PBM] independent owner-signed Rescue descriptor verified [boot.v2.recovery-descriptor.valid]\",13,10,0\nstr_recovery_descriptor_invalid: db \"[PBM] independent Rescue descriptor missing/invalid; visible stop [boot.v2.recovery-descriptor.invalid]\",13,10,0"
+    },
+    "src/rescue/init:111-132": {
+      "path": "src/rescue/init",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "0d05ddbeae541e28b02e8540cc3036c5dd28e555c1bdad70166e9e48dd6975bf",
+      "line_start": 111,
+      "line_end": 132,
+      "excerpt": "/sbin/paos-rescue-triage > /run/paos-rescue-triage.result 2>&1 || true\ncat /run/paos-rescue-triage.result\nif [ \"$NET_READY\" = 1 ]; then\n    /sbin/paos-rescue-controller --beacon /mnt/esp \\\n        /run/paos-rescue-triage.result 2>/dev/null || true\nfi\n\necho \"[PRESCUE] bounded observation complete; no disk mutation attempted [boot.v2.rescue.controller.ready]\"\necho \"[PRESCUE] explicit deep diagnostics available as paos-rescue-hwdiag; not auto-started [boot.v2.rescue.hwdiag.available]\"\n# Never expose an unauthenticated root shell on a customer machine.  The\n# session program re-proves BootCurrent/MOK/owner/manifest/target and consumes\n# the Rescue-principal PCAR replay floor before its only effect.  One connection runs at\n# a time; a hung peer is timed out and cannot create unbounded children.\nif [ \"$NET_READY\" = 1 ] && [ -n \"$ROUTE_DEV\" ] && [ \"$ESP\" = \"$ROUTE_DEV\" ]; then\n    echo \"[PRESCUE] fixed signed-request service ready port=9996 [boot.v2.rescue.net-ready]\"\n    while :; do\n        timeout 75 nc -l -p 9996 -e /sbin/paos-rescue-net-session \\\n            >/run/paos-rescue.net.log 2>&1 || true\n        sleep 1\n    done\nfi\necho \"[PRESCUE] authenticated remote route unavailable; no shell/effect [boot.v2.rescue.net-unavailable]\""
+    },
+    "AGENTS.md:23-28": {
+      "path": "AGENTS.md",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "b7eb4da38b9c190f2bda66f1a9e48a3817665f809a579ab2ba9273c1c421c905",
+      "line_start": 23,
+      "line_end": 28,
+      "excerpt": "  a Vault recovery artifact only and is never written to `bootmgfw.efi` while\n  Secure Boot is on. The PaOS→Windows→Linux rail is Rule-K recovery only and\n  must never be run as product proof or against a healthy target.\n- ⛔ **Protected regions** (rule-audit-15, 2026-10-07: the `.claude/protected_regions*.yaml` files\n  this line used to cite do not exist in this tree; the invariants are listed here instead):\n  never write PaOS over `bootmgfw.efi`/`bootx64.efi` (Windows-owned); PaOS lives only in verified"
+    },
+    "src/gui/lock_screen.asm:784-790": {
+      "path": "src/gui/lock_screen.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "28f733c585041dfe20d73ea4c7488dac4354d3717d43804ebca0e082125b0117",
+      "line_start": 784,
+      "line_end": 790,
+      "excerpt": "; Key and pointer activation share one submit action. Only the username is\n; read from public form state. The kit-owned secret buffer is wiped by 2501\n; before its output-only principal reaches the session gate.\nlock_screen_key:\n    cmp  byte [rel session_locked], SESSION_LOCKED\n    jne  .ignored\n    ; F2b-1 backstop for any key path that bypassed the router's assert: a key"
+    },
+    "src/sec/principal.asm:3123-3123": {
+      "path": "src/sec/principal.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "52d0933d583567e1ebb32466f1a71a1acbfbd64e7e215a4f1bedcef105710818",
+      "line_start": 3123,
+      "line_end": 3123,
+      "excerpt": "str_pr_audit_enroll: db \"AUTHENROLL credential=<redacted>\""
+    },
+    "src/gui/settings_prefs.asm:302-313": {
+      "path": "src/gui/settings_prefs.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "cf4e30744fe8101bb75a8e782fe791ad099be59c9e7439184ab687976721750e",
+      "line_start": 302,
+      "line_end": 313,
+      "excerpt": "    call stp_zone_row\n    call stp_mark_row\n    call stp_kbd_apply                  ; RCQ-38 L2: then the layout -> ECX its answer\n    pop  rax\n    lea  rsi, [rel stp_s_save_failed]\n    test eax, eax\n    jnz  stp_say\n    lea  rsi, [rel stp_s_kbd_refused]\n    cmp  ecx, -5\n    je   stp_say                        ; this build has no text consumers for it\n    lea  rsi, [rel stp_s_kbd_failed]\n    cmp  ecx, -1"
+    },
+    "src/bootmgr/paos_bootmgr.asm:5620-5626": {
+      "path": "src/bootmgr/paos_bootmgr.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "8d3fed0dd206303a1ea05086907194721ea729eae02caa1dda4a053c08acb567",
+      "line_start": 5620,
+      "line_end": 5626,
+      "excerpt": "    mov  edi, PBM_ENTRY_RESCUE\n    call integrity_vault_select_entry\n    test rax, rax\n    setnz al\n    mov  [rel menu_show_rescue], al\n%ifdef PBM_FEATURE_EXTERNAL\n    mov  edi, PBM_ENTRY_WINDOWS"
+    },
+    "src/bootmgr/paos_bootmgr.asm:5747-5749": {
+      "path": "src/bootmgr/paos_bootmgr.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "8d3fed0dd206303a1ea05086907194721ea729eae02caa1dda4a053c08acb567",
+      "line_start": 5747,
+      "line_end": 5749,
+      "excerpt": "    cmp  byte [rel menu_show_rescue], 1\n    jne  .windows_entry\n    mov  eax, PBM_ENTRY_RESCUE"
+    },
+    "src/bootmgr/paos_bootmgr.asm:574-576": {
+      "path": "src/bootmgr/paos_bootmgr.asm",
+      "revision": "d82f814b23ad8e33a51464dcee9be504c8af4acc",
+      "sha256": "8d3fed0dd206303a1ea05086907194721ea729eae02caa1dda4a053c08acb567",
+      "line_start": 574,
+      "line_end": 576,
+      "excerpt": "    call load_verify_recovery_descriptor\n    test eax, eax\n    jnz  manager_stop"
+    }
+  },
+  "review_responses": [
+    {
+      "actor": "rc-boot-claude",
+      "t": "2026-10-10T23:42:51-07:00",
+      "scope": "reserve IDs6000-6099; independent English build 4805 B at original commit4b6a76c1a; carrier follows accepted English and root GO"
+    },
+    {
+      "actor": "rc-input-claude",
+      "t": "2026-10-10T23:44:06.251513-07:00",
+      "scope": "surface fit ACK with 6 DATA nits; N1-N6 folded; translated 255-byte ceiling and atomic-token/cell-wrap constraints recorded"
+    },
+    {
+      "actor": "rc-sec-claude",
+      "t": "2026-10-10T23:45:42-07:00",
+      "clarification_t": "2026-10-10T23:47:07-07:00",
+      "scope": "H1 same-drive match is not drive-origin proof, H2 public-report network-address/privacy, H3 support never needs password. Folded. Keyboard hint6037 ordinary. New6038 password +6039 origin critical. Advice citations establish the associated trust/privacy boundary, not a reporting implementation."
+    },
+    {
+      "actor": "rc-srcreview-claude",
+      "t": "2026-10-11T00:43:00.791061-07:00",
+      "scope": "English ACCEPT69e2c1311; n1 distinguishes unavailable menu Rescue from automatic verification stop; n2 drops unsupported wireless clause. Both folded without changing IDs/keys/params/critical flags."
+    },
+    {
+      "actor": "rc-input-claude",
+      "t": "2026-10-11T01:02:51.029247-07:00",
+      "scope": "F1 English on-screen labels atomic in all five locales; future .frm refresh recorded. F2 reference wrapping now obeys prohibited start/end rules and grapheme boundaries for the validated corpus; title/blank-inclusive heights. n1-n3/n5 folded. Japanese recovery now consistently uses authoritative core 復旧; core pins unchanged."
+    },
+    {
+      "actor": "rc-sec-claude",
+      "t": "2026-10-11T01:01:26-07:00",
+      "scope": "n1 German trustworthiness explicit; n2 Spanish/Japanese Manager subject restored; n3 certificate-qualified fingerprint at first use in all five, Japanese フィンガープリント consistent with installer glossary."
+    },
+    {
+      "actor": "rc-srcreview-claude",
+      "t": "2026-10-11T01:06:03.715167-07:00",
+      "scope": "ACCEPT with n1 English screen labels, n2 Japanese recovery/German refused glossary parity, n3 Chinese certificate fingerprint; all folded. Spanish offline uses core fuera de línea; Japanese another-computer wording now 他機, not another-model wording. English/IDs/params/core unchanged."
+    }
+  ],
+  "refresh_before_delivery": [
+    {
+      "key": "help.offline.secure_boot_mok.password",
+      "trigger": "accepted staged paos-install MOK route English lands",
+      "owner": "rc-live-claude / rc-sec-claude",
+      "action": "revisit disk-route wording; add accepted staged-route one-time-code versus firmware Password guidance through same review chain"
+    },
+    {
+      "key": "help.offline.language_keyboard.language",
+      "trigger": "native language chooser or display-language setting lands",
+      "owner": "rc-boot-claude / rc-input-claude",
+      "action": "refresh English and all translations through same chain before delivery"
+    },
+    {
+      "keys": [
+        "help.offline.sign_in.submit",
+        "help.offline.language_keyboard.choose",
+        "help.offline.language_keyboard.result"
+      ],
+      "trigger": "L5 or another accepted UI change localizes the .frm Sign in/Settings/Apply/Cancel strings",
+      "owner": "rc-input-claude / rc-boot-claude",
+      "action": "Follow the accepted UI catalog labels in English and all help locales through the same review chain; do not translate labels before the UI does."
+    }
+  ],
+  "translation_review": {
+    "english_commit": "fa6995e269b42e34767bacd376f451ad5ae2d6b8",
+    "locales": [
+      "es",
+      "fr",
+      "de",
+      "ja",
+      "zh-Hans"
+    ],
+    "messages_per_locale": 40,
+    "security_review_ids": [
+      6001,
+      6002,
+      6003,
+      6005,
+      6006,
+      6007,
+      6018,
+      6019,
+      6020,
+      6021,
+      6023,
+      6024,
+      6025,
+      6026,
+      6028,
+      6029,
+      6030,
+      6031,
+      6034,
+      6036,
+      6038,
+      6039
+    ],
+    "back_translation_sample_ids": [
+      6001,
+      6002,
+      6005,
+      6006,
+      6007,
+      6011,
+      6012,
+      6019,
+      6020,
+      6023,
+      6024,
+      6025,
+      6026,
+      6028,
+      6029,
+      6030,
+      6031,
+      6033,
+      6036,
+      6037,
+      6038,
+      6039
+    ],
+    "fit_check": {
+      "data_review_width_cells": 40,
+      "CJK_scalar_cells": 2,
+      "static_params": "unchanged, escaped, atomic",
+      "claim": "host DATA review only; native Help geometry/glyph/carrier/delivery require owner acceptance",
+      "grapheme_scope": "Reference checker admits only the current NFC Latin/CJK scalar corpus without marks/ZWJ/Jamo/RI/modifier/VS sequences; scalar boundaries are grapheme boundaries here. Native surface must use its full grapheme segmentation and ue_cell_width.",
+      "line_start_prohibited": "!),.:;?]}»’”…、。々」』】ぁぃぅぇぉっゃゅょゎゕゖァィゥェォッャュョヮヵヶ・ーㇰㇱㇲㇳㇴㇵㇶㇷㇸㇹㇺㇻㇼㇽㇾㇿ！），．：；？",
+      "line_end_prohibited": "([{«‘“「『【（",
+      "page_height": "title + body + one blank after title and between blocks",
+      "minimum_native_width_cells": 27,
+      "scroll_or_page": "Required if the available text rows are smaller than the measured page height; native geometry pending"
+    },
+    "Peter_native_language_evaluation": "not claimed",
+    "literal_on_screen_labels": {
+      "6006": [
+        "Sign in"
+      ],
+      "6011": [
+        "Settings",
+        "Apply"
+      ],
+      "6012": [
+        "Apply",
+        "Cancel"
+      ],
+      "policy": "Exact English current .frm labels in all locales; wrap atomically. Existing params/IDs/English unchanged.",
+      "source_refs": [
+        "src/gui/forms/lock_screen.frm:5-11",
+        "src/gui/forms/settings.frm:1-10"
+      ]
+    }
+  }
+}

@@ -1,0 +1,81 @@
+#!/bin/busybox sh
+# Minimal BusyBox udhcpc hook for the Rescue Environment.
+event="${1:-unknown}"
+interface_name="${interface:-missing}"
+address=none
+primary_router=none
+status=ignored
+verified=0
+# A previous round or another interface must not authorize NET_READY. This is
+# private tmpfs state, not a disk record or a repair/trust receipt.
+rm -f /run/paos-rescue-dhcp.bound /run/paos-rescue-dhcp.bound.tmp 2>/dev/null || exit 1
+
+emit_receipt() {
+    # Open and write inside the finite child. DHCP configuration must return
+    # even when a console has no reader; output loss has no network authority.
+    /bin/busybox timeout -k 1 2 /bin/busybox sh -c '
+        if [ -w /dev/console ]; then exec > /dev/console; fi
+        printf "PAOS_RESCUE_DHCP_V1 event=%s interface=%s address=%s router=%s status=%s verified=%s mutation=network-only journal=untouched [boot.v2.rescue.dhcp.policy]\n" \
+            "$1" "$2" "$3" "$4" "$5" "$6"
+    ' sh "$event" "$interface_name" "$address" "$primary_router" "$status" "$verified" \
+        2>/dev/null || true
+}
+
+case "$event" in
+    deconfig)
+        status=applied
+        if [ "$interface_name" = missing ] ||
+           ! ip addr flush dev "$interface_name"; then
+            status=interface-error
+        fi
+        if [ "$status" = applied ]; then
+            if ip -4 addr show dev "$interface_name" | grep -q 'inet '; then
+                status=address-readback-error
+            else
+                verified=1
+            fi
+        fi
+        emit_receipt
+        [ "$status" = applied ] || exit 1
+        ;;
+    bound|renew)
+        address="${ip:-missing}"
+        status=applied
+        if [ "$interface_name" = missing ] || [ "$address" = missing ] ||
+           ! ifconfig "$interface_name" "$address" \
+               netmask "${subnet:-255.255.255.0}" up; then
+            status=interface-error
+        fi
+        if [ -n "${router:-}" ] && [ "$status" = applied ]; then
+            set -- $router
+            primary_router="$1"
+            if ! ip route replace default via "$primary_router" dev "$interface_name"; then
+                status=route-error
+            fi
+        fi
+        if [ "$status" = applied ] &&
+           ! ip -4 addr show dev "$interface_name" |
+               grep -Fq "inet $address/"; then
+            status=address-readback-error
+        fi
+        if [ "$status" = applied ] && [ "$primary_router" != none ] &&
+           ! ip route show default dev "$interface_name" |
+               grep -Fq "default via $primary_router dev $interface_name"; then
+            status=route-readback-error
+        fi
+        if [ "$status" = applied ]; then
+            verified=1
+            if ! { printf '%s\n' "$interface_name" > /run/paos-rescue-dhcp.bound.tmp &&
+                   mv /run/paos-rescue-dhcp.bound.tmp /run/paos-rescue-dhcp.bound; } 2>/dev/null; then
+                status=receipt-error
+                verified=0
+            fi
+        fi
+        emit_receipt
+        [ "$status" = applied ] || exit 1
+        ;;
+    *)
+        emit_receipt
+        ;;
+esac
+exit 0

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "paos.script-bundle.v2",
+  "title": "Public authoring input for signed PAOSAPP1 container 2",
+  "description": "Checked guest bash/data. Grants are requests; actual native app VM binding and owner policy remain mandatory. No signer or executor is defined here.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "entry", "icon", "data_dir", "members"],
+  "properties": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{2,62}$", "maxLength": 63},
+    "entry": {"$ref": "#/$defs/path"},
+    "icon": {"anyOf": [{"const": ""}, {"$ref": "#/$defs/path"}]},
+    "data_dir": {"type": "string", "pattern": "^[a-z0-9_-]+([./][a-z0-9_-]+)*$", "maxLength": 31},
+    "members": {
+      "type": "array", "minItems": 2, "maxItems": 16,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["kind", "path", "source"],
+        "properties": {
+          "kind": {"enum": ["script", "form", "icon", "data", "grants"]},
+          "path": {"$ref": "#/$defs/path"},
+          "source": {"$ref": "#/$defs/path"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "path": {"type": "string", "pattern": "^[a-z0-9_-]+([./][a-z0-9_-]+)*$", "maxLength": 63}
+  }
+}

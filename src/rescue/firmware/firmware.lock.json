@@ -1,0 +1,30 @@
+{
+  "schema": "paos.rescue-firmware-lock.v1",
+  "source": "linux-firmware",
+  "tag": "20260916",
+  "tag_commit": "ab23307cfe7f9366c819025ca3e4778299bc2db2",
+  "licence": "WHENCE: Driver r8169, \"Redistributable. See LICENSE.r8169 for details.\" The licence travels with the blobs.",
+  "why": "MSI MS-7E19 onboard Killer E5000B (PCI 10ec:5000, 5 GbE) is matched by r8169 from Linux 6.18 on; r8169 then picks firmware by the chip XID read at probe (RTL8126A: rtl8126a-2 or -3). The exact XID is read on metal. Built into the kernel: no modules, no root filesystem lookup.",
+  "files": [
+    {
+      "path": "rtl_nic/rtl8126a-2.fw",
+      "bytes": 29248,
+      "sha256": "2ffa201aa7dec5e3726e268a10342b175ae8de4fa9f39f535bbbbf5cb8245879",
+      "url": "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/rtl_nic/rtl8126a-2.fw?h=20260916",
+      "whence_version": "0.0.2"
+    },
+    {
+      "path": "rtl_nic/rtl8126a-3.fw",
+      "bytes": 13232,
+      "sha256": "18ffaf3b873d217bf780503a80f04fe2b03c088ba2d0c2a3d626145cb8e53b26",
+      "url": "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/rtl_nic/rtl8126a-3.fw?h=20260916",
+      "whence_version": "0.0.5"
+    },
+    {
+      "path": "LICENSE.r8169",
+      "bytes": 219,
+      "sha256": "f9689ba2640d61e7b4527ad84cbfa6a9f0ec11484e2c9f6b5500197e22c27ecd",
+      "url": "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/LICENSES/LICENSE.r8169?h=20260916"
+    }
+  ]
+}

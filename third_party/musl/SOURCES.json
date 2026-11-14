@@ -1,0 +1,33 @@
+{
+  "files": {
+    "LICENSE": {
+      "sha256": "1f5cd2125879facec810601c53e8cb35bf7d0314c9d9127e2acb7b7fdf4885d3"
+    },
+    "third_party/musl/BUILD_CONFIG.json": {
+      "sha256": "65f15d4b5ce7ece07f6e9fc4ede7f829fb3b62a9c781c5742633a87bf2f8311d"
+    },
+    "third_party/musl/COPYRIGHT": {
+      "sha256": "f9bc4423732350eb0b3f7ed7e91d530298476f8fec0c6c427a1c04ade22655af"
+    },
+    "third_party/musl/SOURCE.md": {
+      "sha256": "a629fe87abcd9c10db4068723e13d3b4198e40bf3d2e6c9a8329b0121b72e293"
+    },
+    "third_party/musl/debian-copyright": {
+      "sha256": "dd775ee077963e377a0ab31e1db27229442d5cfd18f183c2df1e6a552522f585"
+    },
+    "third_party/musl/musl_1.2.4-2.debian.tar.xz": {
+      "sha256": "953f9b71d1c1fd827a521725ead722fd3821ac208614cf99f8150dec070b1121"
+    },
+    "third_party/musl/musl_1.2.4-2.dsc": {
+      "sha256": "ec83f7214940edfb03857c05896bb9bb380f0a6d67fec3f95dca60161e71f01a"
+    },
+    "third_party/musl/musl_1.2.4.orig.tar.gz": {
+      "sha256": "7a35eae33d5372a7c0da1188de798726f68825513b7ae3ebe97aaaa52114f039"
+    },
+    "third_party/musl/static-pie.patch": {
+      "sha256": "7150c055b9f781af9d90736e4dbb08f00f9c1d16fdb6d05431fc986e0fb6b49e"
+    }
+  },
+  "schema": "paos.musl-source.v1",
+  "version": "1.2.4-2"
+}

@@ -1,0 +1,47 @@
+{
+  "families": {
+    "cldr-43": {
+      "files": {
+        "de-t-k0-windows.xml": "37568b0cd7984fc8181724da89b850f43514240767bde8d8cb647db2ff5a2607",
+        "en-t-k0-windows.xml": "3a5b8bb3931a5672cec7b271be1746de27de9e3c6c6677158859f114ce557a0b",
+        "es-t-k0-windows.xml": "af5a172b94686ecc9a912f89fe879206dcd0d3db337e0ac591747d00bbb2b997",
+        "fr-t-k0-windows.xml": "96c8b474463fa9bdc6042650f33c7f52b9b8222a85c0815301d07fbfca8552fa",
+        "unicode-license.txt": "830ec6dd25a943b70a31d74caa56b08b34c35f5c9679fba664c1658712849271"
+      },
+      "license": "Unicode-DFS-2016",
+      "upstream": "https://github.com/unicode-org/cldr/tree/66d15bfc1b4762b38bf1330319534e237d4670a3/keyboards/windows; root retained 2026-10-10",
+      "version": "43"
+    },
+    "ucd-15.0.0": {
+      "files": {
+        "DerivedGeneralCategory.txt": "fe29a45c0882500e591140aaa5c4f5067e6a5d746806148af34400c48b9c06f9",
+        "EastAsianWidth.txt": "743e7bc435c04ab1a8459710b1c3cad56eedced5b806b4659b6e69b85d0adf2a"
+      },
+      "license": "Unicode-3.0",
+      "upstream": "https://www.unicode.org/Public/15.0.0/ucd/ (extracted/DerivedGeneralCategory.txt, EastAsianWidth.txt); read-only GET 2026-10-15",
+      "version": "15.0.0"
+    },
+    "ucd-15.1.0": {
+      "files": {
+        "DerivedCoreProperties.txt": "f55d0db69123431a7317868725b1fcbf1eab6b265d756d1bd7f0f6d9f9ee108b",
+        "DerivedGeneralCategory.txt": "760720ac034f96b630a3055879a744e0907184e8aa811e89ba34583a7a487e85",
+        "EastAsianWidth.txt": "b08191401dc125f4e84ef262a95754faae6b737c79538e17ea9664a63434e94e",
+        "GraphemeBreakProperty.txt": "a7e52eee647e52dc210b8719b4d7037276f4b353810293d69377fc46374cec3f",
+        "GraphemeBreakTest.txt": "ed9c5e92fd0911ccbeeb63c97cb19c519ea272ff1112ce843abd991582dd848f",
+        "emoji-data.txt": "d7aef489c8fe4c14f09ea5695200277c6b93ac82ac60845cdd2161b0d6835cc1",
+        "unicode-license.txt": "e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96"
+      },
+      "license": "Unicode-3.0",
+      "upstream": "https://www.unicode.org/Public/15.1.0/ucd/; root retained 2026-10-10, auxiliary/ grapheme files, emoji/emoji-data.txt, extracted/DerivedGeneralCategory.txt",
+      "version": "15.1.0"
+    }
+  },
+  "format": 1,
+  "notices": {
+    "LICENSES/MPL-2.0.txt": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+    "LICENSES/Unicode-15.0.0-NOTICE.txt": "53672c0d0b5185e3cf04c8e970d544c3af81ae7c8eeba0b9cf6d355aa954ae1f",
+    "LICENSES/Unicode-15.1-DATA.txt": "d9a52140f486a859a52aad5a4574d11358028b24e5df81ea3f9a20a6dbcf8583",
+    "LICENSES/Unicode-3.0.txt": "e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96",
+    "LICENSES/Unicode-DFS-2016.txt": "830ec6dd25a943b70a31d74caa56b08b34c35f5c9679fba664c1658712849271"
+  }
+}

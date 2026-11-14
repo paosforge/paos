@@ -1,0 +1,79 @@
+{
+  "consumer": {
+    "architecture": "amd64",
+    "binary_sha256": "dbac288c29ba568459550a2da9e7ae0ded6b1fc728ee9fad3044c44e62d6ac14",
+    "built_using": {
+      "glibc": "2.39-0ubuntu8.2"
+    },
+    "name": "busybox-static",
+    "version": "1:1.36.1-6ubuntu3.1"
+  },
+  "creator": "rc-codex-relops / Codex, 2026-10-16",
+  "descriptor_signature_verified": false,
+  "limits": [
+    "Descriptor signature could not be verified with the installed Ubuntu archive keyring; no keys were imported. Checksums do not establish archive authenticity.",
+    "Historical full source build and exact static-library/binary reproduction remain unproved.",
+    "Compiler/linker build inputs beyond the explicit Built-Using version are not closed by this package.",
+    "Full appliance legal/source delivery and public release qualification remain open."
+  ],
+  "schema": "paos.browser-busybox-glibc-selection.v1",
+  "scope": "Exact glibc source-package inputs for the selected BusyBox Built-Using version; no build, historical reproduction or release qualification.",
+  "selected_original_files": {
+    "selected/debian/copyright": {
+      "archive": "glibc_2.39-0ubuntu8.2.debian.tar.xz",
+      "bytes": 26462,
+      "member": "debian/copyright",
+      "sha256": "d3c95b56fa33e28b57860580f0baf4e4f4de2a268a2b80f1d031a5191bade265"
+    },
+    "selected/debian/patches/series": {
+      "archive": "glibc_2.39-0ubuntu8.2.debian.tar.xz",
+      "bytes": 3427,
+      "member": "debian/patches/series",
+      "sha256": "2440bae18262ecbf11fec68bd43cb9bdcf2493dcc06e65a03c226d8cf21c6caa"
+    },
+    "selected/debian/rules": {
+      "archive": "glibc_2.39-0ubuntu8.2.debian.tar.xz",
+      "bytes": 7335,
+      "member": "debian/rules",
+      "sha256": "b816a9bef95e8ad06f395a54ef52b90132e6947c47d3f0aa8b9b66d297dc74d2"
+    },
+    "selected/glibc-2.39/COPYING": {
+      "archive": "glibc_2.39.orig.tar.xz",
+      "bytes": 18092,
+      "member": "glibc-2.39/COPYING",
+      "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+    },
+    "selected/glibc-2.39/COPYING.LIB": {
+      "archive": "glibc_2.39.orig.tar.xz",
+      "bytes": 26530,
+      "member": "glibc-2.39/COPYING.LIB",
+      "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+    }
+  },
+  "source_package": {
+    "files": {
+      "glibc_2.39-0ubuntu8.2.debian.tar.xz": {
+        "bytes": 462640,
+        "sha256": "aa2da913d40f3f3cd85e2e026e2d02f48177032f87b85a07808f72d6ed17227a",
+        "url": "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/glibc/2.39-0ubuntu8.2/glibc_2.39-0ubuntu8.2.debian.tar.xz"
+      },
+      "glibc_2.39-0ubuntu8.2.dsc": {
+        "bytes": 9420,
+        "sha256": "23bc3e1ea1d1b28130351b4c023debefbfcc5a763a6b0d51696770a31c72ee84",
+        "url": "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/glibc/2.39-0ubuntu8.2/glibc_2.39-0ubuntu8.2.dsc"
+      },
+      "glibc_2.39.orig.tar.xz": {
+        "bytes": 18520988,
+        "sha256": "f77bd47cf8170c57365ae7bf86696c118adb3b120d3259c64c502d3dc1e2d926",
+        "url": "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/glibc/2.39-0ubuntu8.2/glibc_2.39.orig.tar.xz"
+      },
+      "glibc_2.39.orig.tar.xz.asc": {
+        "bytes": 833,
+        "sha256": "2cce427ef7933c17379f5514e4f0ccf8dffae5bf8c72f0f7e0bf8b8401f34be5",
+        "url": "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/glibc/2.39-0ubuntu8.2/glibc_2.39.orig.tar.xz.asc"
+      }
+    },
+    "name": "glibc",
+    "version": "2.39-0ubuntu8.2"
+  }
+}

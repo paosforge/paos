@@ -1,0 +1,13 @@
+recipe discover
+step HOOK CATALOG 0
+step HOOK GET forms
+step HOOK DESCRIBE form
+step HOOK DESCRIBE widget
+step HOOK GET form:lock_screen page 1 read 0 384
+step HOOK LIST widget 0
+end
+recipe widget_sample
+step HOOK GET widget:0 role
+step HOOK GET widget:0 label
+step HOOK OBSERVE widget:0 intent_seq
+end

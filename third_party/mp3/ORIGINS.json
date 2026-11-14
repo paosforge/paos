@@ -1,0 +1,287 @@
+{
+  "schema": "paos.local-mp3-origins.v1",
+  "classic_revision": "0cabd75f8653ae3f8778ad0af51469a4f20adf25",
+  "files": {
+    "third_party/mp3/classic/mp3_huff_tables.inc": {
+      "sha256": "0fae3e9ba323b356564fc133b84749ff2c104860c34762030b4223e78dcbf688",
+      "bytes": 11591,
+      "origin_file": "mp3_huff_tables.inc",
+      "origin_sha256": "0fae3e9ba323b356564fc133b84749ff2c104860c34762030b4223e78dcbf688",
+      "start_byte": 0,
+      "end_byte": 11591,
+      "license": "LicenseRef-Classic-Origin-Unresolved"
+    },
+    "third_party/mp3/classic/mp3_imdct_tables.inc": {
+      "sha256": "970e4628ee92eab189adde132300faf6bcd8dd0577a34cf21cb9c355e18667b6",
+      "bytes": 14791,
+      "origin_file": "mp3_imdct_tables.inc",
+      "origin_sha256": "970e4628ee92eab189adde132300faf6bcd8dd0577a34cf21cb9c355e18667b6",
+      "start_byte": 0,
+      "end_byte": 14791,
+      "license": "LicenseRef-Classic-Origin-Unresolved"
+    },
+    "third_party/mp3/classic/synthesis.inc": {
+      "sha256": "06f290d9879290c7e0a6eeaab2e36dfb7390aafec54f4955fce352848c998a5c",
+      "bytes": 55516,
+      "origin_file": "mp3_synth_test.inc",
+      "origin_sha256": "3c6c49593a7ac89165d290f42e12889bab569236d818fd849827b44c20b28e1e",
+      "start_byte": 326,
+      "end_byte": 55842,
+      "license": "LicenseRef-Classic-Origin-Unresolved"
+    },
+    "third_party/mp3/classic/alias.inc": {
+      "sha256": "97d76b38dfc11195be4565f43341c9522ebb9382ab0ba1ce7207199b32b59467",
+      "bytes": 420,
+      "origin_file": "mp3_dequant_test.inc",
+      "origin_sha256": "8ef7bdbbf0d89733e24a6a5b9123679ee354d0230d68dd3b3ebde5163cf0bd97",
+      "start_byte": 207,
+      "end_byte": 627,
+      "license": "LicenseRef-Classic-Origin-Unresolved"
+    },
+    "third_party/mp3/classic/native/mp3_requantize.asm": {
+      "sha256": "6f7341c62c2de1637f532de4e269d9f89007ef97ffc08b79fb0c31f47e5a9a06",
+      "bytes": 2122,
+      "origin_file": "paos.asm",
+      "origin_sha256": "b4a745e156553cff0df15a4dfa78693fa9ec71afbadf9e067d1c75b5cd325564",
+      "start_byte": 6401286,
+      "end_byte": 6403408,
+      "license": "LicenseRef-Classic-Origin-Unresolved"
+    },
+    "third_party/mp3/classic/native/mp3_imdct_long.asm": {
+      "sha256": "bc16d0be9b8c4a3b916bf4954b68ac53362cff3406446d427ca120f7e17474b3",
+      "bytes": 857,
+      "origin_file": "paos.asm",
+      "origin_sha256": "b4a745e156553cff0df15a4dfa78693fa9ec71afbadf9e067d1c75b5cd325564",
+      "start_byte": 6405577,
+      "end_byte": 6406434,
+      "license": "LicenseRef-Classic-Origin-Unresolved"
+    },
+    "third_party/mp3/classic/native/mp3_huffman_decode.asm": {
+      "sha256": "50d234284069bda56ba9bdb67eb0fcaf4c0ccfb408fa952ca625b5b8c494a389",
+      "bytes": 6598,
+      "origin_file": "paos.asm",
+      "origin_sha256": "b4a745e156553cff0df15a4dfa78693fa9ec71afbadf9e067d1c75b5cd325564",
+      "start_byte": 6409736,
+      "end_byte": 6416334,
+      "license": "LicenseRef-Classic-Origin-Unresolved"
+    },
+    "third_party/mp3/classic/native/mp3_sfb_of_line.asm": {
+      "sha256": "f75e55505efff7f28bb92ba8924c20c6a9f03545ab4e97f4151edf4f7733d940",
+      "bytes": 2399,
+      "origin_file": "paos.asm",
+      "origin_sha256": "b4a745e156553cff0df15a4dfa78693fa9ec71afbadf9e067d1c75b5cd325564",
+      "start_byte": 6418762,
+      "end_byte": 6421161,
+      "license": "LicenseRef-Classic-Origin-Unresolved"
+    },
+    "third_party/mp3/classic/native/mp3_intensity_band.asm": {
+      "sha256": "d619838775709dbd9816781849be13baa5ad0f367e219b5f842f5637b9f01511",
+      "bytes": 527,
+      "origin_file": "paos.asm",
+      "origin_sha256": "b4a745e156553cff0df15a4dfa78693fa9ec71afbadf9e067d1c75b5cd325564",
+      "start_byte": 6421351,
+      "end_byte": 6421878,
+      "license": "LicenseRef-Classic-Origin-Unresolved"
+    },
+    "third_party/mp3/classic/native/mp3_alias_reduce.asm": {
+      "sha256": "2f60c2748cb83f96855de88d8b72e651245864ffb9ef317b7217183757f49106",
+      "bytes": 1175,
+      "origin_file": "paos.asm",
+      "origin_sha256": "b4a745e156553cff0df15a4dfa78693fa9ec71afbadf9e067d1c75b5cd325564",
+      "start_byte": 6422038,
+      "end_byte": 6423213,
+      "license": "LicenseRef-Classic-Origin-Unresolved"
+    },
+    "third_party/mp3/classic/native/mp3_reorder.asm": {
+      "sha256": "a3e7ae807155c00998667e5278ff5f4c6c20dd754aecc629dced21fa2648fb5a",
+      "bytes": 258,
+      "origin_file": "paos.asm",
+      "origin_sha256": "b4a745e156553cff0df15a4dfa78693fa9ec71afbadf9e067d1c75b5cd325564",
+      "start_byte": 6423402,
+      "end_byte": 6423660,
+      "license": "LicenseRef-Classic-Origin-Unresolved"
+    },
+    "third_party/mp3/classic/native/mp3_hybrid_granule.asm": {
+      "sha256": "8658900ebc6d12ec50cd82ad9cc0e7f258f4eb640fc48074f44bc3009b9a3fee",
+      "bytes": 1526,
+      "origin_file": "paos.asm",
+      "origin_sha256": "b4a745e156553cff0df15a4dfa78693fa9ec71afbadf9e067d1c75b5cd325564",
+      "start_byte": 6429651,
+      "end_byte": 6431177,
+      "license": "LicenseRef-Classic-Origin-Unresolved"
+    },
+    "third_party/mp3/classic/native/mp3_synth_granule.asm": {
+      "sha256": "0ade0dccad9792a3d4cc6cab1ca0992acc29a5d7fcf165983e334b1dfbafb835",
+      "bytes": 3189,
+      "origin_file": "paos.asm",
+      "origin_sha256": "b4a745e156553cff0df15a4dfa78693fa9ec71afbadf9e067d1c75b5cd325564",
+      "start_byte": 6596609,
+      "end_byte": 6599798,
+      "license": "LicenseRef-Classic-Origin-Unresolved"
+    },
+    "third_party/mp3/classic/native/mp3_parse_frame_header.asm": {
+      "sha256": "63e466c5e0bc9e5e43dd3249906007bf945ce936033d117d70629db04e3458a4",
+      "bytes": 977,
+      "origin_file": "paos.asm",
+      "origin_sha256": "b4a745e156553cff0df15a4dfa78693fa9ec71afbadf9e067d1c75b5cd325564",
+      "start_byte": 6316807,
+      "end_byte": 6317784,
+      "license": "LicenseRef-Classic-Origin-Unresolved"
+    },
+    "third_party/mp3/classic/native/mp3fe_getbits.asm": {
+      "sha256": "d2dbf9eb2ad7f55be6e3b100ed76802d03b17af40f765323e534b638282042f2",
+      "bytes": 628,
+      "origin_file": "paos.asm",
+      "origin_sha256": "b4a745e156553cff0df15a4dfa78693fa9ec71afbadf9e067d1c75b5cd325564",
+      "start_byte": 6612041,
+      "end_byte": 6612669,
+      "license": "LicenseRef-Classic-Origin-Unresolved"
+    },
+    "third_party/mp3/classic/native/mp3fe_skipbits.asm": {
+      "sha256": "d8ecc9a5e4828b879ed88b59297d936a06d4faa85268ef16af80401e11131b4f",
+      "bytes": 392,
+      "origin_file": "paos.asm",
+      "origin_sha256": "b4a745e156553cff0df15a4dfa78693fa9ec71afbadf9e067d1c75b5cd325564",
+      "start_byte": 6612669,
+      "end_byte": 6613061,
+      "license": "LicenseRef-Classic-Origin-Unresolved"
+    },
+    "third_party/mp3/classic/native/mp3fe_align_md.asm": {
+      "sha256": "e4c6e37e093c63f7df2ffca5aa12d2a08c87ee9aeb6a286057103b8e84191215",
+      "bytes": 542,
+      "origin_file": "paos.asm",
+      "origin_sha256": "b4a745e156553cff0df15a4dfa78693fa9ec71afbadf9e067d1c75b5cd325564",
+      "start_byte": 6613061,
+      "end_byte": 6613603,
+      "license": "LicenseRef-Classic-Origin-Unresolved"
+    },
+    "third_party/mp3/classic/native/mp3fe_read_scalefactors.asm": {
+      "sha256": "cb6f4cefe667c1c478e1691f1d526aa4b58f944b20eac1c69d9a7eeb156255e8",
+      "bytes": 2030,
+      "origin_file": "paos.asm",
+      "origin_sha256": "b4a745e156553cff0df15a4dfa78693fa9ec71afbadf9e067d1c75b5cd325564",
+      "start_byte": 6613603,
+      "end_byte": 6615633,
+      "license": "LicenseRef-Classic-Origin-Unresolved"
+    },
+    "third_party/mp3/classic/native/mp3fe_build_regions.asm": {
+      "sha256": "8a4b7ad24b0785597d360f813c032d43a316e4536dcbdbada81d02db83a66e01",
+      "bytes": 1798,
+      "origin_file": "paos.asm",
+      "origin_sha256": "b4a745e156553cff0df15a4dfa78693fa9ec71afbadf9e067d1c75b5cd325564",
+      "start_byte": 6615633,
+      "end_byte": 6617431,
+      "license": "LicenseRef-Classic-Origin-Unresolved"
+    },
+    "third_party/mp3/classic/native/mp3fe_decode_granule.asm": {
+      "sha256": "7b9423556f7625d86d57c30e6cb04b25fe3711bda9d437e1553f4350b27f4b5f",
+      "bytes": 3042,
+      "origin_file": "paos.asm",
+      "origin_sha256": "b4a745e156553cff0df15a4dfa78693fa9ec71afbadf9e067d1c75b5cd325564",
+      "start_byte": 6617431,
+      "end_byte": 6620473,
+      "license": "LicenseRef-Classic-Origin-Unresolved"
+    },
+    "third_party/mp3/classic/native/mp3fe_decode_buf.asm": {
+      "sha256": "641bbff5dcf3dcc952961e9f8f8b4d6813c4a665a5fc1d4252767e569aa6fa75",
+      "bytes": 6926,
+      "origin_file": "paos.asm",
+      "origin_sha256": "b4a745e156553cff0df15a4dfa78693fa9ec71afbadf9e067d1c75b5cd325564",
+      "start_byte": 6620473,
+      "end_byte": 6627399,
+      "license": "LicenseRef-Classic-Origin-Unresolved"
+    },
+    "third_party/mp3/classic/native/mp3fe_resv_restore.asm": {
+      "sha256": "438cf7ce8334a3e0078dbdd6eb6e7886f086cc5d7567bbb1a07819d82061eff5",
+      "bytes": 1845,
+      "origin_file": "paos.asm",
+      "origin_sha256": "b4a745e156553cff0df15a4dfa78693fa9ec71afbadf9e067d1c75b5cd325564",
+      "start_byte": 6635718,
+      "end_byte": 6637563,
+      "license": "LicenseRef-Classic-Origin-Unresolved"
+    },
+    "third_party/mp3/classic/native/mp3fe_resv_save.asm": {
+      "sha256": "427b833ae5a6e1aba72a13dfd95965ec9c3c84f2ebede8992621e84a9b231855",
+      "bytes": 918,
+      "origin_file": "paos.asm",
+      "origin_sha256": "b4a745e156553cff0df15a4dfa78693fa9ec71afbadf9e067d1c75b5cd325564",
+      "start_byte": 6637563,
+      "end_byte": 6638481,
+      "license": "LicenseRef-Classic-Origin-Unresolved"
+    },
+    "third_party/mp3/classic/generators/huffman-read.py": {
+      "sha256": "d73cf60562f5dbf5d38bd1b54c68fc8c8e5e8271a5a40769062cb4d3e6ec8836",
+      "bytes": 289,
+      "origin_file": "mp3_huff_oracle.py",
+      "origin_sha256": "19174f6049e3ccc0a5d09a947f0a5afb4c2a019fd08962bd032d124cea279f6a",
+      "start_byte": 816,
+      "end_byte": 1105,
+      "license": "LicenseRef-Classic-Origin-Unresolved"
+    },
+    "third_party/mp3/classic/generators/huffman-emit.py": {
+      "sha256": "3ca804b83ce26b40d4129cc6f2218a46786689ecadb3b1d0a0b62a4a63fcf890",
+      "bytes": 351,
+      "origin_file": "mp3_huff_oracle.py",
+      "origin_sha256": "19174f6049e3ccc0a5d09a947f0a5afb4c2a019fd08962bd032d124cea279f6a",
+      "start_byte": 3536,
+      "end_byte": 3887,
+      "license": "LicenseRef-Classic-Origin-Unresolved"
+    },
+    "third_party/mp3/classic/generators/alias.py": {
+      "sha256": "1b25771e61430c87c12793c1e80ab3276933b8924b2ecd0f40b5e2fc6b584d75",
+      "bytes": 462,
+      "origin_file": "mp3_dequant_oracle.py",
+      "origin_sha256": "59e20b75eb7bdea66f7d694d2beae98c7b836cbdc6a41faf14d20c5ed7421be7",
+      "start_byte": 680,
+      "end_byte": 1142,
+      "license": "LicenseRef-Classic-Origin-Unresolved"
+    },
+    "third_party/mp3/classic/generators/synthesis.py": {
+      "sha256": "dfe693634654f3db2cf65a4d1acf834bfc91eccf5305975972a63ad6c95bde53",
+      "bytes": 11774,
+      "origin_file": "mp3_synth_oracle.py",
+      "origin_sha256": "4aadc5503a5342924bd027614ff2470bdf1c9006b47a8dcea8b5a0e52874ebeb",
+      "start_byte": 1526,
+      "end_byte": 13300,
+      "license": "LicenseRef-Classic-Origin-Unresolved"
+    },
+    "third_party/mp3/minimp3/mini_inst.h": {
+      "sha256": "c2f0980e2a3292641d36dd78000f7f383670ffdfc35f91ee54f37a9620782071",
+      "bytes": 78609,
+      "origin_file": "gauntlet_v2/investigations/9320e_work/mini_inst.h",
+      "origin_sha256": "c2f0980e2a3292641d36dd78000f7f383670ffdfc35f91ee54f37a9620782071",
+      "start_byte": 0,
+      "end_byte": 78609,
+      "license": "CC0-1.0 (verbatim local dedication; upstream revision unknown)"
+    }
+  },
+  "original_manifests": {
+    "PROVENANCE.json": {
+      "sha256": "e30d98f3f696d3dcb46f375fd34e7008fb219371f0c5bb5f02c49a7b95208f4d",
+      "read": true
+    },
+    "SHORT_PROVENANCE.json": {
+      "sha256": "ea66ae12817f00470be1aa98e0fce1dedbf38cfa180020533a01f955fab0f957",
+      "read": true
+    },
+    "INTENSITY_PROVENANCE.json": {
+      "sha256": "29339ef4fc55904842a763b0716da237178eeda2158f0a8c2baad8726359d5cb",
+      "read": true
+    },
+    "LSF_PROVENANCE.json": {
+      "sha256": "188e3d21aff959470be5f7ac6dc22eac1403add0c9aa6f4ca6d269a72e32d3dc",
+      "read": true
+    },
+    "LSF_TABLE_FACTS.json": {
+      "sha256": "c477379189030ec5b875ed7d865cebda24a32acf9b2b98399612f08993880d9c",
+      "read": true
+    }
+  },
+  "limits": [
+    "mini_inst.h upstream commit and local instrumentation patch history are unavailable; exact authorized local bytes and original dedication delivered.",
+    "Classic mp3_synth_test.inc and mp3_synth_oracle.py are absent from the pinned Git tree; exact local hashes/spans retained; not falsely attributed to a tracked revision.",
+    "Classic excerpts have no individual license headers and pinned Classic tree has no LICENSE. PaOS MPL policy does not establish upstream dedication of these exact excerpts. Origin/license attestation remains unresolved.",
+    "Extracted routines retain original references and are archival corresponding source, not independently linkable objects. Current adapted source is in src/media.",
+    "No PCM, test vectors, golden arrays, unrelated Classic source or complete private kernel is delivered."
+  ]
+}

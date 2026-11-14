@@ -1,0 +1,5 @@
+sdk=1
+id=org.example.system-check
+version=1.0.0
+caps=sys.read
+entry=check

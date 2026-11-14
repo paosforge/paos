@@ -1,0 +1,60 @@
+{
+  "consumer": "Native diagnostic binutils assembler/linker inputs for the public glibc and BusyBox build recipe; host GCC13 and host libraries remain inputs.",
+  "creator": "rc-codex-relops / Codex, 2026-10-16",
+  "descriptor_signature_verified": false,
+  "limitations": [
+    "Not full Ubuntu package build or historical executable byte equality.",
+    "Source archives are caller-supplied complete external public inputs; small kit contains contracts and original notices.",
+    "Compiler bootstrap and transitive host-tool/header/library closure remain open.",
+    "No binary redistribution or legal source offer established by this diagnostic recipe."
+  ],
+  "schema": "paos.diagnostic-binutils-source.v1",
+  "selected_original_notices": {
+    "COPYING": {
+      "bytes": 18002,
+      "sha256": "231f7edcc7352d7734a96eef0b8030f77982678c516876fcb81e25b32d68564c",
+      "source_member": "COPYING"
+    },
+    "COPYING.LIB": {
+      "bytes": 25291,
+      "sha256": "56bdea73b6145ef6ac5259b3da390b981d840c24cb03b8e1cbc678de7ecfa18d",
+      "source_member": "COPYING.LIB"
+    },
+    "COPYING3": {
+      "bytes": 35147,
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "source_member": "COPYING3"
+    },
+    "COPYING3.LIB": {
+      "bytes": 7639,
+      "sha256": "a853c2ffec17057872340eee242ae4d96cbf2b520ae27d903e1b2fef1a5f9d1c",
+      "source_member": "COPYING3.LIB"
+    },
+    "debian-copyright": {
+      "bytes": 1795,
+      "sha256": "a81bdd422c2c015deca84bf6ad249bf0d7d19885fc01d1894463291b0b7313e1",
+      "source_member": "debian/copyright"
+    }
+  },
+  "source_package": {
+    "files": {
+      "binutils_2.42-4ubuntu2.10.debian.tar.xz": {
+        "bytes": 196552,
+        "sha256": "6acc777971890cb1efaeeb33a0a5358651c71067ced69dcfd59da7d0977f7530",
+        "url": "https://archive.ubuntu.com/ubuntu/pool/main/b/binutils/binutils_2.42-4ubuntu2.10.debian.tar.xz"
+      },
+      "binutils_2.42-4ubuntu2.10.dsc": {
+        "bytes": 10152,
+        "sha256": "a14a8e2efdb3566955476bccd2248cebed5cf2a2f5d28e223d08200ec1a18d75",
+        "url": "https://archive.ubuntu.com/ubuntu/pool/main/b/binutils/binutils_2.42-4ubuntu2.10.dsc"
+      },
+      "binutils_2.42.orig.tar.xz": {
+        "bytes": 27567160,
+        "sha256": "f6e4d41fd5fc778b06b7891457b3620da5ecea1006c6a4a41ae998109f85a800",
+        "url": "https://archive.ubuntu.com/ubuntu/pool/main/b/binutils/binutils_2.42.orig.tar.xz"
+      }
+    },
+    "name": "binutils",
+    "version": "2.42-4ubuntu2.10"
+  }
+}

@@ -1,0 +1,275 @@
+{
+  "schema": "paos.ui-glossary.v1",
+  "authorship": "machine-authored, agent-reviewed",
+  "author": "rc-codex-relops",
+  "review_status": {
+    "author_self_review": "complete",
+    "rc_sec": "accepted except R1 machine-reset row and changed strings; re-review pending",
+    "rc_input_back_translation": "pending",
+    "srcreview": "pending",
+    "Peter_native_language_evaluation": "not claimed"
+  },
+  "locale_order": [
+    "en",
+    "es",
+    "fr",
+    "de",
+    "ja",
+    "zh-Hans"
+  ],
+  "terms": [
+    {
+      "en": "sign in",
+      "es": "iniciar sesión",
+      "fr": "se connecter",
+      "de": "anmelden",
+      "ja": "サインイン",
+      "zh-Hans": "登录",
+      "meaning_constraint": "Authenticate; refusal is not success. Avoid terms meaning create account."
+    },
+    {
+      "en": "lock",
+      "es": "bloquear",
+      "fr": "verrouiller",
+      "de": "sperren",
+      "ja": "ロック",
+      "zh-Hans": "锁定",
+      "meaning_constraint": "Access restriction, not encryption or erasure."
+    },
+    {
+      "en": "owner",
+      "es": "propietario",
+      "fr": "propriétaire",
+      "de": "Eigentümer",
+      "ja": "所有者",
+      "zh-Hans": "所有者",
+      "meaning_constraint": "Owner authority; never substitute current user or administrator."
+    },
+    {
+      "en": "agent",
+      "es": "agente",
+      "fr": "agent",
+      "de": "Agent",
+      "ja": "エージェント",
+      "zh-Hans": "代理程序",
+      "meaning_constraint": "Software agent, not the owner; no implied authority."
+    },
+    {
+      "en": "allow",
+      "es": "permitir",
+      "fr": "autoriser",
+      "de": "erlauben",
+      "ja": "許可",
+      "zh-Hans": "允许",
+      "meaning_constraint": "Explicit authorization; not automatic approval."
+    },
+    {
+      "en": "deny",
+      "es": "denegar",
+      "fr": "refuser",
+      "de": "verweigern",
+      "ja": "拒否",
+      "zh-Hans": "拒绝",
+      "meaning_constraint": "Authorization withheld."
+    },
+    {
+      "en": "refused",
+      "es": "rechazado",
+      "fr": "refusé",
+      "de": "abgelehnt",
+      "ja": "拒否されました",
+      "zh-Hans": "已拒绝",
+      "meaning_constraint": "Action did not run; preserve reason and whether state changed."
+    },
+    {
+      "en": "failed",
+      "es": "falló",
+      "fr": "a échoué",
+      "de": "fehlgeschlagen",
+      "ja": "失敗しました",
+      "zh-Hans": "失败",
+      "meaning_constraint": "Attempt unsuccessful; preserve any partial effects separately."
+    },
+    {
+      "en": "erase",
+      "es": "borrar",
+      "fr": "effacer",
+      "de": "löschen",
+      "ja": "消去",
+      "zh-Hans": "擦除",
+      "meaning_constraint": "Destructive removal; never soften to clean or hide."
+    },
+    {
+      "en": "format",
+      "es": "formatear",
+      "fr": "formater",
+      "de": "formatieren",
+      "ja": "フォーマット",
+      "zh-Hans": "格式化",
+      "meaning_constraint": "Destructive filesystem formatting; not appearance formatting."
+    },
+    {
+      "en": "install",
+      "es": "instalar",
+      "fr": "installer",
+      "de": "installieren",
+      "ja": "インストール",
+      "zh-Hans": "安装",
+      "meaning_constraint": "Install software; no permission implication."
+    },
+    {
+      "en": "recovery",
+      "es": "recuperación",
+      "fr": "récupération",
+      "de": "Wiederherstellung",
+      "ja": "復旧",
+      "zh-Hans": "恢复",
+      "meaning_constraint": "Recovery workflow; does not promise data restoration."
+    },
+    {
+      "en": "Secure Boot",
+      "es": "Secure Boot",
+      "fr": "Secure Boot",
+      "de": "Secure Boot",
+      "ja": "Secure Boot",
+      "zh-Hans": "Secure Boot",
+      "meaning_constraint": "Exact firmware feature name; never translate as a generic safe boot."
+    },
+    {
+      "en": "MOK",
+      "es": "MOK",
+      "fr": "MOK",
+      "de": "MOK",
+      "ja": "MOK",
+      "zh-Hans": "MOK",
+      "meaning_constraint": "Exact Machine Owner Key abbreviation; enrollment remains an owner action."
+    },
+    {
+      "en": "cryptographic key",
+      "es": "clave criptográfica",
+      "fr": "clé cryptographique",
+      "de": "kryptografischer Schlüssel",
+      "ja": "暗号鍵",
+      "zh-Hans": "加密密钥",
+      "meaning_constraint": "Cryptographic key, distinct from keyboard key or password."
+    },
+    {
+      "en": "keyboard key",
+      "es": "tecla",
+      "fr": "touche",
+      "de": "Taste",
+      "ja": "キー",
+      "zh-Hans": "按键",
+      "meaning_constraint": "Keyboard key; Enter, Tab and Backspace labels remain exact portable names."
+    },
+    {
+      "en": "password",
+      "es": "contraseña",
+      "fr": "mot de passe",
+      "de": "Passwort",
+      "ja": "パスワード",
+      "zh-Hans": "密码",
+      "meaning_constraint": "Authentication secret, not cryptographic key."
+    },
+    {
+      "en": "keep",
+      "es": "espacio protegido",
+      "fr": "espace protégé",
+      "de": "geschützter Bereich",
+      "ja": "保護領域",
+      "zh-Hans": "保护空间",
+      "meaning_constraint": "PaOS user-owned protected workspace; translation does not imply extra isolation or encryption."
+    },
+    {
+      "en": "restart",
+      "es": "reiniciar",
+      "fr": "redémarrer",
+      "de": "neu starten",
+      "ja": "再起動",
+      "zh-Hans": "重启",
+      "meaning_constraint": "Restart the system; preserve still-running or nothing-reset outcomes."
+    },
+    {
+      "en": "shut down",
+      "es": "apagar",
+      "fr": "arrêter",
+      "de": "herunterfahren",
+      "ja": "シャットダウン",
+      "zh-Hans": "关机",
+      "meaning_constraint": "System power-off operation; refusal means power remains on."
+    },
+    {
+      "en": "offline",
+      "es": "fuera de línea",
+      "fr": "hors ligne",
+      "de": "offline",
+      "ja": "オフライン",
+      "zh-Hans": "离线",
+      "meaning_constraint": "Unavailable state, not an authorization denial."
+    },
+    {
+      "en": "session",
+      "es": "sesión",
+      "fr": "session",
+      "de": "Sitzung",
+      "ja": "セッション",
+      "zh-Hans": "会话",
+      "meaning_constraint": "Connection/authentication session, not a process."
+    },
+    {
+      "en": "reset (machine)",
+      "es": "reinicio por hardware",
+      "fr": "réinitialisation matérielle",
+      "de": "Hardware-Reset",
+      "ja": "マシンのリセット",
+      "zh-Hans": "硬件复位",
+      "meaning_constraint": "Machine reset/restart, never settings or factory reset. Nothing was reset means no machine restart occurred and the system is still running; a failed reset did not restart it. Do not imply that settings were restored or data were erased."
+    }
+  ],
+  "preserve_exact": [
+    "PaOS",
+    "Windows",
+    "MSI",
+    "SLEEP",
+    "ssh",
+    "history",
+    "help",
+    "df",
+    "cat",
+    "ps",
+    "kill",
+    "free",
+    "uname",
+    "ip",
+    "ifconfig",
+    "FSINFO",
+    "FSREAD",
+    "STATUS",
+    "FSCANCEL",
+    "NETCFG MEMBERS",
+    "USER@A.B.C.D[:PORT]",
+    "sshclikey",
+    "ACPI S5",
+    "NVMe",
+    "PWM",
+    "UDP",
+    "IPv4",
+    "TCP",
+    "ARP",
+    "UTC",
+    "Enter",
+    "Tab",
+    "Backspace",
+    "<absolute-path>",
+    "<offset>",
+    "<length 1-256>",
+    "<16-hex nonce>",
+    "<job>"
+  ],
+  "translation_rules": [
+    "Preserve refusal versus failure, partial effects, owner authority and explicit action targets.",
+    "Preserve copyable registered-verb syntax, numeric limits and timing.",
+    "Never claim translation of the whole public path: this catalog covers 74 reviewed active keys only.",
+    "No runtime shipping, layout acceptance or native-language evaluation is implied."
+  ]
+}

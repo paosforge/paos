@@ -1,0 +1,185 @@
+#!/bin/busybox sh
+# One bounded connection. The challenge is public. Exactly one fixed 512-byte
+# owner-signed request selects return, bounded inactive-slot update, rollback or the
+# hardware-suspicion clear.
+umask 077
+set -f
+# nc executes this only after accepting a connection. Keep fixed progress on
+# discovery UDP; stdout remains exclusively the binary challenge/protocol.
+# An unavailable diagnostic never prevents the original authenticated path.
+session_progress() {
+    /sbin/paos-rescue-controller --session-progress "$1" >/dev/null 2>&1 || true
+}
+# Only the fixed controller evidence frame is exported, bounded to one local
+# log prefix and one line. Generic refusal stays first for existing callers.
+# The console mirror supports an independent original-owner capture; TCP alone
+# provides no target authentication. Neither transport grants runtime proof.
+refusal_evidence() {
+    dd if="$1" bs=16384 count=1 2>/dev/null |
+        grep '^PAOS_RESCUE_REFUSAL_V1 ' | head -n 1 |
+        cut -c 1-2048 > /run/paos-rescue.refusal.frame
+    cat /run/paos-rescue.refusal.frame
+    timeout 2 /bin/busybox sh -c \
+        'exec cat /run/paos-rescue.refusal.frame >/dev/console' || true
+}
+session_progress session-challenge-begin
+if ! /sbin/paos-rescue-controller --challenge /mnt/esp \
+    /sys/firmware/efi/efivars /sys/class/block \
+    >/run/paos-rescue.challenge.log 2>&1; then
+    session_progress session-challenge-refused
+    # The real C branch sends its fixed anchor/trust/state category. A failed
+    # exec/log/process may leave none: report unavailable, never guess a cause.
+    # Only inspect a bounded local prefix; no log contents go on discovery UDP.
+    if ! dd if=/run/paos-rescue.challenge.log bs=4096 count=1 2>/dev/null | \
+        grep -Eq '^PAOS_RESCUE_(ANCHOR|TRUST|CHALLENGE)_REFUSED '; then
+        session_progress session-challenge-unavailable
+    fi
+    # Include open/redirection in the deadline; a stuck console must not keep
+    # this refused TCP session occupied until the outer listener timeout.
+    timeout 2 /bin/busybox sh -c \
+        'exec grep -E "REFUSED|DIAG" /run/paos-rescue.challenge.log >/dev/console' || true
+    exit 2
+fi
+session_progress session-challenge-ready
+if ! cat /run/paos-rescue.challenge; then
+    session_progress session-challenge-write-failed
+    exit 2
+fi
+session_progress session-challenge-sent
+# Read the fixed request without waiting for EOF: op2 carries a signed
+# successor and exact-size image after it. Every branch requires half-close.
+dd bs=512 count=1 iflag=fullblock of=/run/paos-rescue.request \
+    2>/run/paos-rescue.request.log || exit 2
+if [ "$(/bin/busybox wc -c </run/paos-rescue.request)" -ne 512 ]; then
+    printf 'PAOS_RESCUE_RETURN_REFUSED framing\n'
+    exit 2
+fi
+session_progress session-request-received
+
+update_operation=--apply-update
+if /sbin/paos-rescue-controller --verify-update-request /mnt/esp \
+    /sys/firmware/efi/efivars /sys/class/block \
+    >/run/paos-rescue.update-check.log 2>&1; then
+    :
+else
+    cp /run/paos-rescue.update-check.log /run/paos-rescue.update-first-check.log
+    if /sbin/paos-rescue-controller --verify-reprovision-request /mnt/esp \
+    /sys/firmware/efi/efivars /sys/class/block \
+    >/run/paos-rescue.update-check.log 2>&1; then
+        update_operation=--reprovision
+    else
+        update_operation=""
+        if ! grep -q '^PAOS_RESCUE_REFUSAL_V1 ' /run/paos-rescue.update-check.log; then
+            cp /run/paos-rescue.update-first-check.log /run/paos-rescue.update-check.log
+        fi
+    fi
+fi
+if [ -n "$update_operation" ]; then
+    size=""
+    for token in $(cat /run/paos-rescue.update-check.log); do
+        case "$token" in candidate_size=*) size=${token#candidate_size=} ;; esac
+    done
+    case "$size" in ''|*[!0-9]*) exit 2 ;; esac
+    [ "$size" -ge 512 ] && [ "$size" -le 67108864 ] || exit 2
+    dd bs=1024 count=1 iflag=fullblock of=/run/paos-rescue.successor \
+        2>/run/paos-rescue.successor.log || exit 2
+    if [ "$(/bin/busybox wc -c </run/paos-rescue.successor)" -ne 1024 ]; then
+        printf 'PAOS_RESCUE_UPDATE_REFUSED framing\n'
+        exit 2
+    fi
+    : >/run/paos-rescue.candidate
+    blocks=$((size / 65536))
+    remainder=$((size % 65536))
+    if [ "$blocks" -gt 0 ]; then
+        dd bs=65536 count="$blocks" iflag=fullblock \
+            >>/run/paos-rescue.candidate 2>/run/paos-rescue.candidate.log || exit 2
+    fi
+    if [ "$remainder" -gt 0 ]; then
+        dd bs="$remainder" count=1 iflag=fullblock \
+            >>/run/paos-rescue.candidate 2>>/run/paos-rescue.candidate.log || exit 2
+    fi
+    if [ "$(/bin/busybox wc -c </run/paos-rescue.candidate)" -ne "$size" ]; then
+        printf 'PAOS_RESCUE_UPDATE_REFUSED framing\n'
+        exit 2
+    fi
+    dd bs=1 count=1 of=/run/paos-rescue.extra 2>/run/paos-rescue.extra.log || exit 2
+    if [ -s /run/paos-rescue.extra ]; then
+        printf 'PAOS_RESCUE_UPDATE_REFUSED framing\n'
+        exit 2
+    fi
+    if /sbin/paos-rescue-controller "$update_operation" /mnt/esp \
+        /sys/firmware/efi/efivars /sys/class/block \
+        >/run/paos-rescue.update.log 2>&1; then
+        cat /run/paos-rescue.update.log
+        exit 0
+    fi
+    printf 'PAOS_RESCUE_UPDATE_REFUSED inspect-local-log\n'
+    refusal_evidence /run/paos-rescue.update.log
+    exit 2
+fi
+
+# RCQ-28-b1-suspect-clear: the owner's signed 'hardware fixed' clear (PRQ1 op 4). The
+# controller refuses unless the journal is B1-suspect, appends the ledger, then writes.
+if /sbin/paos-rescue-controller --verify-clear-request /mnt/esp \
+    /sys/firmware/efi/efivars /sys/class/block \
+    >/run/paos-rescue.clear-check.log 2>&1; then
+    dd bs=1 count=1 of=/run/paos-rescue.extra 2>/run/paos-rescue.extra.log || exit 2
+    if [ -s /run/paos-rescue.extra ]; then
+        printf 'PAOS_RESCUE_CLEAR_REFUSED framing\n'
+        exit 2
+    fi
+    if /sbin/paos-rescue-controller --clear-hw-suspect /mnt/esp \
+        /sys/firmware/efi/efivars /sys/class/block \
+        >/run/paos-rescue.clear.log 2>&1; then
+        cat /run/paos-rescue.clear.log
+        cat /run/paos-rescue.clear.log >/dev/console 2>/dev/null || true
+        exit 0
+    fi
+    printf 'PAOS_RESCUE_CLEAR_REFUSED inspect-local-log\n'
+    exit 2
+fi
+
+if /sbin/paos-rescue-controller --verify-rollback-request /mnt/esp \
+    /sys/firmware/efi/efivars /sys/class/block \
+    >/run/paos-rescue.rollback-check.log 2>&1; then
+    dd bs=1 count=1 of=/run/paos-rescue.extra 2>/run/paos-rescue.extra.log || exit 2
+    if [ -s /run/paos-rescue.extra ]; then
+        printf 'PAOS_RESCUE_ROLLBACK_REFUSED framing\n'
+        exit 2
+    fi
+    if /sbin/paos-rescue-controller --rollback-previous /mnt/esp \
+        /sys/firmware/efi/efivars /sys/class/block \
+        >/run/paos-rescue.rollback.log 2>&1; then
+        cat /run/paos-rescue.rollback.log
+        exit 0
+    fi
+    printf 'PAOS_RESCUE_ROLLBACK_REFUSED inspect-local-log\n'
+    exit 2
+fi
+
+session_progress session-return-check-begin
+if ! /sbin/paos-rescue-controller --verify-request /mnt/esp \
+    /sys/firmware/efi/efivars /sys/class/block \
+    >/run/paos-rescue.return-check.log 2>&1; then
+    # Legacy return clients require an explicit fail-closed return marker even
+    # when the 512-byte record does not identify any authorized operation.
+    session_progress session-return-check-refused
+    printf 'PAOS_RESCUE_RETURN_REFUSED request-invalid inspect-local-log\n'
+    refusal_evidence /run/paos-rescue.update-check.log
+    exit 2
+fi
+session_progress session-return-check-ready
+dd bs=1 count=1 of=/run/paos-rescue.extra 2>/run/paos-rescue.extra.log || exit 2
+if [ -s /run/paos-rescue.extra ]; then
+    printf 'PAOS_RESCUE_RETURN_REFUSED framing\n'
+    exit 2
+fi
+session_progress session-return-dispatch
+/sbin/paos-rescue-controller --return-active /mnt/esp \
+    /sys/firmware/efi/efivars /sys/class/block \
+    >/run/paos-rescue.return.log 2>&1
+# A successful return reboots and never reaches this line. A refused or
+# failed return leaves signed Rescue live with the local refusal in RAM.
+session_progress session-return-failed
+printf 'PAOS_RESCUE_RETURN_REFUSED inspect-local-log\n'
+exit 2

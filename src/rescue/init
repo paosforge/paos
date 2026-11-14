@@ -1,0 +1,423 @@
+#!/bin/busybox sh
+# PaOS Rescue Environment init. Recovery policy is attempt-bounded and begins
+# read-only: observe -> classify -> preserve evidence -> beacon. Repair actions
+# are added only behind explicit controller recipes and their own fault gates.
+
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+umask 077
+# Invoke sleep as an external applet. Ash's in-process applet returns early on
+# SIGCHLD, including children adopted by PID1; those exits must not consume the
+# USB discovery intervals, delayed log deadline or other recovery waits.
+# Fixed, credential-free boundary markers survive a missing/refused USB log.
+# stdout retains the serial console; tty0 is the firmware framebuffer console.
+# A console failure is observation loss, never permission to change recovery.
+# Run output (including tty0 open) in finite children. Disable a failed sink for
+# this shell so a stopped console cannot delay every later durable record.
+boundary() {
+    console printf 'PAOS_RESCUE_BOUNDARY_V1 phase=%s %s\n' "$1" "${2:-}"
+    if [ "${CONSOLE_TTY0:-1}" = 1 ] && [ -c /dev/tty0 ]; then
+        /bin/busybox timeout -k 1 2 /bin/busybox sh -c \
+            'printf "PAOS_RESCUE_BOUNDARY_V1 phase=%s %s\n" "$1" "$2" > /dev/tty0' \
+            sh "$1" "${2:-}" 2>/dev/null || CONSOLE_TTY0=0
+    fi
+    return 0
+}
+console() {
+    [ "${CONSOLE_STDOUT:-1}" = 1 ] || return 0
+    /bin/busybox timeout -k 1 2 /bin/busybox "$@" 2>/dev/null || CONSOLE_STDOUT=0
+    return 0
+}
+boundary pid1
+mount -t proc -o nosuid,nodev,noexec proc /proc 2>/dev/null
+boundary proc "rc=$?"
+mount -t sysfs -o nosuid,nodev,noexec sysfs /sys 2>/dev/null
+boundary sysfs "rc=$?"
+mount -t devtmpfs -o nosuid,noexec devtmpfs /dev 2>/dev/null
+boundary devtmpfs "rc=$?"
+mkdir -p /run /tmp /mnt/esp /mnt/candidate /usr/share/udhcpc 2>/dev/null
+mount -t tmpfs -o nosuid,nodev,noexec,mode=0700 tmpfs /run 2>/dev/null
+boundary run "rc=$?"
+# NIC-independent stage log (root 2026-10-17 17:33:52): one sector per stage into
+# the single preallocated PAOSRSL1 file on a PAOSRLOG stick, else on the ESP;
+# never a FAT/dirent change, bounded per boot, a refusal never blocks Rescue.
+ESP=""
+ESP_MOUNTED=0
+ESP_MOUNT_OPTS="ro,nosuid,nodev,noexec"
+SL_QUIESCENT=0
+stagelog() {
+    sl_stage=$1
+    case "$sl_stage" in --dmesg|--bootlog) sl_stage=$2 ;; esac
+    # PID1 calls only between synchronous ESP readers. The delayed child may
+    # observe, but never unmount. Serialize both through the entire transaction
+    # so it cannot raw-write while PID1 restores the filesystem mount.
+    if ! mkdir /run/paos-stagelog.transaction 2>/dev/null; then
+        boundary stagelog "stage=$sl_stage rc=5 reason=busy"
+        return 0
+    fi
+    sl_restore=0
+    if [ "${SL_QUIESCENT:-0}" = 1 ] && [ "${ESP_MOUNTED:-0}" = 1 ]; then
+        if umount /mnt/esp 2>/dev/null; then
+            ESP_MOUNTED=0
+            sl_restore=1
+        else
+            boundary stagelog "stage=$sl_stage rc=5 reason=umount"
+            /bin/busybox rmdir /run/paos-stagelog.transaction
+            return 0
+        fi
+    fi
+    # C4 still checks every partition of the selected disk family, twice.
+    # A mounted sibling (or an unknown/unreadable identity) must still refuse.
+    # The writer prints after fsync. Its stdout must not hold the ESP unmounted
+    # or prevent its exit after a durable commit. Retain the latest result in
+    # private RAM; replay it only after restoring the read-only consumer mount.
+    sl_wait=0
+    while :; do
+        /sbin/paos-rescue-stagelog "$@" >/run/paos-rescue-stagelog.result 2>/dev/null
+        sl_rc=$?
+        # USB may enumerate after PID1. Retry only the early log's no-USB
+        # discovery refusal, before any budget or write; never retry an I/O,
+        # mount, nonce, ambiguity or budget refusal. At most three seconds.
+        [ "$1" = --bootlog ] && [ "$sl_rc" = 2 ] && [ "$sl_wait" -lt 3 ] || break
+        case "$(/bin/busybox cat /run/paos-rescue-stagelog.result)" in
+            *"reason=targets b=0 a="*) sl_wait=$((sl_wait + 1)); /bin/busybox sleep 1 ;;
+            *) break ;;
+        esac
+    done
+    if [ "$sl_restore" = 1 ]; then
+        if mount -t vfat -o "$ESP_MOUNT_OPTS" "$ESP" /mnt/esp 2>/dev/null; then
+            ESP_MOUNTED=1
+        else
+            # A failed restore cannot leave an old route verdict authorizing
+            # an ESP consumer/listener. Continue RAM observation only.
+            ESP=""
+            ROUTE_LISTENER=0
+            boundary esp-restore "rc=1 listener=0"
+        fi
+    fi
+    console cat /run/paos-rescue-stagelog.result
+    /bin/busybox rmdir /run/paos-stagelog.transaction
+    boundary stagelog "stage=$sl_stage rc=$sl_rc"
+    return 0
+}
+stagelog init-entry pid1
+(
+    /bin/busybox sleep 240
+    SL_QUIESCENT=0
+    # Do not race initial ESP probing/mounting, before the transaction wrapper
+    # owns the mount lifecycle. Keep a console marker if that phase stalled.
+    if [ -f /run/paos-stagelog.mount-ready ]; then
+        stagelog --dmesg t240
+    else
+        boundary stagelog "stage=t240 rc=5 reason=mount-probe"
+    fi
+) &
+
+console printf '%s\n' "[PRESCUE] independent thin-Linux environment reached [boot.v2.rescue.reachable]"
+# Capture EFI state and any prior panic before the optional EFI publisher.
+# A read-only pstore mount never acknowledges or deletes its records.
+if [ -d /sys/fs/pstore ]; then
+    mount -t pstore -o ro,nosuid,nodev,noexec pstore /sys/fs/pstore 2>/dev/null || true
+fi
+# Observe PID1 before route/USB mounting or NIC startup. The publisher is inert
+# in ordinary builds and accepts only the compiled nonce's existing 0x10f trace.
+# No trace observation grants a trusted route, health, repair or return effect.
+if [ -d /sys/firmware/efi/efivars ] &&
+   mount -t efivarfs -o ro,nosuid,nodev,noexec efivarfs /sys/firmware/efi/efivars 2>/dev/null; then
+    stagelog --bootlog efivars readonly-before-observer
+    /bin/busybox timeout -k 1 2 /sbin/paos-rescue-entry-observer
+    entry_rc=$?
+    # Restore RO independently even if the helper timed out or was killed.
+    # Do not start consumers/authenticated service on uncertain mount custody.
+    if [ "$entry_rc" != 3 ] &&
+       ! mount -t efivarfs -o remount,ro,nosuid,nodev,noexec efivarfs /sys/firmware/efi/efivars 2>/dev/null; then
+        boundary entry-observer "rc=$entry_rc readonly=failed effects=disabled"
+        while :; do /bin/busybox sleep 30; done
+    fi
+    boundary entry-observer "rc=$entry_rc readonly=1"
+    console printf '%s\n' "[PRESCUE] firmware variables mounted read-only [boot.v2.rescue.efivars-mounted]"
+else
+    stagelog --bootlog efivars unavailable-before-observer
+    console printf '%s\n' "[PRESCUE] firmware variables unavailable; trusted route disabled [boot.v2.rescue.efivars-missing]"
+fi
+
+if /sbin/sbverify --version >/run/sbverify.version 2>&1; then
+    console printf '%s\n' "[PRESCUE] bundled signed-Manager verifier executable [boot.v2.rescue.verifier-ready]"
+else
+    console printf '%s\n' "[PRESCUE] bundled verifier unavailable; owner anchor disabled [boot.v2.rescue.verifier-missing]"
+fi
+
+CANDIDATE_MOUNTED=0
+candidate_release() {
+    [ "$CANDIDATE_MOUNTED" = 1 ] || return 0
+    if umount /mnt/candidate 2>/dev/null; then
+        CANDIDATE_MOUNTED=0
+        return 0
+    fi
+    boundary candidate-unmount "rc=1"
+    return 1
+}
+# The current firmware option selects the system ESP by GPT identity.  An
+# unrelated FAT volume is useful for read-only triage but never for authority.
+discover_route() {
+    ROUTE_DEV=""
+    ROUTE_ATTEMPT=0
+    # A USB ESP may arrive after PID1. Re-run the complete authenticated route
+    # check only on transient absence, never on ambiguous or invalid authority.
+    # Twelve calls, each with a two-second timeout plus one-second kill grace,
+    # and at most eleven one-second waits. No mount or trust effect here.
+    while [ "$ROUTE_ATTEMPT" -lt 12 ]; do
+        ROUTE_ATTEMPT=$((ROUTE_ATTEMPT + 1))
+        if /bin/busybox timeout -k 1 2 /sbin/paos-rescue-controller --route \
+            /sys/firmware/efi/efivars /sys/class/block \
+            >/run/route.dev 2>/run/route.err; then
+            ROUTE_DEV="$(cat /run/route.dev)"
+            break
+        else
+            ROUTE_RC=$?
+        fi
+        # The controller returns 2 and appends its refusal trailer. A partial
+        # diagnostic or timeout must not be mistaken for transient absence.
+        [ "$ROUTE_RC" = 2 ] || break
+        case "$(cat /run/route.err)" in
+            'PAOS_RESCUE_ROUTE_DIAG stage=partuuid matches=0
+PAOS_RESCUE_ROUTE_REFUSED no unique signed system ESP'|\
+            'PAOS_RESCUE_ROUTE_DIAG stage=sysblock
+PAOS_RESCUE_ROUTE_REFUSED no unique signed system ESP') ;;
+            *) break ;;
+        esac
+        [ "$ROUTE_ATTEMPT" -lt 12 ] || break
+        boundary route-wait "attempt=$ROUTE_ATTEMPT"
+        /bin/busybox sleep 1
+    done
+}
+discover_route
+if [ -z "$ROUTE_DEV" ]; then
+    console grep '^PAOS_RESCUE_ROUTE_DIAG ' /run/route.err
+fi
+stagelog route "dev=${ROUTE_DEV:-none}"
+if [ -n "$ROUTE_DEV" ] && [ -b "$ROUTE_DEV" ]; then
+    if mount -t vfat -o "$ESP_MOUNT_OPTS" "$ROUTE_DEV" /mnt/candidate 2>/dev/null; then
+        CANDIDATE_MOUNTED=1
+        if [ -d /mnt/candidate/EFI/PaOS ]; then
+            ESP="$ROUTE_DEV"
+            console printf '%s\n' "[PRESCUE] PaOS BootCurrent route selected system ESP; Manager trust not yet proven [boot.v2.rescue.route-selected]"
+        fi
+        candidate_release || ESP=""
+    fi
+fi
+# Firmware and recovery media may expose either a partitioned disk (the normal
+# GPT ESP case) or a FAT superfloppy (offline images and some removable media).
+# Try whole block devices as well as their partitions; a whole GPT disk simply
+# fails the read-only VFAT probe before its partition is considered.  This
+# fallback is observation only and must not be promoted to a trusted route.
+if [ -z "$ESP" ] && [ "$CANDIDATE_MOUNTED" = 0 ]; then
+console printf '%s\n' "[PRESCUE] PaOS route unavailable; read-only triage only [boot.v2.rescue.route-untrusted]"
+for dev in /dev/sd? /dev/sd?[0-9]* \
+           /dev/nvme*n* /dev/vd? /dev/vd?[0-9]* /dev/mmcblk*; do
+    [ -b "$dev" ] || continue
+    if mount -t vfat -o "$ESP_MOUNT_OPTS" "$dev" /mnt/candidate 2>/dev/null; then
+        CANDIDATE_MOUNTED=1
+        if [ -d /mnt/candidate/EFI/PaOS ]; then
+            ESP="$dev"
+            break
+        fi
+        candidate_release || break
+    fi
+done
+fi
+
+# Release the final successful probe before creating the sole consumer mount.
+# Never stack another mount on a failed unmount or hide a mounted partition.
+candidate_release || ESP=""
+if [ -n "$ESP" ]; then
+    if mount -t vfat -o "$ESP_MOUNT_OPTS" "$ESP" /mnt/esp 2>/dev/null; then
+        ESP_MOUNTED=1
+        : > /run/paos-stagelog.mount-ready
+        console printf '%s\n' "[PRESCUE] ESP found read-only device=$ESP [boot.v2.rescue.esp-ro]"
+        if [ "$ESP" = "$ROUTE_DEV" ]; then
+            /sbin/paos-rescue-controller --trust /mnt/esp \
+                /sys/firmware/efi/efivars /sys/class/block \
+                >/run/paos-rescue-trust.result 2>&1 || true
+            console cat /run/paos-rescue-trust.result
+        fi
+        /sbin/paos-rescue-controller /mnt/esp \
+            >/run/paos-rescue-observe.result 2>&1 || true
+        console cat /run/paos-rescue-observe.result
+    else
+        ESP=""
+    fi
+fi
+: > /run/paos-stagelog.mount-ready
+SL_QUIESCENT=1
+stagelog esp-ro "dev=${ESP:-none}"
+if [ -z "$ESP" ]; then
+    console printf '%s\n' "[PRESCUE] ESP unavailable; evidence retained in RAM [boot.v2.rescue.esp-missing]"
+    /sbin/paos-rescue-controller - >/run/paos-rescue-observe.result 2>&1 || true
+    console cat /run/paos-rescue-observe.result
+fi
+
+NET=""
+NET_READY=0
+# Four fair rounds let a late link recover after the first DHCP failure without
+# delaying a usable second NIC behind retries of the first. Each client retains
+# its four two-second probes; only failed rounds sleep, at most three times.
+NICS=""
+for path in /sys/class/net/*; do
+    [ -e "$path" ] || continue
+    [ "${path##*/}" = lo ] || NICS="$NICS${path##*/},"
+done
+stagelog nic-probe "if=${NICS:-none}"
+NET_ROUND=1
+while [ "$NET_ROUND" -le 4 ]; do
+    stagelog dhcp-round "round=$NET_ROUND"
+    for path in /sys/class/net/*; do
+        [ -e "$path" ] || continue
+        name="${path##*/}"
+        [ "$name" = lo ] && continue
+        # BusyBox DHCP uses Ethernet framing. Skip sit0/tun and other link
+        # types, including unreadable sysfs entries, before marking a NIC found.
+        [ "$(cat "$path/type" 2>/dev/null)" = 1 ] || continue
+        NET="$name"
+        ip link set "$NET" up 2>/dev/null || true
+        # Private RAM receipt belongs to this invocation, not a previous NIC or
+        # round. The hook emits it only after address and route readback.
+        if ! rm -f /run/paos-rescue-dhcp.bound 2>/dev/null; then
+            boundary dhcp-receipt "reset=failed"
+            continue
+        fi
+        udhcpc -n -q -t 4 -T 2 -i "$NET" -s /usr/share/udhcpc/default.script \
+            >/run/udhcpc.log 2>&1 || true
+        if [ "$(cat /run/paos-rescue-dhcp.bound 2>/dev/null)" = "$NET" ] &&
+           ip -4 addr show dev "$NET" | grep -q 'inet '; then
+            NET_READY=1
+            console printf '%s\n' "[PRESCUE] DHCP acquired interface=$NET [boot.v2.rescue.dhcp]"
+            break
+        else
+            console printf '%s\n' "[PRESCUE] DHCP unavailable interface=$NET [boot.v2.rescue.dhcp-missing]"
+        fi
+    done
+    [ "$NET_READY" = 1 ] && break
+    [ -z "$NET" ] && break
+    [ "$NET_ROUND" = 4 ] && break
+    console printf '%s\n' "[PRESCUE] DHCP retry after round=$NET_ROUND maximum_rounds=4 delay_seconds=2 [boot.v2.rescue.dhcp-retry]"
+    /bin/busybox sleep 2
+    NET_ROUND=$((NET_ROUND + 1))
+done
+if [ "$NET_READY" = 1 ]; then
+    stagelog dhcp-ok "if=$NET round=$NET_ROUND"
+else
+    stagelog --dmesg net-timeout "rounds=$NET_ROUND if=${NET:-none}"
+fi
+if [ -z "$NET" ]; then
+    console printf '%s\n' "[PRESCUE] no supported NIC; serial/local recovery remains live [boot.v2.rescue.nic-missing]"
+fi
+
+stagelog triage-start
+/sbin/paos-rescue-triage > /run/paos-rescue-triage.result 2>&1
+triage_rc=$?
+stagelog triage-done "rc=$triage_rc"
+# Read-only route verdict for the network (root 2026-10-17 15:23): the stage
+# that refused the BootCurrent route was otherwise serial-only.  One line of
+# fixed vocabulary; the beacon forwards it after the triage line.
+ROUTE_LISTENER=0
+if [ "$NET_READY" = 1 ] && [ -n "$ROUTE_DEV" ] && [ "$ESP" = "$ROUTE_DEV" ]; then
+    ROUTE_LISTENER=1
+fi
+ROUTE_STAGE=none
+ROUTE_MATCHES=-
+if [ -z "$ROUTE_DEV" ]; then
+    ROUTE_STAGE=unknown
+    ROUTE_DIAG="$(grep -m 1 '^PAOS_RESCUE_ROUTE_DIAG ' /run/route.err 2>/dev/null)"
+    case "$ROUTE_DIAG" in
+        *" stage="*) ROUTE_STAGE="${ROUTE_DIAG#* stage=}"; ROUTE_STAGE="${ROUTE_STAGE%% *}" ;;
+    esac
+    case "$ROUTE_DIAG" in
+        *" matches="*) ROUTE_MATCHES="${ROUTE_DIAG#* matches=}"; ROUTE_MATCHES="${ROUTE_MATCHES%% *}" ;;
+    esac
+fi
+case "$ROUTE_STAGE" in
+    none|unknown|secureboot|setupmode|bootcurrent|bootoption|shimpath|sysblock|partuuid) ;;
+    *) ROUTE_STAGE=invalid ;;
+esac
+case "$ROUTE_MATCHES" in
+    -|[0-9]|[0-9][0-9]) ;;
+    *) ROUTE_MATCHES=invalid ;;
+esac
+ROUTE_EFIVARS=0
+grep -q ' /sys/firmware/efi/efivars efivarfs ' /proc/mounts 2>/dev/null && ROUTE_EFIVARS=1
+# Read attributes + at most two payload bytes from offset zero. efivarfs reads
+# may return attributes after a successful seek; skip only on this bounded pipe.
+# This beacon is diagnostic; the independent C reader still admits the route.
+route_var_byte() {
+    v="$(dd if="/sys/firmware/efi/efivars/$1-8be4df61-93ca-11d2-aa0d-00e098032b8c" bs=6 count=1 2>/dev/null | od -An -tx1 -j "$2" -N 1 2>/dev/null | tr -d ' \n')"
+    case "$v" in [0-9a-f][0-9a-f]) echo "$v" ;; *) echo absent ;; esac
+}
+ROUTE_SB="$(route_var_byte SecureBoot 4)"
+ROUTE_SETUP="$(route_var_byte SetupMode 4)"
+ROUTE_BC_LO="$(route_var_byte BootCurrent 4)"
+ROUTE_BC_HI="$(route_var_byte BootCurrent 5)"
+ROUTE_BC=absent
+[ "$ROUTE_BC_LO" != absent ] && [ "$ROUTE_BC_HI" != absent ] && ROUTE_BC="$ROUTE_BC_HI$ROUTE_BC_LO"
+ROUTE_DISKS="$(grep -l -x 'DEVTYPE=disk' /sys/class/block/*/uevent 2>/dev/null | wc -l)"
+ROUTE_PARTS="$(grep -l -x 'DEVTYPE=partition' /sys/class/block/*/uevent 2>/dev/null | wc -l)"
+ROUTE_ESP=none
+if [ -n "$ESP" ] && [ "$ESP" = "$ROUTE_DEV" ]; then
+    ROUTE_ESP=route
+elif [ -n "$ESP" ]; then
+    ROUTE_ESP=fallback
+fi
+ROUTE_RESULT=refused
+[ -n "$ROUTE_DEV" ] && ROUTE_RESULT=selected
+echo "PAOS_RESCUE_ROUTE_V1 route=$ROUTE_RESULT stage=$ROUTE_STAGE matches=$ROUTE_MATCHES efivars=$ROUTE_EFIVARS secureboot=$ROUTE_SB setupmode=$ROUTE_SETUP bootcurrent=$ROUTE_BC disks=$ROUTE_DISKS partitions=$ROUTE_PARTS esp=$ROUTE_ESP net=$NET_READY listener=$ROUTE_LISTENER mutation=disabled" \
+    >> /run/paos-rescue-triage.result
+stagelog route-verdict "r=$ROUTE_RESULT s=$ROUTE_STAGE esp=$ROUTE_ESP net=$NET_READY l=$ROUTE_LISTENER"
+console cat /run/paos-rescue-triage.result
+if [ "$NET_READY" = 1 ]; then
+    stagelog beacon-start
+    boundary beacon-start
+    BEACON_ROOT=-
+    [ -n "$ESP" ] && BEACON_ROOT=/mnt/esp
+    /sbin/paos-rescue-controller --beacon "$BEACON_ROOT" \
+        /run/paos-rescue-triage.result >/run/paos-rescue-beacon.result 2>/dev/null
+    beacon_rc=$?
+    stagelog beacon "rc=$beacon_rc"
+    console cat /run/paos-rescue-beacon.result
+fi
+
+console printf '%s\n' "[PRESCUE] bounded observation complete; no disk mutation attempted [boot.v2.rescue.controller.ready]"
+boundary observation-complete "net=$NET_READY"
+console printf '%s\n' "[PRESCUE] explicit deep diagnostics available as paos-rescue-hwdiag; not auto-started [boot.v2.rescue.hwdiag.available]"
+# Never expose an unauthenticated root shell on a customer machine.  The
+# session program re-proves BootCurrent/MOK/owner/manifest/target and consumes
+# the Rescue-principal PCAR replay floor before its only effect.  One connection runs at
+# a time; a hung peer is timed out and cannot create unbounded children.
+stagelog listener-gate "enabled=$ROUTE_LISTENER"
+boundary listener-gate "enabled=$ROUTE_LISTENER"
+# Both local and signed remote actions now share a stable mounted ESP. The
+# independent menu never delays the listener; timeout/Repair simply stays here.
+SL_QUIESCENT=0
+/sbin/paos-rescue-console --recovery-choices /dev/tty1 \
+    </dev/null >/run/paos-rescue-console.log 2>&1 &
+if [ "$ROUTE_LISTENER" = 1 ]; then
+    # Optional signed-carrier extension. Port9996 and all OP1/2/5 paths stay
+    # unchanged. This service shares the global effect lock and accepts only
+    # an owner-authenticated failed-Rescue refresh, never shell commands.
+    if [ -x /opt/paos-refresh/run ]; then
+        /opt/paos-refresh/run --listen </dev/null \
+            >/run/paos-rescue-refresh.log 2>&1 &
+    fi
+    console printf '%s\n' "[PRESCUE] fixed signed-request service ready port=9996 [boot.v2.rescue.net-ready]"
+    stagelog listener port=9996
+    # The final log may itself fail to restore the ESP. Recheck admission, then
+    # retain the mount for the whole authenticated session and its cleanup.
+    SL_QUIESCENT=0
+    while [ "$ROUTE_LISTENER" = 1 ]; do
+        boundary listener-start
+        timeout 75 nc -l -p 9996 -e /sbin/paos-rescue-net-session \
+            >/run/paos-rescue.net.log 2>&1
+        boundary listener-return "rc=$?"
+        /bin/busybox sleep 1
+    done
+fi
+console printf '%s\n' "[PRESCUE] authenticated remote route unavailable; no shell/effect [boot.v2.rescue.net-unavailable]"
+while :; do /bin/busybox sleep 30; done

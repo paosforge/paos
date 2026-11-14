@@ -1,0 +1,29 @@
+{
+  "artifact_bindings_sha256": "ad955a42b70f1ad3916b51ed491da6f1bda2ef87445eef8a4ecd9ae775227671",
+  "binary_package": "libgcc-13-dev:amd64",
+  "compiler_configuration": "Using built-in specs.\nCOLLECT_GCC=gcc\nCOLLECT_LTO_WRAPPER=/usr/libexec/gcc/x86_64-linux-gnu/13/lto-wrapper\nOFFLOAD_TARGET_NAMES=nvptx-none:amdgcn-amdhsa\nOFFLOAD_TARGET_DEFAULT=1\nTarget: x86_64-linux-gnu\nConfigured with: ../src/configure -v --with-pkgversion='Ubuntu 13.3.0-6ubuntu2~24.04.1' --with-bugurl=file:///usr/share/doc/gcc-13/README.Bugs --enable-languages=c,ada,c++,go,d,fortran,objc,obj-c++,m2 --prefix=/usr --with-gcc-major-version-only --program-suffix=-13 --program-prefix=x86_64-linux-gnu- --enable-shared --enable-linker-build-id --libexecdir=/usr/libexec --without-included-gettext --enable-threads=posix --libdir=/usr/lib --enable-nls --enable-bootstrap --enable-clocale=gnu --enable-libstdcxx-debug --enable-libstdcxx-time=yes --with-default-libstdcxx-abi=new --enable-libstdcxx-backtrace --enable-gnu-unique-object --disable-vtable-verify --enable-plugin --enable-default-pie --with-system-zlib --enable-libphobos-checking=release --with-target-system-zlib=auto --enable-objc-gc=auto --enable-multiarch --disable-werror --enable-cet --with-arch-32=i686 --with-abi=m64 --with-multilib-list=m32,m64,mx32 --enable-multilib --with-tune=generic --enable-offload-targets=nvptx-none=/build/gcc-13-EldibY/gcc-13-13.3.0/debian/tmp-nvptx/usr,amdgcn-amdhsa=/build/gcc-13-EldibY/gcc-13-13.3.0/debian/tmp-gcn/usr --enable-offload-defaulted --without-cuda-driver --enable-checking=release --build=x86_64-linux-gnu --host=x86_64-linux-gnu --target=x86_64-linux-gnu --with-build-config=bootstrap-lto-lean --enable-link-serialization=2\nThread model: posix\nSupported LTO compression algorithms: zlib zstd\ngcc version 13.3.0 (Ubuntu 13.3.0-6ubuntu2~24.04.1) \n",
+  "distribution_version": "13.3.0-6ubuntu2~24.04.1",
+  "limits": "Observed selected link inputs and installed distribution identity. Complete corresponding source is delivered separately. No claim that rebuilding reproduces these historical archive/object bytes.",
+  "runtime_inputs": {
+    "/usr/lib/gcc/x86_64-linux-gnu/13/crtbeginS.o": {
+      "bytes": 2752,
+      "sha256": "667ff5f1edc931d44d1f2bb44d313907aa274bcc207c0beff71a398335f0d29f"
+    },
+    "/usr/lib/gcc/x86_64-linux-gnu/13/crtendS.o": {
+      "bytes": 1168,
+      "sha256": "9c8b2caad195193301ef072895dc89bea1d23371d4c19accd821debe27773063"
+    },
+    "/usr/lib/gcc/x86_64-linux-gnu/13/libgcc.a": {
+      "bytes": 3093656,
+      "sha256": "d9376c55f97863a4e5fbb6c6beca2591b319bf786f3a7ca56da8964c5662171f"
+    },
+    "/usr/lib/gcc/x86_64-linux-gnu/13/libgcc_eh.a": {
+      "bytes": 66708,
+      "sha256": "f853cbbf842ff8714cc8dd986e2fd5bb309d34d490b0707203223ee4d52c76bc"
+    }
+  },
+  "schema": "paos.gcc-runtime-selection.v1",
+  "selected_setup_sha256": "9fdbc0d9aed5163f4d72604fd45de2fb4ebdb833c8a3743cfeadc0e913e9f58c",
+  "source_package": "gcc-13",
+  "target": "x86_64-linux-gnu"
+}

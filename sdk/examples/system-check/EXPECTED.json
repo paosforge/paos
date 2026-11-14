@@ -1,0 +1,14 @@
+{
+  "bundle_sha256": "a17009d294940412f128db5f780e0d9dbe5c9a800c0152c14d28db03974ab0c5",
+  "development_only": true,
+  "id": "org.example.system-check",
+  "inputs": {
+    "sdk/examples/system-check/build.py": "fe08c3ce280a495b0219dc695baa8b4200304739f9ae91eceea1c6f5e756eafa",
+    "sdk/examples/system-check/dev-public.pem": "8a62ec3bd9bdb742fee6bc04f80529031e9f83214cb88dcc2a3d690a5ddb1d30",
+    "sdk/examples/system-check/manifest.txt": "1cedf17c372ee480184ce61cf47d9eddaee0b18dcd03a43c82b3d5af66ce8816",
+    "sdk/examples/system-check/recipes.txt": "d800880faec7f98344de2b0970a1d6173e494dec155c65efba9fa620a3d83ce9",
+    "sdk/examples/system-check/signature.bin": "2bea5c5c79fc629ee39ebf0d25462b753d0ec093fb9bb2cc36abf06c1c0f1729",
+    "tools/release/paos_app_sdk.py": "cd6015979dcdffa7f624fffd1d4cc0fef6b36c4d135c8c7f52ad29414cf7a3bd"
+  },
+  "schema": "paos.sdk-example-public-inputs.v1"
+}

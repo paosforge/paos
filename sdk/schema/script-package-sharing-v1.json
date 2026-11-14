@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "paos.script-package.sharing-v1",
+  "title": "Public shareable PAOSAPP1 container2 BASHAPP2 authoring input",
+  "description": "Explicit sharing profile: optional author signature, native owner confirmation required. No install, key enrollment or execution.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "entry",
+    "icon",
+    "data_dir",
+    "members",
+    "name",
+    "version"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9.-]{2,62}$",
+      "maxLength": 63
+    },
+    "entry": {
+      "$ref": "#/$defs/path"
+    },
+    "icon": {
+      "anyOf": [
+        {
+          "const": ""
+        },
+        {
+          "$ref": "#/$defs/path"
+        }
+      ]
+    },
+    "data_dir": {
+      "type": "string",
+      "pattern": "^[a-z0-9_-]+([./][a-z0-9_-]+)*$",
+      "maxLength": 31
+    },
+    "members": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "path",
+          "source"
+        ],
+        "properties": {
+          "kind": {
+            "enum": [
+              "script",
+              "form",
+              "icon",
+              "data",
+              "grants"
+            ]
+          },
+          "path": {
+            "$ref": "#/$defs/path"
+          },
+          "source": {
+            "$ref": "#/$defs/path"
+          }
+        }
+      }
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[!-~]([ -~]{0,93}[!-~])?$",
+      "minLength": 1,
+      "maxLength": 95
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,4})(\\.(0|[1-9][0-9]{0,4})){2}$",
+      "maxLength": 17,
+      "description": "Each decimal component 0..65535; native/SDK check exact numeric bound."
+    }
+  },
+  "$defs": {
+    "path": {
+      "type": "string",
+      "pattern": "^[a-z0-9_-]+([./][a-z0-9_-]+)*$",
+      "maxLength": 63
+    }
+  }
+}

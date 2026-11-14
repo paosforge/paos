@@ -1,0 +1,1173 @@
+{
+  "schema": "paos.ui-glossary-extension.v1",
+  "revision": 1,
+  "authorship": "machine-authored, agent-reviewed",
+  "author": "rc-codex-relops",
+  "source_base": "a36fb772baadb4ef7a5df4928c2911f859a575ac",
+  "extends": {
+    "file": "glossary.rc1.v1.json",
+    "sha256": "40c2cb3da6ec96472cb15a08a626a8213f28b88fd8967c94dda18d35fa4fbdd9",
+    "policy": "Core definitions/renderings remain authoritative; this companion adds installer/MOK context without changing accepted native-catalog hash/glyph pins."
+  },
+  "scope": "Installer user-path catalogs and canonical MOK guides, census rows1-10; DATA only, not native delivery or translation of firmware screens.",
+  "locale_order": [
+    "en",
+    "es",
+    "fr",
+    "de",
+    "ja",
+    "zh-Hans"
+  ],
+  "sources": {
+    "census": {
+      "document": "RCQ-38-installer-help-string-census/CENSUS.md",
+      "rows": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "sha256": "1e71becb574bf32c6bb9eec5c274a531acac5f9470b6bf3b47c20836e2014994",
+      "bundle_sha256": "b86237a9d36d36ef826fa5c5a4e90f27f9dbb430b3836ed41c191b5a8713807e"
+    },
+    "plan": {
+      "document": "RCQ-38-installer-i18n/PLAN.md",
+      "sha256": "16eda301182a72711771bad686114e8d1e8880982b042517fae9813f7e661c11"
+    },
+    "security_conditions": {
+      "actor": "rc-sec-claude",
+      "ledger_time": "2026-10-11T00:03:09-07:00",
+      "scope": "Exact firmware span set, ASCII certificate subject/digests, two ten-pair fingerprint lines, no partially translated critical steps; guide authenticity comes from verifier-owned re-render."
+    }
+  },
+  "review_status": {
+    "author_self_review": "complete",
+    "rc_sec_trust_and_destructive_terms": "ACCEPT_WITH_NITS2026-10-11T00:43:13; n1/n2 folded, staged-route condition retained",
+    "rc_input_back_translation": "ACCEPT_WITH_NITS2026-10-11T00:46:18; n1/n3/n4 folded; optional n2 kept core rendering with explicit no-file-restoration context",
+    "srcreview": "ACCEPT2026-10-11T00:49:25; n1-n3 folded as DATA nit to admin",
+    "Peter_native_language_evaluation": "not claimed"
+  },
+  "rendering_rules": [
+    "Translate explanatory words only. do_not_translate=true means all five renderings equal the exact English token.",
+    "Mark each firmware_span as firmware/shim text in English using the translated explanatory label; never claim it is a translated PaOS screen.",
+    "A translated fingerprint label never translates the actual digest. Subject and digest bytes come from the selected certificate, never from glossary examples.",
+    "Keep the two MokManager SHA-1 lines separate, each ten upper-case byte pairs, with nothing else on either line; do not substitute SHA-256.",
+    "Paths, filenames, volume labels, option names, locale tags, reason codes, sizes, UUIDs and confirmation/one-time codes remain exact typed values.",
+    "Do not alter bash placeholders, command syntax, critical-step order or refusal/partial-effect meaning. Whole-message catalogs follow separately accepted English.",
+    "Do not expose actual passwords, private signing keys or BitLocker recovery-key values in examples or public reports.",
+    "This installer/guide glossary is not a native glyph-closure or layout claim. Native core glossary and catalog/header pins stay unchanged.",
+    "Use the certificate-qualified fingerprint term at first use on each page. Blank disk always carries the tool-classification qualifier; it is not a user judgment that the disk has no files."
+  ],
+  "opaque_value_classes": {
+    "certificate_subject": {
+      "do_not_translate": true,
+      "source": "selected certificate; own line"
+    },
+    "sha256_hex": {
+      "do_not_translate": true,
+      "source": "selected certificate; exact ASCII"
+    },
+    "mok_sha1_lines": {
+      "do_not_translate": true,
+      "source": "selected certificate; two separate ten-pair ASCII lines"
+    },
+    "path_or_filename": {
+      "do_not_translate": true,
+      "source": "actual verified source path/name"
+    },
+    "volume_label": {
+      "do_not_translate": true,
+      "source": "actual medium label"
+    },
+    "option_name": {
+      "do_not_translate": true,
+      "source": "existing installer parser"
+    },
+    "locale_tag": {
+      "do_not_translate": true,
+      "source": "one of en/es/fr/de/ja/zh-Hans"
+    },
+    "uuid_or_device_id": {
+      "do_not_translate": true,
+      "source": "actual selected destination"
+    },
+    "one_time_or_erase_code": {
+      "do_not_translate": true,
+      "source": "current authorization challenge; never invent or reuse"
+    },
+    "bitlocker_recovery_key_value": {
+      "do_not_translate": true,
+      "source": "owner-held secret; never a public example"
+    }
+  },
+  "terms": [
+    {
+      "id": "mok.secure_boot",
+      "en": "Secure Boot",
+      "definition": "The named firmware verification feature. Keep the feature name exact; do not equate it with Safe Mode or a generic safe startup.",
+      "renderings": {
+        "es": "Secure Boot",
+        "fr": "Secure Boot",
+        "de": "Secure Boot",
+        "ja": "Secure Boot",
+        "zh-Hans": "Secure Boot"
+      },
+      "do_not_translate": true,
+      "kind": "identifier",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. Translate only the surrounding explanation, never this token."
+    },
+    {
+      "id": "mok.mok",
+      "en": "MOK",
+      "definition": "Machine Owner Key abbreviation used by shim/MokManager. Enrollment is an explicit owner action; this is not a password.",
+      "renderings": {
+        "es": "MOK",
+        "fr": "MOK",
+        "de": "MOK",
+        "ja": "MOK",
+        "zh-Hans": "MOK"
+      },
+      "do_not_translate": true,
+      "kind": "identifier",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. Translate only the surrounding explanation, never this token."
+    },
+    {
+      "id": "mok.machine_owner_key",
+      "en": "Machine Owner Key",
+      "definition": "A cryptographic key enrolled in shim/MokManager's trust list by the owner. This is the meaning of MOK, not a keyboard key or a BitLocker recovery key.",
+      "renderings": {
+        "es": "clave del propietario del equipo",
+        "fr": "clé du propriétaire de la machine",
+        "de": "Schlüssel des Rechnerbesitzers",
+        "ja": "マシン所有者の鍵",
+        "zh-Hans": "机器所有者密钥"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": true,
+      "meaning_constraint": "A cryptographic key enrolled in shim/MokManager's trust list by the owner. This is the meaning of MOK, not a keyboard key or a BitLocker recovery key."
+    },
+    {
+      "id": "mok.enroll",
+      "en": "enroll (MOK key)",
+      "definition": "Explicitly add the selected cryptographic key to shim/MokManager's trust list. Enrollment is not sign-in, account creation, or proof that a medium came from PaOS.",
+      "renderings": {
+        "es": "registrar una clave",
+        "fr": "inscrire une clé",
+        "de": "Schlüssel registrieren",
+        "ja": "鍵を登録",
+        "zh-Hans": "登记密钥"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": true,
+      "meaning_constraint": "Explicitly add the selected cryptographic key to shim/MokManager's trust list. Enrollment is not sign-in, account creation, or proof that a medium came from PaOS."
+    },
+    {
+      "id": "mok.fingerprint",
+      "en": "fingerprint",
+      "definition": "A digest identifying exact certificate bytes. A match with the guide on the same drive proves only that match, not the drive's origin. The label may translate; the actual hexadecimal value never does.",
+      "renderings": {
+        "es": "huella digital del certificado",
+        "fr": "empreinte du certificat",
+        "de": "Zertifikat-Fingerabdruck",
+        "ja": "証明書のフィンガープリント",
+        "zh-Hans": "证书指纹"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": true,
+      "meaning_constraint": "A digest identifying exact certificate bytes. A match with the guide on the same drive proves only that match, not the drive's origin. The label may translate; the actual hexadecimal value never does."
+    },
+    {
+      "id": "mok.sha256",
+      "en": "SHA-256",
+      "definition": "The exact hash-algorithm identifier. A SHA-256 fingerprint must not be compared with a SHA-1 value.",
+      "renderings": {
+        "es": "SHA-256",
+        "fr": "SHA-256",
+        "de": "SHA-256",
+        "ja": "SHA-256",
+        "zh-Hans": "SHA-256"
+      },
+      "do_not_translate": true,
+      "kind": "identifier",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. Translate only the surrounding explanation, never this token."
+    },
+    {
+      "id": "mok.sha1",
+      "en": "SHA-1",
+      "definition": "The exact hash-algorithm identifier displayed by the pinned MokManager View key screen. Preserve the actual two-line, ten-byte-pairs-per-line value from the selected certificate.",
+      "renderings": {
+        "es": "SHA-1",
+        "fr": "SHA-1",
+        "de": "SHA-1",
+        "ja": "SHA-1",
+        "zh-Hans": "SHA-1"
+      },
+      "do_not_translate": true,
+      "kind": "identifier",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. Translate only the surrounding explanation, never this token."
+    },
+    {
+      "id": "mok.certificate",
+      "en": "certificate",
+      "definition": "The public certificate file selected for key enrollment. Its file name and bytes stay exact. It contains public identity/key material, not the private signing key.",
+      "renderings": {
+        "es": "certificado",
+        "fr": "certificat",
+        "de": "Zertifikat",
+        "ja": "証明書",
+        "zh-Hans": "证书"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": true,
+      "meaning_constraint": "The public certificate file selected for key enrollment. Its file name and bytes stay exact. It contains public identity/key material, not the private signing key."
+    },
+    {
+      "id": "trust.cryptographic_key",
+      "en": "cryptographic key",
+      "definition": "Cryptographic material, distinct from a keyboard key or an authentication password. Distinguish public from private material explicitly.",
+      "renderings": {
+        "es": "clave criptográfica",
+        "fr": "clé cryptographique",
+        "de": "kryptografischer Schlüssel",
+        "ja": "暗号鍵",
+        "zh-Hans": "加密密钥"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": true,
+      "meaning_constraint": "Cryptographic material, distinct from a keyboard key or an authentication password. Distinguish public from private material explicitly."
+    },
+    {
+      "id": "trust.public_key",
+      "en": "public key",
+      "definition": "The public half used for signature verification. Public-key enrollment is not disclosure of the private signing key.",
+      "renderings": {
+        "es": "clave pública",
+        "fr": "clé publique",
+        "de": "öffentlicher Schlüssel",
+        "ja": "公開鍵",
+        "zh-Hans": "公钥"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": true,
+      "meaning_constraint": "The public half used for signature verification. Public-key enrollment is not disclosure of the private signing key."
+    },
+    {
+      "id": "trust.private_key",
+      "en": "private key",
+      "definition": "Secret cryptographic key material, including a private signing key. Never request it in a support report or treat it as an enrollment certificate.",
+      "renderings": {
+        "es": "clave privada",
+        "fr": "clé privée",
+        "de": "privater Schlüssel",
+        "ja": "秘密鍵",
+        "zh-Hans": "私钥"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": true,
+      "meaning_constraint": "Secret cryptographic key material, including a private signing key. Never request it in a support report or treat it as an enrollment certificate."
+    },
+    {
+      "id": "trust.password",
+      "en": "password",
+      "definition": "An authentication secret. It is not a certificate, cryptographic key, recovery key or one-time code. The described MOK enrollment-from-disk route asks for no password. The no-password statement applies only to that disk route; a staged route may label its one-time-code prompt Password. Do not generalize between routes.",
+      "renderings": {
+        "es": "contraseña",
+        "fr": "mot de passe",
+        "de": "Passwort",
+        "ja": "パスワード",
+        "zh-Hans": "密码"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": true,
+      "meaning_constraint": "An authentication secret. It is not a certificate, cryptographic key, recovery key or one-time code. The described MOK enrollment-from-disk route asks for no password."
+    },
+    {
+      "id": "install.esp",
+      "en": "ESP",
+      "definition": "EFI System Partition abbreviation. Preserve ESP while translating the expanded explanation. It is a partition, not an entire disk.",
+      "renderings": {
+        "es": "ESP",
+        "fr": "ESP",
+        "de": "ESP",
+        "ja": "ESP",
+        "zh-Hans": "ESP"
+      },
+      "do_not_translate": true,
+      "kind": "identifier",
+      "security_review": false,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. Translate only the surrounding explanation, never this token."
+    },
+    {
+      "id": "install.efi",
+      "en": "EFI",
+      "definition": "The exact platform-interface abbreviation used in EFI System Partition and path names. Do not translate the abbreviation.",
+      "renderings": {
+        "es": "EFI",
+        "fr": "EFI",
+        "de": "EFI",
+        "ja": "EFI",
+        "zh-Hans": "EFI"
+      },
+      "do_not_translate": true,
+      "kind": "identifier",
+      "security_review": false,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. Translate only the surrounding explanation, never this token."
+    },
+    {
+      "id": "install.efi_system_partition",
+      "en": "EFI System Partition",
+      "definition": "The specifically typed partition holding EFI boot files. It is not any FAT volume and is not the whole destination disk. Preserve EFI in the expansion.",
+      "renderings": {
+        "es": "partición del sistema EFI",
+        "fr": "partition système EFI",
+        "de": "EFI-Systempartition",
+        "ja": "EFIシステムパーティション",
+        "zh-Hans": "EFI系统分区"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": true,
+      "meaning_constraint": "The specifically typed partition holding EFI boot files. It is not any FAT volume and is not the whole destination disk. Preserve EFI in the expansion."
+    },
+    {
+      "id": "install.partition",
+      "en": "partition",
+      "definition": "A defined region of a disk. A disk can have several partitions; selecting one does not authorize changing the others.",
+      "renderings": {
+        "es": "partición",
+        "fr": "partition",
+        "de": "Partition",
+        "ja": "パーティション",
+        "zh-Hans": "分区"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": false,
+      "meaning_constraint": "A defined region of a disk. A disk can have several partitions; selecting one does not authorize changing the others."
+    },
+    {
+      "id": "install.volume",
+      "en": "volume",
+      "definition": "A filesystem/storage volume presented by name in the picker. Do not confuse a volume label with its position in the list, a partition identifier, or a whole disk.",
+      "renderings": {
+        "es": "volumen",
+        "fr": "volume",
+        "de": "Volume",
+        "ja": "ボリューム",
+        "zh-Hans": "卷"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": false,
+      "meaning_constraint": "A filesystem/storage volume presented by name in the picker. Do not confuse a volume label with its position in the list, a partition identifier, or a whole disk."
+    },
+    {
+      "id": "boot.boot_menu",
+      "en": "boot menu",
+      "definition": "The computer firmware's menu for choosing a boot entry. It is distinct from the PaOS desktop Start menu and the PaOS Manager menu.",
+      "renderings": {
+        "es": "menú de arranque",
+        "fr": "menu de démarrage",
+        "de": "Bootmenü",
+        "ja": "起動メニュー",
+        "zh-Hans": "启动菜单"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": false,
+      "meaning_constraint": "The computer firmware's menu for choosing a boot entry. It is distinct from the PaOS desktop Start menu and the PaOS Manager menu."
+    },
+    {
+      "id": "boot.one_time_boot_menu",
+      "en": "one-time boot menu",
+      "definition": "The firmware menu used to choose an entry for this startup. Do not imply that this choice permanently changes the boot order.",
+      "renderings": {
+        "es": "menú de arranque para este inicio",
+        "fr": "menu de démarrage ponctuel",
+        "de": "Bootmenü für diesen Start",
+        "ja": "今回の起動先を選ぶメニュー",
+        "zh-Hans": "本次启动菜单"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": false,
+      "meaning_constraint": "The firmware menu used to choose an entry for this startup. Do not imply that this choice permanently changes the boot order."
+    },
+    {
+      "id": "boot.boot_entry",
+      "en": "boot entry",
+      "definition": "A selectable boot destination recorded or offered by firmware. A boot entry is not the file contents of the selected operating system.",
+      "renderings": {
+        "es": "entrada de arranque",
+        "fr": "entrée de démarrage",
+        "de": "Booteintrag",
+        "ja": "起動項目",
+        "zh-Hans": "启动项"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": false,
+      "meaning_constraint": "A selectable boot destination recorded or offered by firmware. A boot entry is not the file contents of the selected operating system."
+    },
+    {
+      "id": "boot.firmware",
+      "en": "firmware",
+      "definition": "The computer's low-level platform software. Its screens and controls are outside the PaOS interface translation.",
+      "renderings": {
+        "es": "firmware",
+        "fr": "micrologiciel",
+        "de": "Firmware",
+        "ja": "ファームウェア",
+        "zh-Hans": "固件"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": false,
+      "meaning_constraint": "The computer's low-level platform software. Its screens and controls are outside the PaOS interface translation."
+    },
+    {
+      "id": "mok.firmware_screen_english",
+      "en": "firmware/shim screen (English)",
+      "definition": "Explanatory label identifying quoted third-party firmware/shim text as English. This explanatory label translates; the quoted screen span does not.",
+      "renderings": {
+        "es": "pantalla de firmware/shim (en inglés)",
+        "fr": "écran du micrologiciel/shim (en anglais)",
+        "de": "Firmware-/Shim-Bildschirm (Englisch)",
+        "ja": "ファームウェア/shimの画面（英語）",
+        "zh-Hans": "固件/shim界面（英语）"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": false,
+      "meaning_constraint": "Explanatory label identifying quoted third-party firmware/shim text as English. This explanatory label translates; the quoted screen span does not."
+    },
+    {
+      "id": "trust.bitlocker",
+      "en": "BitLocker",
+      "definition": "The exact Windows disk-encryption product name. Do not equate its recovery key with PaOS/MOK key material.",
+      "renderings": {
+        "es": "BitLocker",
+        "fr": "BitLocker",
+        "de": "BitLocker",
+        "ja": "BitLocker",
+        "zh-Hans": "BitLocker"
+      },
+      "do_not_translate": true,
+      "kind": "identifier",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. Translate only the surrounding explanation, never this token."
+    },
+    {
+      "id": "trust.bitlocker_recovery_key",
+      "en": "BitLocker recovery key",
+      "definition": "The secret recovery material used to unlock a BitLocker-protected volume. Preserve any actual value exactly and keep it private. It is not a MOK certificate, a PaOS password, or a promise that a PaOS workflow supports BitLocker.",
+      "renderings": {
+        "es": "clave de recuperación de BitLocker",
+        "fr": "clé de récupération BitLocker",
+        "de": "BitLocker-Wiederherstellungsschlüssel",
+        "ja": "BitLocker 回復キー",
+        "zh-Hans": "BitLocker 恢复密钥"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": true,
+      "meaning_constraint": "The secret recovery material used to unlock a BitLocker-protected volume. Preserve any actual value exactly and keep it private. It is not a MOK certificate, a PaOS password, or a promise that a PaOS workflow supports BitLocker."
+    },
+    {
+      "id": "install.rollback",
+      "en": "rollback",
+      "definition": "Return to the previous state defined by a particular installation/update workflow. Do not promise personal-file restoration, relaxed trust checks, or unrestricted permission to write a disk.",
+      "renderings": {
+        "es": "reversión",
+        "fr": "retour à l'état précédent",
+        "de": "Rückkehr zum vorherigen Zustand",
+        "ja": "ロールバック",
+        "zh-Hans": "回滚"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": true,
+      "meaning_constraint": "Return to the previous state defined by a particular installation/update workflow. Do not promise personal-file restoration, relaxed trust checks, or unrestricted permission to write a disk."
+    },
+    {
+      "id": "install.uninstall",
+      "en": "uninstall",
+      "definition": "Remove the PaOS installation using its documented uninstall workflow. Do not translate this as erase the disk, remove Windows, or delete personal files.",
+      "renderings": {
+        "es": "desinstalar",
+        "fr": "désinstaller",
+        "de": "deinstallieren",
+        "ja": "アンインストール",
+        "zh-Hans": "卸载"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": true,
+      "meaning_constraint": "Remove the PaOS installation using its documented uninstall workflow. Do not translate this as erase the disk, remove Windows, or delete personal files."
+    },
+    {
+      "id": "install.dry_run",
+      "en": "dry run",
+      "definition": "Inspect or describe planned target changes without applying them to the target. Host logs/temporary files may still be written; success does not promise that a later real write will succeed.",
+      "renderings": {
+        "es": "simulación sin cambios en el destino",
+        "fr": "simulation sans modification de la destination",
+        "de": "Probelauf ohne Änderungen am Ziel",
+        "ja": "対象を変更しない試行",
+        "zh-Hans": "不更改目标的预演"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": true,
+      "meaning_constraint": "Inspect or describe planned target changes without applying them to the target. Host logs/temporary files may still be written; success does not promise that a later real write will succeed."
+    },
+    {
+      "id": "install.write_plan",
+      "en": "write plan",
+      "definition": "A description of the intended writes and their destination for review. A plan is not proof that writes occurred and is not authorization to execute them.",
+      "renderings": {
+        "es": "plan de escritura",
+        "fr": "plan d'écriture",
+        "de": "Schreibplan",
+        "ja": "書き込み計画",
+        "zh-Hans": "写入计划"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": true,
+      "meaning_constraint": "A description of the intended writes and their destination for review. A plan is not proof that writes occurred and is not authorization to execute them."
+    },
+    {
+      "id": "install.destination_disk",
+      "en": "destination disk",
+      "definition": "The specifically selected disk that would receive the operation. Keep its actual identifier exact; do not substitute a source disk, USB medium or another disk.",
+      "renderings": {
+        "es": "disco de destino",
+        "fr": "disque de destination",
+        "de": "Zieldatenträger",
+        "ja": "書き込み先ディスク",
+        "zh-Hans": "目标磁盘"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": true,
+      "meaning_constraint": "The specifically selected disk that would receive the operation. Keep its actual identifier exact; do not substitute a source disk, USB medium or another disk."
+    },
+    {
+      "id": "install.erase",
+      "en": "erase",
+      "definition": "Destructive removal of data or a disk layout at the stated target. Never soften this to clean or hide. This term alone does not promise secure media sanitization.",
+      "renderings": {
+        "es": "borrar",
+        "fr": "effacer",
+        "de": "löschen",
+        "ja": "消去",
+        "zh-Hans": "擦除"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": true,
+      "meaning_constraint": "Destructive removal of data or a disk layout at the stated target. Never soften this to clean or hide. This term alone does not promise secure media sanitization."
+    },
+    {
+      "id": "install.blank_disk",
+      "en": "blank disk",
+      "definition": "A disk classified as blank by the relevant installation checks. Blank describes its assessed state; the word is not permission to erase or a guarantee that forensic data is absent.",
+      "renderings": {
+        "es": "disco en blanco (según la comprobación)",
+        "fr": "disque vierge (après vérification)",
+        "de": "laut Prüfung leerer Datenträger",
+        "ja": "検査で空と判定されたディスク",
+        "zh-Hans": "经检查判定为空白的磁盘"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": true,
+      "meaning_constraint": "A disk classified as blank by the relevant installation checks. Blank describes its assessed state; the word is not permission to erase or a guarantee that forensic data is absent."
+    },
+    {
+      "id": "trust.one_time_code",
+      "en": "one-time code",
+      "definition": "A code valid for a single authorization/challenge context. Preserve the actual code exactly. Do not equate it with a reusable password or a BitLocker recovery key. On the separately accepted staged MOK route, the firmware prompt labelled Password takes this one-time code; the screen label does not turn it into a reusable password.",
+      "renderings": {
+        "es": "código de un solo uso",
+        "fr": "code à usage unique",
+        "de": "Einmalcode",
+        "ja": "ワンタイムコード",
+        "zh-Hans": "一次性代码"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": true,
+      "meaning_constraint": "A code valid for a single authorization/challenge context. Preserve the actual code exactly. Do not equate it with a reusable password or a BitLocker recovery key."
+    },
+    {
+      "id": "trust.physical_presence",
+      "en": "physical presence",
+      "definition": "A person is physically at the computer for the required local action. Remote approval or possession of a code alone does not prove this presence or owner authority.",
+      "renderings": {
+        "es": "presencia física",
+        "fr": "présence physique",
+        "de": "physische Anwesenheit",
+        "ja": "物理的な立ち会い",
+        "zh-Hans": "人在电脑前"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": true,
+      "meaning_constraint": "A person is physically at the computer for the required local action. Remote approval or possession of a code alone does not prove this presence or owner authority."
+    },
+    {
+      "id": "trust.recovery",
+      "en": "recovery",
+      "definition": "The defined recovery workflow. Recovery does not promise personal-file restoration, a public command shell, or bypass of authentication/trust checks.",
+      "renderings": {
+        "es": "recuperación",
+        "fr": "récupération",
+        "de": "Wiederherstellung",
+        "ja": "復旧",
+        "zh-Hans": "恢复"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": true,
+      "meaning_constraint": "The defined recovery workflow. Recovery does not promise personal-file restoration, a public command shell, or bypass of authentication/trust checks."
+    },
+    {
+      "id": "trust.verified_download",
+      "en": "verified download",
+      "definition": "A download whose publisher/authenticity and exact bytes have been verified by the prescribed release process. Matching a key to a guide on the same drive does not establish that origin.",
+      "renderings": {
+        "es": "descarga verificada",
+        "fr": "téléchargement vérifié",
+        "de": "verifizierter Download",
+        "ja": "検証済みのダウンロード",
+        "zh-Hans": "已验证的下载"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": true,
+      "meaning_constraint": "A download whose publisher/authenticity and exact bytes have been verified by the prescribed release process. Matching a key to a guide on the same drive does not establish that origin."
+    },
+    {
+      "id": "trust.trusted_preparer",
+      "en": "trusted preparer",
+      "definition": "A person you trust who prepared the medium. Matching its key to its own guide is not a substitute for deciding whether to trust that person or the download.",
+      "renderings": {
+        "es": "persona de confianza que preparó el medio",
+        "fr": "personne de confiance ayant préparé le support",
+        "de": "vertrauenswürdige Person, die das Medium vorbereitet hat",
+        "ja": "信頼できる作成者",
+        "zh-Hans": "可信的介质制作人员"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": true,
+      "meaning_constraint": "A person you trust who prepared the medium. Matching its key to its own guide is not a substitute for deciding whether to trust that person or the download."
+    },
+    {
+      "id": "install.nothing_written",
+      "en": "nothing was written",
+      "definition": "Use only when the absence of target writes has been proved. A refusal/failure alone does not prove this; preserve any partial effects. Host logs/temporary files are outside this target-specific assertion.",
+      "renderings": {
+        "es": "no se escribió nada en el destino",
+        "fr": "aucune écriture n'a été effectuée sur la destination",
+        "de": "auf das Ziel wurde nichts geschrieben",
+        "ja": "対象への書き込みは行われていません",
+        "zh-Hans": "未向目标写入任何内容"
+      },
+      "do_not_translate": false,
+      "kind": "term",
+      "security_review": true,
+      "meaning_constraint": "Use only when the absence of target writes has been proved. A refusal/failure alone does not prove this; preserve any partial effects. Host logs/temporary files are outside this target-specific assertion."
+    },
+    {
+      "id": "firmware.enroll_from_disk",
+      "en": "Enroll key from disk",
+      "definition": "MokManager menu item for the certificate-from-disk route.",
+      "renderings": {
+        "es": "Enroll key from disk",
+        "fr": "Enroll key from disk",
+        "de": "Enroll key from disk",
+        "ja": "Enroll key from disk",
+        "zh-Hans": "Enroll key from disk"
+      },
+      "do_not_translate": true,
+      "kind": "firmware_span",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. This is English firmware/shim screen text, not PaOS-translated interface text."
+    },
+    {
+      "id": "firmware.view_key",
+      "en": "View key 0",
+      "definition": "MokManager menu item that opens the first selected key for inspection.",
+      "renderings": {
+        "es": "View key 0",
+        "fr": "View key 0",
+        "de": "View key 0",
+        "ja": "View key 0",
+        "zh-Hans": "View key 0"
+      },
+      "do_not_translate": true,
+      "kind": "firmware_span",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. This is English firmware/shim screen text, not PaOS-translated interface text."
+    },
+    {
+      "id": "firmware.continue_boot",
+      "en": "Continue boot",
+      "definition": "MokManager item used to continue without enrolling on a mismatch or unexpected password route.",
+      "renderings": {
+        "es": "Continue boot",
+        "fr": "Continue boot",
+        "de": "Continue boot",
+        "ja": "Continue boot",
+        "zh-Hans": "Continue boot"
+      },
+      "do_not_translate": true,
+      "kind": "firmware_span",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. This is English firmware/shim screen text, not PaOS-translated interface text."
+    },
+    {
+      "id": "firmware.fingerprint",
+      "en": "[Fingerprint]",
+      "definition": "Exact MokManager heading above the two displayed SHA-1 lines.",
+      "renderings": {
+        "es": "[Fingerprint]",
+        "fr": "[Fingerprint]",
+        "de": "[Fingerprint]",
+        "ja": "[Fingerprint]",
+        "zh-Hans": "[Fingerprint]"
+      },
+      "do_not_translate": true,
+      "kind": "firmware_span",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. This is English firmware/shim screen text, not PaOS-translated interface text."
+    },
+    {
+      "id": "firmware.continue",
+      "en": "Continue",
+      "definition": "MokManager continuation item after leaving the key view.",
+      "renderings": {
+        "es": "Continue",
+        "fr": "Continue",
+        "de": "Continue",
+        "ja": "Continue",
+        "zh-Hans": "Continue"
+      },
+      "do_not_translate": true,
+      "kind": "firmware_span",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. This is English firmware/shim screen text, not PaOS-translated interface text."
+    },
+    {
+      "id": "firmware.yes",
+      "en": "Yes",
+      "definition": "MokManager confirmation label; keep it separate from a PaOS-translated Yes button.",
+      "renderings": {
+        "es": "Yes",
+        "fr": "Yes",
+        "de": "Yes",
+        "ja": "Yes",
+        "zh-Hans": "Yes"
+      },
+      "do_not_translate": true,
+      "kind": "firmware_span",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. This is English firmware/shim screen text, not PaOS-translated interface text."
+    },
+    {
+      "id": "firmware.reboot",
+      "en": "Reboot",
+      "definition": "MokManager restart label; keep it separate from PaOS-owned restart wording.",
+      "renderings": {
+        "es": "Reboot",
+        "fr": "Reboot",
+        "de": "Reboot",
+        "ja": "Reboot",
+        "zh-Hans": "Reboot"
+      },
+      "do_not_translate": true,
+      "kind": "firmware_span",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. This is English firmware/shim screen text, not PaOS-translated interface text."
+    },
+    {
+      "id": "firmware.enroll_question",
+      "en": "Enroll the key(s)?",
+      "definition": "MokManager key-enrollment confirmation question.",
+      "renderings": {
+        "es": "Enroll the key(s)?",
+        "fr": "Enroll the key(s)?",
+        "de": "Enroll the key(s)?",
+        "ja": "Enroll the key(s)?",
+        "zh-Hans": "Enroll the key(s)?"
+      },
+      "do_not_translate": true,
+      "kind": "firmware_span",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. This is English firmware/shim screen text, not PaOS-translated interface text."
+    },
+    {
+      "id": "firmware.perform_management",
+      "en": "Perform MOK management",
+      "definition": "MokManager management-menu heading.",
+      "renderings": {
+        "es": "Perform MOK management",
+        "fr": "Perform MOK management",
+        "de": "Perform MOK management",
+        "ja": "Perform MOK management",
+        "zh-Hans": "Perform MOK management"
+      },
+      "do_not_translate": true,
+      "kind": "firmware_span",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. This is English firmware/shim screen text, not PaOS-translated interface text."
+    },
+    {
+      "id": "firmware.shim_management",
+      "en": "Shim UEFI key management",
+      "definition": "Shim/MokManager screen heading.",
+      "renderings": {
+        "es": "Shim UEFI key management",
+        "fr": "Shim UEFI key management",
+        "de": "Shim UEFI key management",
+        "ja": "Shim UEFI key management",
+        "zh-Hans": "Shim UEFI key management"
+      },
+      "do_not_translate": true,
+      "kind": "firmware_span",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. This is English firmware/shim screen text, not PaOS-translated interface text."
+    },
+    {
+      "id": "firmware.security_violation",
+      "en": "Verification failed: (0x1A) Security Violation",
+      "definition": "Shim verification screen text on the documented initial untrusted-key route; it is not general permission to ignore a verification failure.",
+      "renderings": {
+        "es": "Verification failed: (0x1A) Security Violation",
+        "fr": "Verification failed: (0x1A) Security Violation",
+        "de": "Verification failed: (0x1A) Security Violation",
+        "ja": "Verification failed: (0x1A) Security Violation",
+        "zh-Hans": "Verification failed: (0x1A) Security Violation"
+      },
+      "do_not_translate": true,
+      "kind": "firmware_span",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. This is English firmware/shim screen text, not PaOS-translated interface text."
+    },
+    {
+      "id": "firmware.press_any_key",
+      "en": "Press any key to perform MOK management",
+      "definition": "Shim/MokManager countdown instruction; never generalize it to the PaOS Manager healthy blind window.",
+      "renderings": {
+        "es": "Press any key to perform MOK management",
+        "fr": "Press any key to perform MOK management",
+        "de": "Press any key to perform MOK management",
+        "ja": "Press any key to perform MOK management",
+        "zh-Hans": "Press any key to perform MOK management"
+      },
+      "do_not_translate": true,
+      "kind": "firmware_span",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. This is English firmware/shim screen text, not PaOS-translated interface text."
+    },
+    {
+      "id": "token.volume_label",
+      "en": "PAOS-BOOT",
+      "definition": "Exact enrollment-medium volume label. Pick by the actual name, never by list position.",
+      "renderings": {
+        "es": "PAOS-BOOT",
+        "fr": "PAOS-BOOT",
+        "de": "PAOS-BOOT",
+        "ja": "PAOS-BOOT",
+        "zh-Hans": "PAOS-BOOT"
+      },
+      "do_not_translate": true,
+      "kind": "typed_token",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. Translate only the surrounding explanation, never this token."
+    },
+    {
+      "id": "token.certificate_file",
+      "en": "PAOS_ENROLL_THIS_KEY.cer",
+      "definition": "Exact public certificate filename on the enrollment medium; never replace with a private key.",
+      "renderings": {
+        "es": "PAOS_ENROLL_THIS_KEY.cer",
+        "fr": "PAOS_ENROLL_THIS_KEY.cer",
+        "de": "PAOS_ENROLL_THIS_KEY.cer",
+        "ja": "PAOS_ENROLL_THIS_KEY.cer",
+        "zh-Hans": "PAOS_ENROLL_THIS_KEY.cer"
+      },
+      "do_not_translate": true,
+      "kind": "typed_token",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. Translate only the surrounding explanation, never this token."
+    },
+    {
+      "id": "token.guide_file",
+      "en": "PAOS_ENROLL_GUIDE.txt",
+      "definition": "Exact English on-medium guide filename. Compare against the guide from the selected medium.",
+      "renderings": {
+        "es": "PAOS_ENROLL_GUIDE.txt",
+        "fr": "PAOS_ENROLL_GUIDE.txt",
+        "de": "PAOS_ENROLL_GUIDE.txt",
+        "ja": "PAOS_ENROLL_GUIDE.txt",
+        "zh-Hans": "PAOS_ENROLL_GUIDE.txt"
+      },
+      "do_not_translate": true,
+      "kind": "typed_token",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. Translate only the surrounding explanation, never this token."
+    },
+    {
+      "id": "token.guide_directory",
+      "en": "PAOS_GUIDES/",
+      "definition": "Planned directory for generated per-language enrollment guides; DATA glossary is not a claim that the carrier landed.",
+      "renderings": {
+        "es": "PAOS_GUIDES/",
+        "fr": "PAOS_GUIDES/",
+        "de": "PAOS_GUIDES/",
+        "ja": "PAOS_GUIDES/",
+        "zh-Hans": "PAOS_GUIDES/"
+      },
+      "do_not_translate": true,
+      "kind": "typed_token",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. Translate only the surrounding explanation, never this token."
+    },
+    {
+      "id": "token.language_hint",
+      "en": "EFI/PaOS/lang.hint",
+      "definition": "Exact installer language-hint path. This glossary does not claim a native reader exists.",
+      "renderings": {
+        "es": "EFI/PaOS/lang.hint",
+        "fr": "EFI/PaOS/lang.hint",
+        "de": "EFI/PaOS/lang.hint",
+        "ja": "EFI/PaOS/lang.hint",
+        "zh-Hans": "EFI/PaOS/lang.hint"
+      },
+      "do_not_translate": true,
+      "kind": "typed_token",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. Translate only the surrounding explanation, never this token."
+    },
+    {
+      "id": "token.language_option",
+      "en": "--language",
+      "definition": "Exact existing installer option name. Translate its explanation, not the flag or locale tag.",
+      "renderings": {
+        "es": "--language",
+        "fr": "--language",
+        "de": "--language",
+        "ja": "--language",
+        "zh-Hans": "--language"
+      },
+      "do_not_translate": true,
+      "kind": "typed_token",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. Translate only the surrounding explanation, never this token."
+    },
+    {
+      "id": "token.make_esp_option",
+      "en": "--make-esp",
+      "definition": "Exact existing option name for creating an EFI partition after the documented destructive confirmation.",
+      "renderings": {
+        "es": "--make-esp",
+        "fr": "--make-esp",
+        "de": "--make-esp",
+        "ja": "--make-esp",
+        "zh-Hans": "--make-esp"
+      },
+      "do_not_translate": true,
+      "kind": "typed_token",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. Translate only the surrounding explanation, never this token."
+    },
+    {
+      "id": "token.esp_option",
+      "en": "--esp-partuuid",
+      "definition": "Exact existing option name selecting an ESP by its partition UUID.",
+      "renderings": {
+        "es": "--esp-partuuid",
+        "fr": "--esp-partuuid",
+        "de": "--esp-partuuid",
+        "ja": "--esp-partuuid",
+        "zh-Hans": "--esp-partuuid"
+      },
+      "do_not_translate": true,
+      "kind": "typed_token",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. Translate only the surrounding explanation, never this token."
+    },
+    {
+      "id": "token.erase_confirmation",
+      "en": "ERASE:SHA256",
+      "definition": "Installer usage spelling for destructive confirmation. SHA256 is a metavariable: the actual token is ERASE: followed by the selected device identity digest. Never enter the literal word SHA256 as a confirmation.",
+      "renderings": {
+        "es": "ERASE:SHA256",
+        "fr": "ERASE:SHA256",
+        "de": "ERASE:SHA256",
+        "ja": "ERASE:SHA256",
+        "zh-Hans": "ERASE:SHA256"
+      },
+      "do_not_translate": true,
+      "kind": "typed_token",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling, case, punctuation and spaces. Translate only the surrounding explanation, never this token."
+    },
+    {
+      "id": "firmware.enroll_mok",
+      "en": "Enroll MOK",
+      "definition": "MokManager menu item for the staged enrollment route. Forward-condition vocabulary only: staged-route guide English must be accepted after the prescribed fail-first and pass proof before translated instructions use this span.",
+      "renderings": {
+        "es": "Enroll MOK",
+        "fr": "Enroll MOK",
+        "de": "Enroll MOK",
+        "ja": "Enroll MOK",
+        "zh-Hans": "Enroll MOK"
+      },
+      "do_not_translate": true,
+      "kind": "firmware_span",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling and case. Mark as firmware/shim screen text in English, not translated PaOS text. Apply only with the separately accepted staged-route English."
+    },
+    {
+      "id": "firmware.password",
+      "en": "Password",
+      "definition": "Exact firmware prompt label on the staged MOK route; the value entered there is the one-time code, not a reusable PaOS password. This forward-condition vocabulary does not claim that the route or its English guide has landed.",
+      "renderings": {
+        "es": "Password",
+        "fr": "Password",
+        "de": "Password",
+        "ja": "Password",
+        "zh-Hans": "Password"
+      },
+      "do_not_translate": true,
+      "kind": "firmware_span",
+      "security_review": true,
+      "meaning_constraint": "Preserve exact spelling and case. Mark as firmware/shim screen text in English, not translated PaOS text. Apply only with the separately accepted staged-route English."
+    }
+  ],
+  "security_review_ids": [
+    "mok.secure_boot",
+    "mok.mok",
+    "mok.machine_owner_key",
+    "mok.enroll",
+    "mok.fingerprint",
+    "mok.sha256",
+    "mok.sha1",
+    "mok.certificate",
+    "trust.cryptographic_key",
+    "trust.public_key",
+    "trust.private_key",
+    "trust.password",
+    "install.efi_system_partition",
+    "trust.bitlocker",
+    "trust.bitlocker_recovery_key",
+    "install.rollback",
+    "install.uninstall",
+    "install.dry_run",
+    "install.write_plan",
+    "install.destination_disk",
+    "install.erase",
+    "install.blank_disk",
+    "trust.one_time_code",
+    "trust.physical_presence",
+    "trust.recovery",
+    "trust.verified_download",
+    "trust.trusted_preparer",
+    "install.nothing_written",
+    "firmware.enroll_from_disk",
+    "firmware.view_key",
+    "firmware.continue_boot",
+    "firmware.fingerprint",
+    "firmware.continue",
+    "firmware.yes",
+    "firmware.reboot",
+    "firmware.enroll_question",
+    "firmware.perform_management",
+    "firmware.shim_management",
+    "firmware.security_violation",
+    "firmware.press_any_key",
+    "token.volume_label",
+    "token.certificate_file",
+    "token.guide_file",
+    "token.guide_directory",
+    "token.language_hint",
+    "token.language_option",
+    "token.make_esp_option",
+    "token.esp_option",
+    "token.erase_confirmation",
+    "firmware.enroll_mok",
+    "firmware.password"
+  ],
+  "back_translation_sample_ids": [
+    "mok.machine_owner_key",
+    "mok.enroll",
+    "mok.fingerprint",
+    "mok.certificate",
+    "trust.private_key",
+    "trust.bitlocker_recovery_key",
+    "install.rollback",
+    "install.uninstall",
+    "install.dry_run",
+    "install.write_plan",
+    "install.destination_disk",
+    "install.erase",
+    "install.blank_disk",
+    "trust.one_time_code",
+    "trust.physical_presence",
+    "trust.recovery",
+    "trust.verified_download",
+    "install.nothing_written",
+    "boot.one_time_boot_menu",
+    "mok.firmware_screen_english",
+    "firmware.continue_boot",
+    "firmware.fingerprint"
+  ],
+  "review_responses": [
+    {
+      "actor": "rc-sec-claude",
+      "t": "2026-10-11T00:43:13-07:00",
+      "fold": "Classified blank disk in all five locales; certificate-qualified fingerprint in all five. Added exact Enroll MOK and Password forward-condition spans; route-specific password/code distinction."
+    },
+    {
+      "actor": "rc-srcreview-claude",
+      "t": "2026-10-11T00:49:25-07:00",
+      "fold": "ERASE:SHA256 usage spelling; French ASCII apostrophes; Chinese physical presence explicitly at the computer."
+    },
+    {
+      "actor": "rc-input-claude",
+      "t": "2026-10-11T00:46:18-07:00",
+      "fold": "Chinese MOK enrollment uses 登记密钥; BitLocker CJK spaces; French one-time menu polished. Optional Japanese recovery term keeps authoritative core 復旧; definition retains no personal-file-restoration promise."
+    }
+  ],
+  "forward_conditions": [
+    {
+      "scope": "staged MOK route guide/catalog consumption",
+      "required_before": "B-S2/S4",
+      "condition": "Root2026-10-11T00:12:34 fail-first -> implementation -> pass proof, then staged-route English accepted by source/security. Only then translate guide steps using Enroll MOK and firmware Password with the one-time code; no BootNext instruction. These glossary definitions alone do not close that gate.",
+      "owner": "rc-live-claude / rc-qemu-claude / rc-sec-claude"
+    }
+  ]
+}

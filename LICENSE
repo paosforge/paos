@@ -1,0 +1,20 @@
+PaOS source licensing
+
+* PaOS-owned core (boot chain, Boot Manager, kernel, drivers and hypervisor):
+  Mozilla Public License 2.0. Full text: LICENSES/MPL-2.0.txt.
+* App interfaces, SDK, verb registry definitions and Forge tools:
+  Apache License 2.0. Full text: LICENSES/Apache-2.0.txt.
+* Third-party code, data, fonts, libraries, firmware and guest components:
+  their own licenses and notices. See THIRD_PARTY_NOTICES.md and LICENSES/.
+* Separate apps, drivers, recipes and bundles by other authors: the author's
+  choice, subject to the terms of material they actually incorporate.
+
+This applies only to material the project has authority to license. It does
+not relicense third-party material. Existing copyright and permission notices
+remain in force, and a license notice or SPDX identifier in a file governs that
+file. The file-by-file license map is still being completed for the first
+release.
+
+Contributions, when they open, use Developer Certificate of Origin sign-off,
+with no CLA and no copyright assignment. See CONTRIBUTING.md. These licenses
+grant no trademark rights.

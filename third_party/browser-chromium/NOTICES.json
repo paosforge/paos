@@ -1,0 +1,88 @@
+{
+  "creator": {
+    "actual_creator": "rc-codex-relops on Codex",
+    "date": "2026-10-16"
+  },
+  "files": {
+    "ABOUT": {
+      "bytes": 248,
+      "origin": "Exact CfT ZIP; resource entry41381 for credits, ABOUT at root",
+      "sha256": "34d078ce3003087a8374e7c6156fda374769b8047d6ddaf419d66414aa48edfb"
+    },
+    "DEPS": {
+      "bytes": 184331,
+      "origin": "https://chromium.googlesource.com/chromium/src/+/47e20adcc15fc15f01825aa17e570c8f5492ac0f/DEPS?format=TEXT",
+      "sha256": "6ee25b372416426fcefc7063d44e81bf39fc58d699b0b2e8b3f8dabce5c57901"
+    },
+    "LICENSE": {
+      "bytes": 1536,
+      "origin": "https://chromium.googlesource.com/chromium/src/+/47e20adcc15fc15f01825aa17e570c8f5492ac0f/LICENSE?format=TEXT",
+      "sha256": "368cca1106be99d39ecd32a38d8305585d802a475effb66380b91ffc9bcf709b"
+    },
+    "chrome__VERSION": {
+      "bytes": 37,
+      "origin": "https://chromium.googlesource.com/chromium/src/+/47e20adcc15fc15f01825aa17e570c8f5492ac0f/chrome/VERSION?format=TEXT",
+      "sha256": "f7151884698d8bdba08ea3c96acfa52fd838540a74da8b12815bb47a1a8366d8"
+    },
+    "credits.html": {
+      "bytes": 15534685,
+      "origin": "Exact CfT ZIP; resource entry41381 for credits, ABOUT at root",
+      "sha256": "1be2892ddca53acb07d2113e28d1b2048df061fb290f7aa614cb1626d2506a7d"
+    },
+    "credits.resource-41381.br": {
+      "bytes": 150579,
+      "origin": "Exact CfT ZIP; resource entry41381 for credits, ABOUT at root",
+      "sha256": "73df742166e11718e31e0db3e85a0ebf4ad14a0de39ac6910c9eba8105b42e2f"
+    },
+    "tag-commit.json": {
+      "bytes": 1838,
+      "origin": "https://chromium.googlesource.com/chromium/src/+/refs/tags/145.0.7632.6?format=JSON",
+      "sha256": "aa47541b2178f78ecdeeb67fbff46a93515592d19dc77d4fc931077469aea94e"
+    },
+    "tools__grit__grit__format__data_pack.py": {
+      "bytes": 11869,
+      "origin": "https://chromium.googlesource.com/chromium/src/+/47e20adcc15fc15f01825aa17e570c8f5492ac0f/tools/grit/grit/format/data_pack.py?format=TEXT",
+      "sha256": "ad0ecd576e127b5a07d0ee49741aa1c4d4050c246e7c12b6a00f05f73aa2f914"
+    },
+    "ui__base__resource__resource_bundle.cc": {
+      "bytes": 48738,
+      "origin": "https://chromium.googlesource.com/chromium/src/+/47e20adcc15fc15f01825aa17e570c8f5492ac0f/ui/base/resource/resource_bundle.cc?format=TEXT",
+      "sha256": "52f0836e6fea8af3c4964d1331583a799844deb42d6f693469eac086a4dcb730"
+    }
+  },
+  "license_sections": 565,
+  "limitations": [
+    "Complete generated credits page is preserved without platform filtering;565 projects is not a Linux linked-component inventory.",
+    "Exact compressed resource and decoded credits were observed once; this command verifies their independent full hashes and declared size, without decoding.",
+    "Public Chromium tag/LICENSE/DEPS do not provide Chrome branded/internal source or all dependency source. Full corresponding-source checkout/build recipe/toolchain and source offers remain open.",
+    "Widevine is outside the selected nine-member runtime tree and is omitted.",
+    "Original source and notice bytes retain their upstream component terms; this collection grants no redistribution clearance.",
+    "No browser execution, appliance build, signing, qualification, target action or publication."
+  ],
+  "origin": {
+    "archive_bytes": 175440843,
+    "archive_sha256": "b5e3195041af345a668d110f5daf5581961fa3608626ea588c97dd0fe81c4e38",
+    "archive_url": "https://storage.googleapis.com/chrome-for-testing-public/145.0.7632.6/linux64/chrome-linux64.zip",
+    "catalog_revision": "1568190",
+    "catalog_revision_meaning": "main branch point position; the exact version tag includes subsequent branch commits and internal source rolls",
+    "credits_resource": {
+      "encoding": "GRIT Brotli header1e9b +6byte little-endian size; stream starts at byte8",
+      "id": 41381,
+      "observed_decoder": "Brotli 1.2.0; first offline extraction, not run by public command",
+      "offset": 4851768
+    },
+    "resources_pak": {
+      "bytes": 12880876,
+      "sha256": "7bd90447da67dbfdef272b12f45c8dab81b98a7438f0c74cf552f84f5904b68d"
+    }
+  },
+  "runtime_tree": {
+    "files": 9,
+    "release": "Chrome for Testing 145.0.7632.6",
+    "tree_sha256": "9f66fb92a10ef6b222c05690e44b6bfee452625ba9b4f70e32f9b3dc4557c2a1"
+  },
+  "schema": "paos.browser-chromium-notice-selection.v1",
+  "scope": "Exact upstream generated credits and public Chromium source-version metadata for the selected CfT input. Offline notice transport, no full source or legal qualification.",
+  "tag_commit": "47e20adcc15fc15f01825aa17e570c8f5492ac0f",
+  "version": "145.0.7632.6"
+}

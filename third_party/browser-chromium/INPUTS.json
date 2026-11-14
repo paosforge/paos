@@ -1,0 +1,72 @@
+{
+  "about": {
+    "bytes": 248,
+    "sha256": "34d078ce3003087a8374e7c6156fda374769b8047d6ddaf419d66414aa48edfb"
+  },
+  "actual_creator": "rc-codex-relops / Codex, 2026-10-16",
+  "archive": {
+    "bytes": 175440843,
+    "sha256": "b5e3195041af345a668d110f5daf5581961fa3608626ea588c97dd0fe81c4e38",
+    "url": "https://storage.googleapis.com/chrome-for-testing-public/145.0.7632.6/linux64/chrome-linux64.zip"
+  },
+  "limitations": [
+    "Selected prebuilt Chrome for Testing runtime only, not a Chromium source build.",
+    "Only the maintained nine-file tree is selected. ABOUT is kept separately; generated credits remain separate notice inputs. Widevine and other unselected archive members are omitted.",
+    "Original component terms remain applicable. Complete corresponding source, build toolchain, source offers and redistribution clearance remain open.",
+    "No browser execution, appliance signing, product pin change, target qualification or publication."
+  ],
+  "members": {
+    "chrome": {
+      "bytes": 269778136,
+      "mode": 493,
+      "sha256": "481fea1516a1f2b76454664272f12cd9dd1f20117b21e1f1498e08bc7f872c00"
+    },
+    "chrome_100_percent.pak": {
+      "bytes": 717308,
+      "mode": 420,
+      "sha256": "a131705f8561ffdaa6eda388437f0ecac115c70b7529f03fbcc750626c88a255"
+    },
+    "chrome_200_percent.pak": {
+      "bytes": 1190571,
+      "mode": 420,
+      "sha256": "d3b89766167ea4c9c88591d97d65d09544dea874ae82058e1c3dc28f0edbe35c"
+    },
+    "chrome_crashpad_handler": {
+      "bytes": 1934904,
+      "mode": 493,
+      "sha256": "76baeacac6fcfe624703e8fcef9a4975182f356470e33ae6ec461276c86d531f"
+    },
+    "chrome_sandbox": {
+      "bytes": 15248,
+      "mode": 493,
+      "sha256": "206aa30eeb399b1d10fdf345106b315be01deded548243eb7263c8af2773ab88"
+    },
+    "icudtl.dat": {
+      "bytes": 10822192,
+      "mode": 420,
+      "sha256": "1cf67874b5a87a8363a86fb3f81e3cbbed54d389062dab8fb52308d5cf8c8612"
+    },
+    "locales/en-US.pak": {
+      "bytes": 577279,
+      "mode": 420,
+      "sha256": "ff095cd6fb1efa7104586a1df627fdff79e5454219bfdad94a8c478325f2d1b8"
+    },
+    "resources.pak": {
+      "bytes": 12880876,
+      "mode": 420,
+      "sha256": "7bd90447da67dbfdef272b12f45c8dab81b98a7438f0c74cf552f84f5904b68d"
+    },
+    "v8_context_snapshot.bin": {
+      "bytes": 714384,
+      "mode": 420,
+      "sha256": "50f20bf9f6a6ac586152f306deb36a93424e233ff472347ca1dadc79776d40f5"
+    }
+  },
+  "runtime_tree": {
+    "files": 9,
+    "release": "Chrome for Testing 145.0.7632.6",
+    "tree_sha256": "9f66fb92a10ef6b222c05690e44b6bfee452625ba9b4f70e32f9b3dc4557c2a1"
+  },
+  "schema": "paos.browser-chromium-inputs.v1",
+  "version": "145.0.7632.6"
+}

@@ -1,0 +1,9 @@
+#!/bin/busybox sh
+# Full guest on every boot. Native owner supplies independent assignment tuple.
+set -eu
+B=/bin/busybox
+$B mkdir -p /proc /sys /dev /run /tmp /root
+$B mount -t proc proc /proc
+$B mount -t sysfs sysfs /sys
+$B mount -t devtmpfs devtmpfs /dev
+exec /bin/busybox sh /sbin/paos-driver-start

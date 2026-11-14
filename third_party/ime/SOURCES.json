@@ -1,0 +1,40 @@
+{
+  "files": {
+    "LICENSES/MPL-2.0.txt": {
+      "bytes": 16726,
+      "origin": "PaOS source declaration / complete recipe license",
+      "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04"
+    },
+    "packaging/public_build_inputs/ime/MOZC-LICENSE.txt": {
+      "bytes": 5734,
+      "sha256": "44cdd923b91ea9199293abecc2762c70c87dbf1e581c027a94c416368d1a648c",
+      "url": "https://raw.githubusercontent.com/google/mozc/18e76511af9371a9a4409b1d13c3e30884b53e9c/LICENSE"
+    },
+    "packaging/public_build_inputs/ime/PINYIN-APACHE.txt": {
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "url": "https://raw.githubusercontent.com/rime/rime-pinyin-simp/0c6861ef7420ee780270ca6d993d18d4101049d0/LICENSE"
+    },
+    "packaging/public_build_inputs/ime/PINYIN-README.txt": {
+      "bytes": 255,
+      "sha256": "bc51038baf2408cc5ec9eba680634cfd4ec07f905a636644839daff1a94055c9",
+      "url": "https://raw.githubusercontent.com/rime/rime-pinyin-simp/0c6861ef7420ee780270ca6d993d18d4101049d0/README.md"
+    },
+    "packaging/public_build_inputs/ime/romaji-hiragana.tsv": {
+      "bytes": 2963,
+      "sha256": "fcb900e311d32ced05499c86e236d1084fb0c0937398deb6311fc6c7287a7821",
+      "url": "https://raw.githubusercontent.com/google/mozc/18e76511af9371a9a4409b1d13c3e30884b53e9c/src/data/preedit/romanji-hiragana.tsv"
+    },
+    "third_party/ime/SOURCE.md": {
+      "bytes": 4262,
+      "origin": "PaOS source declaration / complete recipe license",
+      "sha256": "309fde3cb9fad0d4f54a87cc07e7b00ca6aca6d1bedb8d6c5d50979d1dedaa0f"
+    },
+    "third_party/ime/pinyin_simp.dict.yaml": {
+      "bytes": 1266216,
+      "sha256": "e341598343a0f0f2035bb1aafc34a7f3bb7887deeecb3f60796262aaa2983e6b",
+      "url": "https://raw.githubusercontent.com/rime/rime-pinyin-simp/0c6861ef7420ee780270ca6d993d18d4101049d0/pinyin_simp.dict.yaml"
+    }
+  },
+  "schema": "paos.ime-primary-source.v1"
+}

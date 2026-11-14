@@ -1,0 +1,82 @@
+{
+  "creator": {
+    "actual_creator": "rc-codex-relops on Codex",
+    "date": "2026-10-16"
+  },
+  "fragment": {
+    "bytes": 2178,
+    "path": "tools/browser/browser_appliance/kernel.config-fragment",
+    "sha256": "8756bde9bbbf49e0164760dd46b276f6f59abca6cdfb8800a4131192f78c9c7b"
+  },
+  "limitations": [
+    "Source archive signature is not verified by this command.",
+    "Reference configuration and binary observation describe one first compile, not reproduction of a historical shipped kernel.",
+    "Host compiler/tool bytes were observed; complete transitive toolchain sources and independent reproduction remain open.",
+    "The full appliance corresponding source, Chromium notices, historical BusyBox/glibc rebuild and distribution clearance remain open."
+  ],
+  "observed_first_compile": {
+    "compiler_sha256": "1b99826121ae6682a634e5efe09bd3e3df58ce58e0b28f849114ab5b89139c26",
+    "compiler_version": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+    "configuration_checks": 77,
+    "historical_binary_reproduced": false,
+    "kernel_binary": {
+      "bytes": 1508352,
+      "sha256": "b537f845621ad51ca720dfd7a9e7ea2947b595597213c2d32ce9e369692e5e80"
+    },
+    "linker_sha256": "e9ceb054c12207970f2726dfc07e9a66b411602748628baf27399f02a9bbb31b",
+    "linker_version": "GNU ld (GNU Binutils for Ubuntu) 2.42",
+    "source_config_tools_unchanged": true,
+    "source_files": 81771,
+    "source_files_sha256": "8c84a89a599bd73bc91ad0abafd90d27259f69debad848bc8fb3e9bb26f69176"
+  },
+  "recipe_inputs": {
+    "tools/browser/browser_appliance/manifest.toml": {
+      "bytes": 4106,
+      "sha256": "7f1ac49f9223878d423388c6b48f555db8b9c00e888dee5c14fcd81bf657cec2"
+    },
+    "tools/browser/build_browser_appliance.sh": {
+      "bytes": 16683,
+      "sha256": "fbb38f4a1edfd0d9ffce06c217e3834aabe32a365891c00fbc023c139e17f2d8"
+    },
+    "tools/browser/identity_scan.py": {
+      "bytes": 19140,
+      "sha256": "a1392a049ebbb9a99198e96c5ce0afac46f642056c8cea0cf91939ba8d85eb05"
+    },
+    "tools/browser/stage_browser_appliance.py": {
+      "bytes": 104447,
+      "sha256": "f363599a306c35011fa5b86f7d9715e291a94f481d4d8a98438a771154f196a6"
+    }
+  },
+  "reference_config": {
+    "bytes": 47333,
+    "path": "third_party/browser-linux/kernel.config",
+    "sha256": "e5a2b74e2e902fb9717c953844201b9a1ad7bcbcd082147f656aac18e5662c97"
+  },
+  "schema": "paos.browser-linux-source-selection.v1",
+  "scope": "Complete pinned upstream Linux source input, original license texts, maintained public browser recipe and reference configuration. Offline transport only.",
+  "selected_original_files": {
+    "COPYING": {
+      "bytes": 496,
+      "sha256": "fb5a425bd3b3cd6071a3a9aff9909a859e7c1158d54d32e07658398cd67eb6a0"
+    },
+    "LICENSES/exceptions/Linux-syscall-note": {
+      "bytes": 1258,
+      "sha256": "8e378ab93586eb55135d3bc119cce787f7324f48394777d00c34fa3d0be3303f"
+    },
+    "LICENSES/preferred/GPL-2.0": {
+      "bytes": 18729,
+      "sha256": "f6b78c087c3ebdf0f3c13415070dd480a3f35d8fc76f3d02180a407c1c812f79"
+    },
+    "Makefile": {
+      "bytes": 67433,
+      "sha256": "d6c03c1b7945fbfdeb42fb8689fd9fda439e8160669b03103284f15201ecffc0"
+    }
+  },
+  "source_archive": {
+    "bytes": 140213376,
+    "name": "linux-6.6.32.tar.xz",
+    "sha256": "aaa824eaf07f61911d22b75ff090a403c3dd0bd73e23933e0bba8b5971436ce1",
+    "url": "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.32.tar.xz"
+  },
+  "version": "6.6.32"
+}
