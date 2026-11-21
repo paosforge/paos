@@ -143,6 +143,7 @@ airlock_init:
     lea  rdi, [rel air_blob_desc_hostile]
     lea  rsi, [rel air_manifest_untrusted]
     call airlock_run_probe
+    mov  [rel airlock_boot_verdict], eax  ; ROOT118959 detail
     cmp  eax, AIR_VERDICT_FAILED_EPT
     jne  .proof_failed
     mov  rdi, [rel airlock_host_page]
@@ -161,6 +162,7 @@ airlock_init:
     mov  byte [rel secair_ready], 0
     lea  rdi, [rel str_air_proof_failed]
     call serial_string
+    call airlock_proof_detail  ; ROOT118959 detail
     jmp  .done
 .closed:
     mov  byte [rel secair_no_vmx], 1
@@ -247,6 +249,9 @@ airlock_run_observed:
     push rbx
     push r12
     push r13
+    mov  byte [rel airlock_last_refusal], 0  ; ROOT118959 detail
+    mov  byte [rel airlock_last_stage], 0  ; ROOT118959 detail
+    mov  dword [rel airlock_last_vmwrites], 0  ; ROOT118959 detail
     mov  r13d, ecx
     or   r13d, 1                          ; tier not admitted (incl absent manifest)
     mov  rbx, rdi
@@ -287,6 +292,7 @@ airlock_run_observed:
     cmp  eax, AIR_VERDICT_REFUSED
     jne  .return
     mov  edi, r13d                        ; owned decision-local reason/probe bit
+    mov  [rel airlock_last_refusal], dil  ; ROOT118959 detail
     call airlock_observe_refusal
 .return:
     pop  r13
@@ -483,12 +489,14 @@ airlock_vmx_run:
     mov  qword [rel airlock_last_qual], 0
     mov  dword [rel airlock_instr_error], 0
     mov  byte [rel airlock_vmxon_live], 0
+    mov  byte [rel airlock_last_stage], 1  ; ROOT118959 detail admitted
 
     ; E1: a bad host-state field refuses before VMXON, never after VMLAUNCH.
     mov  rdi, rsp
     call hv_validate_host_state
     cmp  qword [rel hv_val_ok], 1
     jne  .restore_none
+    mov  byte [rel airlock_last_stage], 2  ; ROOT118959 detail host state valid
 
     mov  r15, [rel airlock_base]
     ; Preserve the seventeenth host page: clear only VMX/EPT + 64 KiB guest.
@@ -560,6 +568,7 @@ airlock_vmx_run:
     call hv_boundary_arm
     test rax, rax
     jnz  .guard_refused
+    mov  byte [rel airlock_last_stage], 3  ; ROOT118959 detail boundary armed
 
     ; VMX fixed-bit CR0/CR4 dance, byte-for-byte shape of the proven launcher.
     mov  ecx, 0x486
@@ -601,12 +610,14 @@ airlock_vmx_run:
     jc   .vmxon_fail
     jz   .vmxon_fail
     mov  byte [rel airlock_vmxon_live], 1
+    mov  byte [rel airlock_last_stage], 4  ; ROOT118959 detail VMXON
     vmclear [rel airlock_vmcs_pa]
     jc   .vmcs_fail
     jz   .vmcs_fail
     vmptrld [rel airlock_vmcs_pa]
     jc   .vmcs_fail
     jz   .vmcs_fail
+    mov  byte [rel airlock_last_stage], 5  ; ROOT118959 detail VMCS current
 
     ; Flush reusable EPT context when silicon provides all-context INVEPT.
     mov  ecx, 0x48C
@@ -642,10 +653,12 @@ airlock_vmx_run:
     ; Never enter a guest after either final write failed.
     cmp  dword [rel hv_vmwrite_fails], 0
     jne  .vmcs_fail
+    mov  byte [rel airlock_last_stage], 6  ; ROOT118959 detail VMCS written
     mov  rdi, rsp
     call hv_boundary_enter
     test rax, rax
     jnz  .boundary_refused
+    mov  byte [rel airlock_last_stage], 7  ; ROOT118959 detail entry issued
     HV_BOUNDARY_FINAL
     vmlaunch
     mov  edi, VMXF_VMINSTR_ERR
@@ -664,6 +677,7 @@ airlock_vmx_run:
     mov rdi,rsp
     mov edx,5
     call hv_boundary_exec_vmx
+    mov  byte [rel airlock_last_stage], 8  ; ROOT118959 detail VM-exit landed
     mov  edi, VMXF_EXIT_REASON
     vmread rax, rdi
     test eax, 0x80000000
@@ -719,6 +733,8 @@ airlock_vmx_run:
 .vmxon_fail:
     mov  dword [rel airlock_last_verdict], AIR_VERDICT_ERROR
 .restore:
+    mov  eax, [rel hv_vmwrite_fails]  ; ROOT118959 detail
+    mov  [rel airlock_last_vmwrites], eax  ; ROOT118959 detail
     mov  rax, [rel airlock_saved_cr0]
     mov  cr0, rax
     mov  rax, [rel airlock_saved_cr4]
@@ -1049,6 +1065,71 @@ cmd_verb_airhang:
     pop  r12
     ret
 
+;; ROOT118959 detail begin
+; Boot proof failure detail: one numeric serial line, observation only. It runs
+; after the proof verdict and readiness are final and changes neither. Fields are
+; the probe verdict, the admission refusal (reason|0x80, 0=not refused), the last
+; backend stage reached (0 none,1 admitted,2 host state valid,3 boundary armed,
+; 4 VMXON,5 VMCS current,6 VMCS written,7 entry issued,8 VM-exit landed), the
+; basic exit reason (ffffffff=none this run), VM-instruction error, failed
+; VMWRITEs, and the proof's own 16-byte canary comparison. Exit reason and
+; instruction error are this run's only when stage>=1. No address, blob or
+; canary byte is emitted.
+airlock_proof_detail:
+    push rbx
+    mov  esi, [rel airlock_boot_verdict]
+    lea  rdi, [rel air_det_verdict]
+    mov  ecx, 8
+    call airlock_hex_put
+    movzx esi, byte [rel airlock_last_refusal]
+    lea  rdi, [rel air_det_refusal]
+    mov  ecx, 2
+    call airlock_hex_put
+    movzx esi, byte [rel airlock_last_stage]
+    lea  rdi, [rel air_det_stage]
+    mov  ecx, 2
+    call airlock_hex_put
+    mov  esi, [rel airlock_last_exit]
+    lea  rdi, [rel air_det_exit]
+    mov  ecx, 8
+    call airlock_hex_put
+    mov  esi, [rel airlock_instr_error]
+    lea  rdi, [rel air_det_vmerr]
+    mov  ecx, 8
+    call airlock_hex_put
+    mov  esi, [rel airlock_last_vmwrites]
+    lea  rdi, [rel air_det_vmwrites]
+    mov  ecx, 8
+    call airlock_hex_put
+    mov  rdi, [rel airlock_host_page]
+    lea  rsi, [rel airlock_canary_shadow]
+    mov  edx, 16
+    call memcmp
+    test eax, eax
+    setz bl
+    add  bl, '0'
+    mov  [rel air_det_canary], bl
+    lea  rdi, [rel str_air_detail]
+    call serial_string
+    pop  rbx
+    ret
+
+; RDI=field, ESI=value, ECX=hex digits, most significant first.
+airlock_hex_put:
+    lea  rdi, [rdi + rcx - 1]
+    lea  rdx, [rel air_det_hex]
+.digit:
+    mov  eax, esi
+    and  eax, 15
+    mov  al, [rdx + rax]
+    mov  [rdi], al
+    dec  rdi
+    shr  esi, 4
+    dec  ecx
+    jnz  .digit
+    ret
+;; ROOT118959 detail end
+
 ; EAX=1 only when the current host page still equals the seed shadow.
 airlock_canary_matches:
     mov  rdi, [rel airlock_host_page]
@@ -1153,3 +1234,20 @@ str_air_tier:  db "[PAOS64] P2 airlock: capability manifest -> tier select [airl
 str_air_deny:  db "[PAOS64] P2 airlock: hostile write to host-owned scratch denied by hardware, blob FAILED [airlock.deny]", 13, 10, 0
 str_air_no_vmx: db "[PAOS64] P2 airlock: skipped(no-vmx) untrusted execution REFUSED fail-closed", 13, 10, 0
 str_air_proof_failed: db "[PAOS64] P2 airlock: hostile-denial selftest failed; untrusted execution REFUSED fail-closed", 13, 10, 0
+
+;; ROOT118959 detail data begin
+align 4
+airlock_boot_verdict:     dd 0
+airlock_last_vmwrites:    dd 0
+airlock_last_refusal:     db 0
+airlock_last_stage:       db 0
+air_det_hex:              db "0123456789abcdef"
+str_air_detail:           db "[PAOS64] P2 airlock: proof detail verdict="
+air_det_verdict:          db "00000000 refusal="
+air_det_refusal:          db "00 stage="
+air_det_stage:            db "00 exit="
+air_det_exit:             db "00000000 vmerr="
+air_det_vmerr:            db "00000000 vmwrites="
+air_det_vmwrites:         db "00000000 canary="
+air_det_canary:           db "0 [airlock.proof.detail]", 13, 10, 0
+;; ROOT118959 detail data end

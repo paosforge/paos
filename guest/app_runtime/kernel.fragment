@@ -12,6 +12,9 @@ CONFIG_TTY=y
 CONFIG_DEVTMPFS=y
 CONFIG_TMPFS=y
 CONFIG_PROC_FS=y
+# The paos helper serialises the widget/WAIT transport with flock(2) on
+# /run/paos-widget.lock; tinyconfig leaves it out (ENOSYS: every paos call exits 2).
+CONFIG_FILE_LOCKING=y
 # Existing profile compiler capabilities; app init uses ttyS0, no MMIO probing.
 CONFIG_VIRTIO=y
 CONFIG_VIRTIO_MMIO=y

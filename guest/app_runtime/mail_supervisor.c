@@ -108,7 +108,7 @@ static int serve(int peer, pid_t app
         !app_mail_public_request_decode(request_wire,sizeof(request_wire),&request) ||
         !local_alive(&custody)) goto done;
 #endif
-    int acquired=app_account_transport_begin(request.operation,frame,original);
+    int acquired=app_account_transport_begin(app_mail_native_operation(request.operation),frame,original);
     if (acquired!=1) {
         /* Fatal BEGIN wipes its unavailable output original. Do not invent a
          * selector or cancel a replacement: VM shutdown contains unknown custody. */

@@ -1,6 +1,6 @@
 ;; MODULE hv/app_vm
 ;; LAYER 5
-;; EXPORTS app_vm_updater_role, app_vm_updater_observe_idle, app_vm_updater_prepare, app_vm_updater_exit, app_vm_updater_current, app_vm_updater_revoke, app_vm_updater_stopped, app_vm_recipient_revoke, app_vm_power_inactive, app_vm_prepare_without_isolation, app_vm_runnable, app_vm_prepare, app_vm_activate, app_vm_stop, app_vm_quiesce, app_vm_tick, app_vm_status, app_vm_snapshot, app_vm_endpoint_current, app_vm_exit_endpoint, app_vm_endpoint, avm_instance
+;; EXPORTS app_vm_updater_role, app_vm_updater_observe_idle, app_vm_updater_prepare, app_vm_updater_exit, app_vm_updater_current, app_vm_updater_revoke, app_vm_updater_stopped, app_vm_recipient_revoke, app_vm_power_inactive, app_vm_prepare_without_isolation, app_vm_runnable, app_vm_prepare, app_vm_activate, app_vm_stop, app_vm_quiesce, app_vm_tick, app_vm_status, app_vm_guest_ended, app_vm_snapshot, app_vm_endpoint_current, app_vm_exit_endpoint, app_vm_endpoint, avm_instance
 ;; IMPORTS hv/app_runtime, hv/app_vm_memory, hv/app_vm_payload, hv/app_vm_boot, hv/app_vm_cpu, hv/app_vm_intel, hv/app_vm_dispatch, hv/app_vm_devices, hv/app_network, hv/guest_request, hv/vmx, svc/app_script, core/time, core/smp, sec/session
 ;; CAPS
 ;; OWNER saga:hv
@@ -986,6 +986,22 @@ app_vm_status:
     ret
 .bad:
     mov rax,-1
+    ret
+
+; Values only, never authority: RDI exact instance ->EAX 1 when that RUNNING
+; app VM's guest halted with interrupts off (its PID1 ended and powered off),
+; else 0. The caller ends the app through its own ordinary path.
+app_vm_guest_ended:
+    xor eax,eax
+    test rdi,rdi
+    jz .out
+    cmp rdi,[rel avm_instance]
+    jne .out
+    cmp qword [rel avm_state],AVM_RUNNING
+    jne .out
+    cmp byte [rel avmd_guest_ended],1
+    sete al
+.out:
     ret
 
 ; Endpoint native liveness, independent of adapter binding for initial bind.

@@ -17,11 +17,13 @@ Outputs (existing byte-index offsets and ASCII cells are unchanged):
   manager.inc   the 128 `; U+xxxx` rows of src/bootmgr/paos_bootmgr.asm `face_ocr_font` (U+0020..U+007E Spleen,
                 control rows and U+007F blank).
   bootmenu.inc  the 22 indexed rows of src/boot/boot_menu.asm `bm_face_ocr_font`, in BOOT_MENU_ORDER.
+  bootface.inc  the 41 rows of src/boot/boot_face.asm `bf_font` (the public loading face's version text):
+                U+002B..U+0039 then U+0061..U+007A, in BOOT_FACE_ORDER.
 
 usage:
-  font_build.py [--bdf PATH] --emit OUTDIR     write the three outputs into OUTDIR
+  font_build.py [--bdf PATH] --emit OUTDIR     write the four outputs into OUTDIR
   font_build.py [--bdf PATH] --write           rewrite src/gui/font8x16.inc in place
-  font_build.py [--bdf PATH] --check           exit 0 iff all three shipped tables equal the outputs
+  font_build.py [--bdf PATH] --check           exit 0 iff all four shipped tables equal the outputs
 Verification: python3 -m unittest discover -s tools/fonts -p test_font_build.py.
 Requires Python 3.10+ standard library only; no network or factory inputs.
 Generated comments retain historical factory paths to preserve exact shipped bytes.
@@ -39,9 +41,12 @@ BDF_SHA256 = "b2b05484ba4380c9c6854cc57637235a9fb039c65b5ba38a65289540f8fab7dc"
 GUI = ROOT / "src/gui/font8x16.inc"
 BOOT_MENU = (ROOT / "src/boot/boot_menu.asm", "bm_face_ocr_font:")
 MANAGER = (ROOT / "src/bootmgr/paos_bootmgr.asm", "face_ocr_font:")
+BOOT_FACE = (ROOT / "src/boot/boot_face.asm", "bf_font:")
 
 BOOT_MENU_ORDER = [0x20, 0x2D, 0x2E, 0x2F, 0x30, 0x31, 0x4C, 0x4F, 0x50, 0x53, 0x5B, 0x5C, 0x5D,
                    0x61, 0x64, 0x67, 0x69, 0x6E, 0x6F, 0x73, 0x76, 0x7C]
+# Public loading face (T6-1): '+' ',' '-' '.' '/' '0'..'9', then 'a'..'z'; boot_face.asm indexes these two runs.
+BOOT_FACE_ORDER = list(range(0x2B, 0x3A)) + list(range(0x61, 0x7B))
 
 BLANK = bytes(16)
 
@@ -157,6 +162,7 @@ def build(bdf: Path) -> dict[str, str]:
         "font8x16.inc": gui_inc(cells, bdf_sha, glyphs),
         "manager.inc": "\n".join(face_row(cells[cp], cp) for cp in range(0x80)) + "\n",
         "bootmenu.inc": "\n".join(face_row(glyphs[cp], cp) for cp in BOOT_MENU_ORDER) + "\n",
+        "bootface.inc": "\n".join(face_row(glyphs[cp], cp) for cp in BOOT_FACE_ORDER) + "\n",
     }
 
 
@@ -193,7 +199,7 @@ def main(argv: list[str]) -> int:
     bad = []
     if GUI.read_bytes() != out["font8x16.inc"].encode("utf-8"):
         bad.append(str(GUI.relative_to(ROOT)))
-    for (path, label), name in ((BOOT_MENU, "bootmenu.inc"), (MANAGER, "manager.inc")):
+    for (path, label), name in ((BOOT_MENU, "bootmenu.inc"), (MANAGER, "manager.inc"), (BOOT_FACE, "bootface.inc")):
         if shipped_rows(path, label) != [l.strip() for l in out[name].splitlines() if l.strip()]:
             bad.append(f"{path.relative_to(ROOT)} {label}")
     print("font_build: check", "OK" if not bad else f"DIFFERS {bad}")

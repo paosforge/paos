@@ -1,466 +1,17 @@
 ;; MODULE gui/netmon_form
 %include "core/abi/build_profile.inc"
 ;; LAYER 6
-;; EXPORTS netmon_form_declare, netmon_members_text, netmon_address_text, netmon_check_click_init, netmon_observe_widget
-;; IMPORTS gui/form_loader, svc/command, svc/command_udp, net/dns, net/netdev, dev/net/e1000e, boot/serial, boot/pmod_loader, core/lib/fmt, gui/widget, svc/command_netcheck, gui/window_mgmt, gui/chat_app, sec/session, boot/header, hv/nd_isolation
+;; EXPORTS netmon_form_declare, netmon_builtin_query, netmon_members_text, netmon_address_text, netmon_check_click_init, netmon_observe_widget
+;; IMPORTS gui/form_loader, svc/command, svc/command_udp, net/dns, net/netdev, dev/net/e1000e, boot/serial, core/lib/fmt, gui/widget, svc/command_netcheck, gui/window_mgmt, gui/chat_app, sec/session, boot/header, hv/nd_isolation
 ;; CAPS
 ;; OWNER saga:pmod_first
 
-%ifdef PMOD_BUILD
-; Native PMOD v1, pure PIC, no imports or relocations. The signed member owns
-; NETMON_STAT formatting and the shipped form. Input is a bounded snapshot:
-; rx, tx, link, window (four qwords), followed by a 128-byte nonce/token.
-; At 160: operation (0=verb, 1=view, 2=tick, 3=reset, 4=bind name, 5=widget).
-; At 168..199: module-owned previous counters and slew rates; 208: binding id.
-; Operation 5 takes {binding id, widget maximum} at 216/224 and returns
-; action 0=unbound/1=text/2=number at 208, clamped widget number at 200.
-; RCQ-35: existing offsets/call API unchanged. Formerly unused 232..247 holds
-; a bounded selected name, 248 holds opaque selected-handle identity. UINT64_MAX
-; denotes unavailable rx/tx/link; never a valid zero sample. Private state at
-; 768 holds the prior selection (outside the 256..767 output scratch span).
-; Internal netdev_frame_stats reads exact registered-device software success
-; counts; unsupported providers retain the explicit unavailable state.
-bits 64
-org 0
-nm_header:
-    db "PMOD"
-    dw 1, 5
-    dq 0
-    dd 1, nm_end, 64, nm_end-64
-    dd nm_entry-64, nm_selftest-64, nm_export
-    dw 0, 1, 0, 0
-    dd 2312, 1, 0
-nm_entry:
-    push rbx
-    push r12
-    push r13
-    mov r12, rdi
-    mov r13, rsi
-    mov rbx, rsi
-    cmp qword [r12+160], 5
-    je .widget
-    cmp qword [r12+160], 4
-    je .bind
-    cmp qword [r12+160], 3
-    je .reset
-    cmp qword [r12+160], 2
-    je .tick
-    cmp qword [r12+160], 1
-    je .view
-    lea rdi, [rel nm_rx]
-    call nm_puts
-    mov rax, [r12]
-    call nm_sample
-    lea rdi, [rel nm_tx]
-    call nm_puts
-    mov rax, [r12+8]
-    call nm_sample
-    lea rdi, [rel nm_link]
-    call nm_puts
-    mov rax, [r12+16]
-    call nm_sample
-    lea rdi, [rel nm_nic]
-    call nm_puts
-    call nm_name
-    lea rdi, [rel nm_idx]
-    call nm_puts
-    mov rax, [r12+24]
-    call nm_dec
-    lea rdi, [rel nm_nonce]
-    call nm_puts
-    lea rdi, [r12+32]
-    call nm_puts
-.finish:
-    mov byte [rbx], 0
-    mov rax, r13
-    mov rdx, rbx
-    sub rdx, r13
-    pop r13
-    pop r12
-    pop rbx
-    ret
-.reset:
-    mov rax, [r12+248]
-    mov [r12+768], rax
-    cmp qword [r12], -1
-    je .unavailable
-    cmp qword [r12+8], -1
-    je .unavailable
-    mov rax, [r12]
-    mov [r12+168], rax
-    mov rax, [r12+8]
-    mov [r12+176], rax
-    mov qword [r12+184], 0
-    mov qword [r12+192], 0
-    cmp qword [r12+16], 1
-    je .finish
-    mov qword [r12+168], -1
-    mov qword [r12+176], -1
-    jmp .finish
-.tick:
-    cmp qword [r12], -1
-    je .unavailable_view
-    cmp qword [r12+8], -1
-    je .unavailable_view
-    mov rax, [r12+248]
-    cmp rax, [r12+768]
-    jne .baseline_view
-    cmp qword [r12+168], -1
-    je .baseline_view
-    cmp qword [r12+176], -1
-    je .baseline_view
-    cmp qword [r12+16], 1
-    jne .baseline_view                  ; offline/unknown cannot create rates
-    mov rdx, [r12]
-    cmp rdx, [r12+168]
-    jb .baseline_view                   ; reset/wrap cannot create unsigned spikes
-    mov rdx, [r12+8]
-    cmp rdx, [r12+176]
-    jb .baseline_view
-    ; Port form_netmon_tick's unsigned delta, ceiling and one-step slew.
-    ; State lives in the disposable RW module page, never the RX member.
-    mov rax, [r12]
-    mov rdx, rax
-    sub rax, [r12+168]
-    mov [r12+168], rdx
-    mov rcx, [r12+184]
-    call nm_rate
-    mov [r12+184], rax
-    mov rax, [r12+8]
-    mov rdx, rax
-    sub rax, [r12+176]
-    mov [r12+176], rdx
-    mov rcx, [r12+192]
-    call nm_rate
-    mov [r12+192], rax
-    jmp .view
-.baseline_view:
-    mov [r12+768], rax
-    cmp qword [r12+16], 1
-    je .baseline_online
-    mov qword [r12+168], -1
-    mov qword [r12+176], -1
-    mov qword [r12+184], 0
-    mov qword [r12+192], 0
-    jmp .view
-.baseline_online:
-    mov rax, [r12]
-    mov [r12+168], rax
-    mov rax, [r12+8]
-    mov [r12+176], rax
-    mov qword [r12+184], 0
-    mov qword [r12+192], 0
-    jmp .view
-.unavailable_view:
-    mov rax, [r12+248]
-    mov [r12+768], rax
-    mov qword [r12+168], -1
-    mov qword [r12+176], -1
-    mov qword [r12+184], -1
-    mov qword [r12+192], -1
-    jmp .view
-.unavailable:
-    mov rax, [r12+248]
-    mov [r12+768], rax
-    mov qword [r12+168], -1
-    mov qword [r12+176], -1
-    mov qword [r12+184], -1
-    mov qword [r12+192], -1
-    jmp .finish
-.view:
-    lea rdi, [rel nm_live_nic]
-    call nm_puts
-    call nm_name
-    lea rdi, [rel nm_live_rx]
-    call nm_puts
-    mov rax, [r12]
-    call nm_sample
-    lea rdi, [rel nm_live_tx]
-    call nm_puts
-    mov rax, [r12+8]
-    call nm_sample
-    lea rdi, [rel nm_live_drops_link]
-    call nm_puts
-    mov rax, [r12+16]
-    call nm_sample
-    jmp .finish
-.bind:
-    mov qword [r12+208], 0
-    lea rdi, [r12+32]
-    lea rsi, [rel nm_bind_live]
-    call nm_equal
-    jz .bind_live
-    lea rdi, [r12+32]
-    lea rsi, [rel nm_bind_rx]
-    call nm_equal
-    jz .bind_rx
-    lea rdi, [r12+32]
-    lea rsi, [rel nm_bind_tx]
-    call nm_equal
-    jnz .finish
-    mov qword [r12+208], 4
-    jmp .finish
-.bind_rx:
-    mov qword [r12+208], 3
-    jmp .finish
-.bind_live:
-    mov qword [r12+208], 2
-    jmp .finish
-.widget:
-    mov qword [r12+208], 0
-    cmp qword [r12+216], 2
-    je .widget_text
-    cmp qword [r12+216], 3
-    je .widget_rx
-    cmp qword [r12+216], 4
-    jne .finish
-    mov rax, [r12+192]
-    jmp .widget_number
-.widget_rx:
-    mov rax, [r12+184]
-.widget_number:
-    cmp qword [r12+16], 1
-    jne .finish
-    cmp qword [r12], -1
-    je .finish
-    cmp qword [r12+8], -1
-    je .finish
-    cmp rax, -1
-    je .finish
-    mov rdx, [r12+248]
-    cmp rdx, [r12+768]
-    jne .finish                         ; selection changed before cadence baseline
-    ; Preserve the shipped clamp against this widget's declared maximum.
-    cmp rax, [r12+224]
-    jbe .widget_store
-    mov rax, [r12+224]
-.widget_store:
-    mov [r12+200], rax
-    mov qword [r12+208], 2
-    jmp .finish
-.widget_text:
-    mov qword [r12+208], 1
-    jmp .view
-nm_equal:
-    mov al, [rdi]
-    cmp al, [rsi]
-    jne .out
-    inc rdi
-    inc rsi
-    test al, al
-    jnz nm_equal
-.out:
-    ret
-nm_rate:
-    cmp rax, 100
-    jbe .bounded
-    mov eax, 100
-.bounded:
-    cmp rax, rcx
-    jb .decay
-    lea rdx, [rcx+1]
-    cmp rax, rdx
-    jbe .out
-    mov rax, rdx
-    ret
-.decay:
-    test rcx, rcx
-    jz .out
-    lea rax, [rcx-1]
-.out:
-    ret
-nm_selftest:
-    ; Exercise the actual entry before integration: exact reply and view,
-    ; first-sample reset, burst slew, idle decay and full-token bind matching.
-    push r12
-    push r13
-    sub rsp, 1032
-    mov r12, rsp
-    lea r13, [rsp+256]
-    mov rdi, rsp
-    xor eax, eax
-    mov ecx, 128
-    rep stosq
-    mov qword [r12], 123
-    mov qword [r12+8], 456
-    mov qword [r12+16], 1
-    mov qword [r12+24], 7
-    mov rax, 0x0000653030303165           ; "e1000e" + NUL
-    mov [r12+232], rax
-    mov dword [r12+32], 'kat-'
-    mov dword [r12+36], '2312'
-    mov rdi, r12
-    mov rsi, r13
-    call nm_entry
-    cmp rax, r13
-    jne .bad
-    mov rdi, rax
-    lea rsi, [rel nm_test_reply]
-    call nm_equal
-    jne .bad
-    mov qword [r12+160], 3
-    mov rdi, r12
-    mov rsi, r13
-    call nm_entry
-    cmp qword [r12+168], 123
-    jne .bad
-    cmp qword [r12+176], 456
-    jne .bad
-    cmp qword [r12+184], 0
-    jne .bad
-    cmp qword [r12+192], 0
-    jne .bad
-    mov qword [r12], 623
-    mov qword [r12+8], 457
-    mov qword [r12+160], 2
-    mov rdi, r12
-    mov rsi, r13
-    call nm_entry
-    cmp qword [r12+184], 1
-    jne .bad
-    cmp qword [r12+192], 1
-    jne .bad
-    mov rdi, rax
-    lea rsi, [rel nm_test_view]
-    call nm_equal
-    jne .bad
-    mov rdi, r12
-    mov rsi, r13
-    call nm_entry
-    cmp qword [r12+184], 0
-    jne .bad
-    cmp qword [r12+192], 0
-    jne .bad
-    mov rax, -1
-    mov ecx, 100
-    call nm_rate
-    cmp eax, 100
-    jne .bad
-    ; Copy a NUL-terminated token and then make it invalid by suffixing it.
-    lea rsi, [rel nm_bind_rx]
-    lea rdi, [r12+32]
-    mov ecx, nm_bind_tx-nm_bind_rx
-    rep movsb
-    mov qword [r12+160], 4
-    mov rdi, r12
-    mov rsi, r13
-    call nm_entry
-    cmp qword [r12+208], 3
-    jne .bad
-    mov byte [r12+32+nm_bind_tx-nm_bind_rx-1], 'x'
-    mov rdi, r12
-    mov rsi, r13
-    call nm_entry
-    cmp qword [r12+208], 0
-    jne .bad
-    mov qword [r12+160], 5
-    mov qword [r12+216], 3
-    mov qword [r12+224], 7
-    mov qword [r12+184], 9
-    mov rdi, r12
-    mov rsi, r13
-    call nm_entry
-    cmp qword [r12+208], 2
-    jne .bad
-    cmp qword [r12+200], 7
-    jne .bad
-    mov qword [r12+216], 5             ; filesystem widgets belong to keep
-    mov rdi, r12
-    mov rsi, r13
-    call nm_entry
-    cmp qword [r12+208], 0
-    jne .bad
-    mov eax, 2312
-    jmp .out
-.bad:
-    mov eax, -1
-.out:
-    add rsp, 1032
-    pop r13
-    pop r12
-    ret
-; Bound derives from four u64 decimal fields + literals + <=127 nonce bytes:
-; fewer than 320 output bytes, in a dedicated 512-byte scratch span.
-nm_puts:
-    mov al, [rdi]
-    test al, al
-    jz .done
-    mov [rbx], al
-    inc rbx
-    inc rdi
-    jmp nm_puts
-.done:
-    ret
-nm_dec:
-    ; Port core/lib/fmt.asm's proven unsigned do-while/div/reverse sequence.
-    ; RBX is the loader-provided non-NULL output span, already bounded above.
-    mov r9d, 10
-    xor r8d, r8d
-.loop:
-    xor edx, edx
-    div r9
-    add dl, '0'
-    push rdx
-    inc r8
-    test rax, rax
-    jnz .loop
-.copy:
-    pop rax
-    mov [rbx], al
-    inc rbx
-    dec r8
-    jnz .copy
-    ret
-; Render missing samples as text, never UINT64_MAX or fabricated zero.
-nm_sample:
-    cmp rax, -1
-    jne nm_dec
-    lea rdi, [rel nm_unavailable]
-    jmp nm_puts
-nm_name:
-    lea rdi, [r12+232]
-    cmp byte [rdi], 0
-    jne nm_put_name
-    lea rdi, [rel nm_unavailable]
-    jmp nm_puts
-nm_put_name:
-    ; Name has its own limit even if a malformed snapshot lacks a terminator.
-    mov ecx, 15
-.loop:
-    mov al, [rdi]
-    test al, al
-    jz .out
-    mov [rbx], al
-    inc rbx
-    inc rdi
-    dec ecx
-    jnz .loop
-.out:
-    ret
-nm_export: db "NETMON_STAT",0
-    dd nm_form, nm_form_end-nm_form
-nm_rx: db " netmon rx=",0
-nm_tx: db " tx=",0
-nm_link: db " link=",0
-nm_nic: db " nic=",0
-nm_idx: db " idx=",0
-nm_unavailable: db "unavailable",0
-nm_nonce: db " nonce=",0
-nm_live_nic: db "nic=",0
-nm_live_rx: db ",rx=",0
-nm_live_tx: db ",tx=",0
-nm_live_drops_link: db ",drops=unavailable,link=",0
-nm_bind_live: db "netmon.live",0
-nm_bind_rx: db "netmon.rx_rate",0
-nm_bind_tx: db "netmon.tx_rate",0
-nm_test_reply: db " netmon rx=123 tx=456 link=1 nic=e1000e idx=7 nonce=kat-2312",0
-nm_test_view: db "nic=e1000e,rx=623,tx=457,drops=unavailable,link=1",0
-nm_form: incbin "gui/forms/netmon.frm"
-nm_form_end:
-nm_end:
-%else
-; LAUNCH is shared by sysprops/imgdemo and stays in the keep. NETMON_STAT
-; is registered only after the external signed member passes the loader.
+; LAUNCH is shared by sysprops/imgdemo and stays in the keep. The Network
+; Monitor provider is built in for every profile (T5-21.1; root 119679 route A):
+; the form row and NETMON_STAT are bound here and nowhere else, so nothing read
+; from the ESP can replace them (SEC 119690: the external netmon PMOD path is
+; retired). A lint or registration failure leaves the row empty and the verb
+; absent, with a serial stage marker: honest absence, never a fabricated view.
 netmon_form_declare:
     lea rdi, [rel str_verb_launch]
     lea rsi, [rel form_cmd_verb_launch]
@@ -472,21 +23,159 @@ netmon_form_declare:
     lea rdi, [rel form_catalog_verb]
     lea rsi, [rel form_catalog_lookup]
     call form_replace_handler
-%if !PAOS_PUBLIC_BUILD
-    lea rdi, [rel form_netmon_bind]
-    lea rsi, [rel form_netmon_unbind]
-    lea rdx, [rel netmon_snapshot]
-    lea rcx, [rel netmon_reply]
-    call pmod_netmon_bind
-%endif
     lea rax, [rel netmon_members_text]   ; RCQ-35: the keep-owned netmon.members rows
     mov [rel form_netmon_members_fn], rax
     lea rax, [rel netmon_details_text]
     mov [rel form_netmon_address_fn], rax
-%if !PAOS_PUBLIC_BUILD
-    call pmod_netmon_start
-%endif
+    ; The form linter resolves netmon.* bindings through op 4, so the provider
+    ; is ready before the bind and withdrawn again if the bind fails.
+    mov byte [rel nm_builtin_ready], 1
+    mov edi, 3                           ; every boot starts at fresh counters
+    xor esi, esi
+    call netmon_builtin_query
+    lea rdi, [rel nm_form]
+    mov esi, nm_form_end-nm_form
+    call form_netmon_bind
+    test eax, eax
+    jnz .bind_failed
+    lea rdi, [rel nm_verb_name]
+    lea rsi, [rel netmon_builtin_invoke]
+    xor edx, edx                         ; flags as the retired pmod_netmon_verify registered
+    mov ecx, ARGT_TEXT
+    xor r8d, r8d
+    xor r9d, r9d
+    call command_register_verb
+    cmp eax, -1
+    je .verb_failed
+    lea rdi, [rel nm_builtin_up_marker]
+    call serial_string
     ret
+.verb_failed:
+    call form_netmon_unbind
+    mov edi, 2
+    jmp .refused
+.bind_failed:
+    mov edi, 1
+.refused:
+    mov byte [rel nm_builtin_ready], 0
+    push rdi
+    lea rdi, [rel nm_builtin_refused_marker]
+    call serial_string
+    pop rdi
+    call serial_hex64
+    lea rdi, [rel nm_builtin_marker_end]
+    call serial_string
+    ret
+
+; netmon_builtin_query - the one bounded entry for the verb and the form's live
+; bindings; the ABI of the retired pmod_netmon_query.
+; EDI=operation 0..5, RSI=optional token (op 5: two-qword widget snapshot).
+; RAX=reply pointer / 0 on refusal, RDX/RCX=RX/TX rates, R8D=binding/action id,
+; R9=widget value. Single-flight across CPUs (the verb and the form tick can
+; run on different CPUs): an atomic xchg acquires nm_builtin_busy.
+netmon_builtin_query:
+    push rbx
+    push r12
+    push r13
+    mov r13d, edi
+    mov r12, rsi
+    cmp edi, 5
+    ja .deny
+    cmp byte [rel nm_builtin_ready], 1
+    jne .deny
+    mov al, 1
+    xchg al, [rel nm_builtin_busy]       ; xchg with memory is locked
+    test al, al
+    jnz .deny
+    test r12, r12
+    jnz .have_arg
+    cmp r13d, 5
+    je .failed                           ; widget snapshots require both qwords
+    lea r12, [rel nm_builtin_empty_arg]  ; preserve bare NETMON_STAT reads
+.have_arg:
+    lea rbx, [rel nm_builtin_state]
+    mov rdi, rbx
+    call netmon_snapshot
+    mov [rbx+160], r13
+    cmp r13d, 5
+    jne .text_arg
+    mov rax, [r12]
+    mov [rbx+216], rax
+    mov rax, [r12+8]
+    mov [rbx+224], rax
+    lea r12, [rel nm_builtin_empty_arg]
+.text_arg:
+    xor ecx, ecx
+.copy:
+    cmp ecx, 128
+    jae .failed
+    mov al, [r12+rcx]
+    mov [rbx+rcx+32], al
+    inc ecx
+    test al, al
+    jnz .copy
+    mov byte [rbx+256], 0
+    mov rdi, rbx
+    lea rsi, [rbx+256]
+    call nm_entry
+    ; The reply checks the sandbox boundary made, kept in the keep: the reply
+    ; starts at the output span, is shorter than 512 bytes and NUL-ended.
+    lea r8, [rbx+256]
+    cmp rax, r8
+    jne .failed
+    cmp rdx, 512
+    jae .failed
+    cmp byte [r8+rdx], 0
+    jne .failed
+    mov rax, r8
+    mov rdx, [rbx+184]
+    mov rcx, [rbx+192]
+    mov r8, [rbx+208]
+    mov r9, [rbx+200]
+    mov byte [rel nm_builtin_busy], 0
+    jmp .out
+.failed:
+    mov byte [rel nm_builtin_busy], 0
+.deny:
+    xor eax, eax
+    xor edx, edx
+    xor ecx, ecx
+    xor r8d, r8d
+    xor r9d, r9d
+.out:
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; NETMON_STAT handler: registry -> bounded query (op 0 only) -> reply.
+; The token is the only external byte; ops 1..5 stay form-only.
+netmon_builtin_invoke:
+    call cmd_handler_prologue
+    push rbx
+    mov rbx, rsi
+    mov rsi, [rdi+REQ_ARG]
+    xor edi, edi
+    call netmon_builtin_query
+    test rax, rax
+    jz .deny
+    mov rdi, rax
+    call netmon_reply
+    mov qword [rbx+RSP_CODE], 0
+    pop rbx
+    ret
+.deny:
+    mov qword [rbx+RSP_CODE], 5
+    pop rbx
+    ret
+
+%include "gui/netmon_fmt.inc"
+; Beside its registration: the SEC verb census reads names from .asm files.
+nm_verb_name: db "NETMON_STAT",0
+nm_builtin_empty_arg: db 0
+nm_builtin_up_marker: db "[PAOS64] L6 netmon: built-in provider bound, NETMON_STAT registered [netmon.builtin.ready]",13,10,0
+nm_builtin_refused_marker: db "[PAOS64] L6 netmon: built-in provider refused stage=",0
+nm_builtin_marker_end: db " [netmon.builtin.refused]",13,10,0
 
 ; Join the kit's click chain. lock_screen_init calls this: it sets the chain's
 ; root, so a hook joined from netmon_form_declare would be dropped.
@@ -593,10 +282,9 @@ netmon_check_click:
 netmon_observe_widget:
 %include "gui/netmon_observation.inc"
 
-; Generic seam adapters only: all NETMON_STAT/live-view literals and formatting
-; live in PMOD. The netmon.members rows (RCQ-35 slice 2) are keep-owned GUI text,
-; like explorer's fs.root: the signed member's 4 KiB page (MAX_MEMBER) has room
-; for the form line, not for a second renderer.
+; Snapshot for the built-in formatter (gui/netmon_fmt.inc), which owns the
+; NETMON_STAT/live-view literals. The netmon.members rows (RCQ-35 slice 2) are
+; keep-owned GUI text, like explorer's fs.root.
 netmon_snapshot:
     push rbx
     push r12
@@ -726,13 +414,9 @@ netmon_details_text:
     inc rbx
     mov [rsp], rbx
 .stock:
-%if !PAOS_PUBLIC_BUILD
     mov edi, 1
     xor esi, esi
-    call pmod_netmon_query
-%else
-    xor eax, eax
-%endif
+    call netmon_builtin_query
     mov r12, rax
     mov r13d, NETDEV_LINK_UNPROBED
     test r12, r12
@@ -1391,4 +1075,10 @@ nm_details_buf: times NM_ISO_TEXT_MAX + 256 + 1 db 0
 nm_iso_buf: times NM_ISO_TEXT_MAX db 0
 %endmacro
 WDATA_DEFER WDATA_gui_netmon_form_0
-%endif
+%macro WDATA_BSS_gui_netmon_form_builtin 0
+alignb 16
+nm_builtin_state: resb 1024              ; snapshot 0..255, reply 256..767, private 768..775
+nm_builtin_ready: resb 1
+nm_builtin_busy: resb 1
+%endmacro
+WDATA_BSS_DEFER WDATA_BSS_gui_netmon_form_builtin

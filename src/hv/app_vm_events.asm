@@ -63,6 +63,8 @@ app_vm_events_close:
     xor eax,eax
     ret
 
+; Tools uses the same code with separately declared, literal private storage.
+%ifndef PAOS_TOOLS_CPU_INSTANCE
 %include "core/abi/wdata.inc"
 %macro WDATA_hv_app_vm_events 0
 align 8
@@ -70,3 +72,4 @@ avm_vectoring: dd 0
 avm_vector_error: dd 0
 %endmacro
 WDATA_DEFER WDATA_hv_app_vm_events
+%endif

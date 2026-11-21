@@ -82,6 +82,10 @@ lock_card_layout:
     cmp  byte [rel clock_wall_valid], 1
     jne  .clock
     mov  ebx, 1
+    call principal_first_owner_available
+    cmp eax, 1
+    jne .clock
+    xor ebx, ebx                        ; setup disclosure occupies the clock band
 .clock:
     mov  edi, [rel lock_widget_first]
     add  edi, 11
@@ -122,8 +126,6 @@ lock_card_state:
     add  edi, 2
     lea  rsi, [rel str_lock_owner_display]
     call principal_first_owner_available
-    cmp  byte [rel lock_setup_staged], 1
-    je   .setup_title
     cmp  eax, 1
     jne  .title
 .setup_title:

@@ -1230,6 +1230,7 @@ update_release_stage_start:
 %error "native updater requires the generated Boot-v2 owner key ID"
 %endif
 ur_owner_key_id: db BOOT_V2_OWNER_KEY_ID_BYTES
+align 2, db 0                           ; CHAR16 paths (char16_align_check); b follows a at even length
 ur_slot_a_path: dw __utf16__("\EFI\PaOS\slots\paos-a.efi"),0
 ur_slot_a_path_end:
 ur_slot_b_path: dw __utf16__("\EFI\PaOS\slots\paos-b.efi"),0

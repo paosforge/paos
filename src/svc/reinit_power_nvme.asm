@@ -81,6 +81,8 @@ reinit_power_nvme_set:
     NP_PIN nvme_vmd_child, 1
     NP_PIN nvme_vmd_cfg, 8
     NP_PIN nvme_sector_size, 4
+    NP_PIN nvme_physical_size, 4
+    NP_PIN nvme_identify_fields, 28
     NP_PIN nvme_lba_max, 8
     NP_PIN nvme_asq, 48
     NP_PIN nvme_ops, blk_ops_size
@@ -249,6 +251,7 @@ reinit_power_nvme_set:
     jne .bad
     cmp eax, [rel nvme_info+blk_info.sector_size]
     jne .bad
+    mov eax, [rel nvme_physical_size]
     cmp eax, [rel nvme_info+blk_info.physical_sector_bytes]
     jne .bad
     cmp dword [rel nvme_info+blk_info.physical_alignment_bytes], 0
@@ -293,6 +296,32 @@ reinit_power_nvme_set:
     shl eax, cl
     cmp eax, [rel nvme_sector_size]
     jne .bad
+    mov ecx, eax
+    call nvme_namespace_physical
+    test eax, eax
+    jz .bad
+    cmp eax, [rel nvme_physical_size]
+    jne .bad
+    ; A new physical unit must remain bound to the exact same namespace page,
+    ; including the raw evidence published by BLKINFO, throughout custody.
+    cmp dword [rel nvme_identify_valid], 1
+    jne .bad
+%macro NP_RAW_FIELD 3
+    movzx eax, %2 [rbx+%3]
+    cmp eax, [rel nvme_identify_%1]
+    jne .bad
+%endmacro
+    NP_RAW_FIELD flbas, byte, 26
+    NP_RAW_FIELD nsfeat, byte, 24
+    NP_RAW_FIELD npwg, word, 64
+    NP_RAW_FIELD nows, word, 72
+    NP_RAW_FIELD nawupf, word, 36
+%unmacro NP_RAW_FIELD 3
+    movzx eax, byte [rbx+26]
+    and eax, 15
+    mov eax, [rbx+rax*4+128]
+    cmp eax, [rel nvme_identify_lbaf]
+    jne .bad
     mov rsi, rbx
     lea rdi, [rel np_namespace]
     mov edx, 16
@@ -311,6 +340,15 @@ reinit_power_nvme_set:
     test eax, eax
     jnz .bad
 .ns3:
+    lea rsi, [rbx+32]
+    lea rdi, [rel np_namespace+32]
+    mov edx, 42                          ; atomic/preferred write fields through NOWS
+    call reinit_power_nvme_pin
+    test r12d, r12d
+    jnz .ns4
+    test eax, eax
+    jnz .bad
+.ns4:
     lea rsi, [rbx+104]
     lea rdi, [rel np_namespace+104]
     mov edx, 88                          ; NGUID/EUI64 and all 16 LBAF entries
@@ -964,6 +1002,8 @@ np_pin_nvme_busno: times 12 db 0
 np_pin_nvme_vmd_child: times 1 db 0
 np_pin_nvme_vmd_cfg: times 8 db 0
 np_pin_nvme_sector_size: times 4 db 0
+np_pin_nvme_physical_size: times 4 db 0
+np_pin_nvme_identify_fields: times 28 db 0
 np_pin_nvme_lba_max: times 8 db 0
 np_pin_nvme_asq: times 48 db 0
 np_pin_nvme_ops: times blk_ops_size db 0

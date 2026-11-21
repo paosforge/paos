@@ -1,6 +1,6 @@
 ;; MODULE core/smp
 ;; LAYER 1
-;; EXPORTS smp_cpu_report_copy, smp_timer_initial_count, smp_matmul, cpu_pf_matmul_units, smp_core_custody_acquire_native_guarded, smp_core_custody_check_native_guarded, smp_core_custody_release_native_guarded, smp_core_custody_check_gang_member, smp_core_custody_acquire_intel_absent, smp_core_custody_check_intel_absent, smp_core_custody_release_intel_absent, smp_core_custody_acquire_svm, smp_core_custody_svm_prepare, smp_core_custody_svm_check, smp_core_custody_svm_transfer, smp_core_custody_svm_land, smp_core_custody_svm_host, smp_core_custody_release_svm, smp_core_custody_acquire, smp_core_custody_check, smp_core_custody_release, smp_core_custody_gate, smpwork_async_results, smp_idle_observation_snapshot, smp_par_begin, smp_par_begin_single, smp_pc_cpu_chunks, smp_pc_finished_us, smp_par_step, smp_par_status, smp_par_cancel, smp_par_release, smpwork_async_begin, smpwork_async_step, smpwork_async_take, smpwork_async_cancel, smpwork_async_status, smpwork_async_detail, smpwork_async_progress, smp_par_for, smp_par_for_retired, smp_pf_bench, smp_pf_bench_observation, smp_bsp_idle_hlt, smp_bsp_hlt_tsc, smp_bsp_hlt_count, smp_idle_enter, smp_idle_hint, smp_idle_io_base, smp_idle_irq_refusals, smp_idle_mwait_count, smp_idle_hlt_count, smp_idle_cpu_state, smp_idle_cpu_edx5, smp_selftest, smp_msr_apply_aps, smp_msr_read_aps, smp_msr_req_rd_val, smp_msr_req_rd_c5, smp_msr_req_rd_type, smpwork_snapshot, smp_command_register_verb, smp_frequency_snapshot_validate, smp_lapic_detect_mode, smp_lapic_read32, smp_lapic_write32, smp_lapic_read_id, smp_current_logical, smp_preempt_global_init, smp_preempt_set_bsp_initial, smp_preempt_init_local, smp_preempt_timer_restore_bsp, smp_preempt_send_kicks, smp_preempt_send_resched_one, smp_mapping_update_begin, smp_mapping_update_commit, smp_coherence_prepare_mode, smp_lock_collision_selftest, smp_fault_concurrent_selftest, smp_tlb_coherence_selftest, smp_coherence_expected, smp_coherence_actual, smp_coherence_double_run, smp_coherence_lost, smp_fault_isolated, smp_faults_last_contained, smp_tlb_epoch, smp_tlb_requested, smp_tlb_acked, smp_stale_mapping, smp_irq_entries, smp_irq_eois, smp_irq_duplicate_eoi, smp_irq_ownership_faults, smp_timer_post_dcr, smp_timer_post_lvt, smp_timer_post_icr, smp_timer_post_current, smp_timer_irq0_before, smp_timer_preempt0_before, smp_timer_restore_seq, smp_timer_restore_ok, smp_halt_wait_us, smp_topology_online, smp_bsp_tick_handover, smp_bsp_tick_lease_begin, smp_bsp_tick_lease_end, smp_bsp_tick_owner
+;; EXPORTS smp_cpu_report_copy, smp_timer_initial_count, smp_matmul, cpu_pf_matmul_units, smp_core_custody_acquire_native_guarded, smp_core_custody_check_native_guarded, smp_core_custody_release_native_guarded, smp_core_custody_check_gang_member, smp_core_custody_acquire_intel_absent, smp_core_custody_check_intel_absent, smp_core_custody_release_intel_absent, smp_core_custody_acquire_svm, smp_core_custody_svm_prepare, smp_core_custody_svm_check, smp_core_custody_svm_transfer, smp_core_custody_svm_land, smp_core_custody_svm_host, smp_core_custody_release_svm, smp_core_custody_acquire, smp_core_custody_check, smp_core_custody_release, smp_core_custody_gate, smpwork_async_results, smp_idle_observation_snapshot, smp_par_begin, smp_par_begin_single, smp_pc_cpu_chunks, smp_pc_finished_us, smp_par_step, smp_par_status, smp_par_cancel, smp_par_release, smpwork_async_begin, smpwork_async_begin_hold, smpwork_async_step, smpwork_async_take, smpwork_async_cancel, smpwork_async_status, smpwork_async_detail, smpwork_async_progress, smp_par_for, smp_par_for_retired, smp_pf_bench, smp_pf_bench_observation, smp_bsp_idle_hlt, smp_bsp_hlt_tsc, smp_bsp_hlt_count, smp_idle_enter, smp_idle_hint, smp_idle_io_base, smp_idle_irq_refusals, smp_idle_mwait_count, smp_idle_hlt_count, smp_idle_cpu_state, smp_idle_cpu_edx5, smp_selftest, smp_msr_apply_aps, smp_msr_read_aps, smp_msr_req_rd_val, smp_msr_req_rd_c5, smp_msr_req_rd_type, smpwork_snapshot, smp_command_register_verb, smp_frequency_snapshot_validate, smp_lapic_detect_mode, smp_lapic_read32, smp_lapic_write32, smp_lapic_read_id, smp_current_logical, smp_preempt_global_init, smp_preempt_set_bsp_initial, smp_preempt_init_local, smp_preempt_timer_restore_bsp, smp_preempt_send_kicks, smp_preempt_send_resched_one, smp_mapping_update_begin, smp_mapping_update_commit, smp_coherence_prepare_mode, smp_lock_collision_selftest, smp_fault_concurrent_selftest, smp_tlb_coherence_selftest, smp_coherence_expected, smp_coherence_actual, smp_coherence_double_run, smp_coherence_lost, smp_fault_isolated, smp_faults_last_contained, smp_tlb_epoch, smp_tlb_requested, smp_tlb_acked, smp_stale_mapping, smp_irq_entries, smp_irq_eois, smp_irq_duplicate_eoi, smp_irq_ownership_faults, smp_timer_post_dcr, smp_timer_post_lvt, smp_timer_post_icr, smp_timer_post_current, smp_timer_irq0_before, smp_timer_preempt0_before, smp_timer_restore_seq, smp_timer_restore_ok, smp_halt_wait_us, smp_topology_online, smp_bsp_tick_handover, smp_bsp_tick_lease_begin, smp_bsp_tick_lease_end, smp_bsp_tick_owner
 ;; IMPORTS core/mca_cmci, core/mca_poll, core/mca_init, boot/serial, boot/smbios, boot/gdt, boot/paging, boot/pmod_loader, core/lib/fmt, core/time, core/idt, core/heap, core/lock, core/sched, core/smp_audit, boot/indicator, sec/cpu_security_percpu, sec/cpu_microcode_percpu, sec/cpu_microcode_boot, sec/cpu_microcode_bsp_checked, sec/cpu_idle_tsa, core/normal_deadman
 ;; CAPS
 ;; OWNER saga:core
@@ -9,7 +9,7 @@
 %define PAOS_NORMAL_DEADMAN_MS 0
 %endif
 ;; LOCK: rq_locks[logical] PROTECTS run_queue_per_core[logical], coremap_counts[logical], smpwork_worker_epoch[logical], smpwork_worker_token[logical], smpwork_worker_runs[logical], smpwork_worker_published_us[logical]
-;; LOCK: smp_state_lock PROTECTS cpu_state(AP startup transitions), smp_failed_count(AP startup transitions), smp_late_ap_mask(AP startup transitions), smp_late_ap_count(AP startup transitions), cpu_timer_ready(late-AP withdrawal on FAILED rows), cpu_runq_ready(late-AP withdrawal on FAILED rows), smp_topology_online(AP startup transitions), smp_online_aps, smpwork_online_mask, smpwork_challenge, smpwork_requested_epoch, smpwork_expected_workers, smpwork_expected_mask, smpwork_snapshot_challenge, smpwork_snapshot_epoch, smpwork_snapshot_workers, smpwork_async_phase, smpwork_async_generation, smpwork_async_source, smpwork_async_principal, smpwork_async_nonce, smpwork_async_epoch, smpwork_async_mask, smpwork_async_expected, smpwork_async_start, smpwork_async_last, smpwork_async_deadline, smpwork_async_expiry, smpwork_async_result, smpwork_worker_published_us
+;; LOCK: smp_state_lock PROTECTS cpu_state(AP startup transitions), smp_failed_count(AP startup transitions), smp_late_ap_mask(AP startup transitions), smp_late_ap_count(AP startup transitions), cpu_timer_ready(late-AP withdrawal on FAILED rows), cpu_runq_ready(late-AP withdrawal on FAILED rows), smp_topology_online(AP startup transitions), smp_online_aps, smpwork_online_mask, smpwork_challenge, smpwork_requested_epoch, smpwork_expected_workers, smpwork_expected_mask, smpwork_snapshot_challenge, smpwork_snapshot_epoch, smpwork_snapshot_workers, smpwork_async_phase, smpwork_async_generation, smpwork_async_source, smpwork_async_principal, smpwork_async_nonce, smpwork_async_epoch, smpwork_async_mask, smpwork_async_expected, smpwork_async_start, smpwork_async_last, smpwork_async_deadline, smpwork_async_expiry, smpwork_async_hold_until, smpwork_async_result, smpwork_worker_published_us
 ;; LOCK: smp_coherence_counter_lock PROTECTS smp_coherence_counter
 ;; LOCK: smp_core_custody_gate PROTECTS smp_cc_generation, smp_cc_request, smp_cc_release, smp_cc_departed, smp_cc_members, smp_cc_owner_apic, smp_cc_svm_mode, smp_cc_svm_ready, smp_cc_svm_failed, smp_cc_svm_phase, smp_cc_svm_guard, smp_cc_intel_guard, smp_cc_intel_token
 ;; LOCK: smp_mapping_lock PROTECTS smp_mapping_target, smp_mapping_owner, smp_mapping_required_mask, smp_quiesce_ack_mask, smp_tlb_ack_mask, smp_tlb_epoch, smp_release_epoch
@@ -81,8 +81,11 @@ SMPWORK_ASYNC_COUNTER     equ 8
 SMPWORK_ASYNC_TOPOLOGY    equ 9
 SMPWORK_ASYNC_SYNC        equ 10
 SMPWORK_ASYNC_FROZEN      equ 11
+SMPWORK_ASYNC_MALFORMED   equ 12      ; same code command_smp uses for a grammar refusal
+SMPWORK_ASYNC_NOT_CANCELLED equ 13    ; cancel refused: the work had already frozen
 SMPWORK_ASYNC_WAIT_US     equ 100000
 SMPWORK_ASYNC_RETAIN_US   equ 1000000
+SMPWORK_ASYNC_HOLD_MAX_MS equ 5000    ; hard cap on a held (cancellable) BEGIN
 SMPWORK_WAIT_STEPS        equ 2000
 IA32_APIC_BASE_MSR        equ 0x1B
 X2APIC_MSR_BASE           equ 0x800
@@ -5874,7 +5877,11 @@ smpwork_snapshot:
 
 ; Cooperative snapshot service. All APIs preserve SysV callee-saved registers.
 ; Begin(source64 RDI, principal64 RSI, challenge32 EDX) -> EAX status,
-; RDX generation64 only on PENDING (zero on refusal). The source/principal
+; RDX generation64 only on PENDING (zero on refusal).
+; BeginHold(same, ECX hold_ms 1..SMPWORK_ASYNC_HOLD_MAX_MS) admits the same
+; work but keeps it PENDING (cancellable) until start+hold even after every AP
+; published; its publication window and retention grow by the hold. Any other
+; ECX is MALFORMED before any slot change. Plain Begin is hold 0. The source/principal
 ; must come from the dispatch request, never a mutable "last caller" cell.
 ; Step() -> EAX status: one try-lock, one scan and at most one 32-row copy.
 ; Take/cancel/status(source RDI, principal RSI, challenge EDX, generation RCX) require
@@ -5890,13 +5897,29 @@ smpwork_async_try_lock:
     pop  rdi
     ret
 
+smpwork_async_begin_hold:
+    test ecx, ecx
+    jz   .malformed
+    cmp  ecx, SMPWORK_ASYNC_HOLD_MAX_MS
+    ja   .malformed
+    jmp  smpwork_async_begin.held
+.malformed:
+    mov  eax, SMPWORK_ASYNC_MALFORMED
+    xor  edx, edx
+    ret
+
 smpwork_async_begin:
+    xor  ecx, ecx                         ; plain BEGIN: no hold
+.held:                                    ; ECX = validated hold ms
     push r12
     push r13
     push r14
+    push r15
+    sub  rsp, 8                           ; keep the original call alignment
     mov  r12, rdi
     mov  r13, rsi
     mov  r14d, edx
+    mov  r15d, ecx
     call smpwork_async_step               ; includes abandoned-slot expiry
     call smpwork_async_try_lock
     test eax, eax
@@ -5912,6 +5935,15 @@ smpwork_async_begin:
     mov  r9, rax
     add  r9, SMPWORK_ASYNC_WAIT_US
     jc   .clock
+    imul r11, r15, 1000                   ; hold us, at most 5e6: no overflow
+    add  r8, r11                          ; retention follows the hold
+    jc   .clock                           ; covers hold end too: expiry >= it
+    mov  r10, rax
+    add  r10, r11                         ; hold end (start when no hold)
+    cmp  r9, r10
+    jae  .window
+    mov  r9, r10                          ; publication window covers the hold
+.window:
     cmp  qword [rel smpwork_async_generation], -1
     je   .counter
     mov  edx, [rel smpwork_requested_epoch]
@@ -5934,6 +5966,7 @@ smpwork_async_begin:
     mov  [rel smpwork_async_last], rax
     mov  [rel smpwork_async_deadline], r9
     mov  [rel smpwork_async_expiry], r8
+    mov  [rel smpwork_async_hold_until], r10
     mov  [rel smpwork_async_source], r12
     mov  [rel smpwork_async_principal], r13
     mov  [rel smpwork_async_nonce], r14d
@@ -5983,6 +6016,8 @@ smpwork_async_begin:
     mov  eax, SMPWORK_ASYNC_BUSY
     xor  edx, edx
 .out:
+    add  rsp, 8
+    pop  r15
     pop  r14
     pop  r13
     pop  r12
@@ -6036,7 +6071,10 @@ smpwork_async_step:
     cmp  ebx, MAXCORE
     jb   .scan
     cmp  r13d, [rel smpwork_async_expected]
-    je   .freeze
+    jne  .wait
+    cmp  r12, [rel smpwork_async_hold_until] ; all published: freeze once any hold ends
+    jae  .freeze
+.wait:
     cmp  r12, [rel smpwork_async_deadline]
     jae  .freeze
     mov  eax, SMPWORK_ASYNC_PENDING
@@ -6410,6 +6448,11 @@ smpwork_async_cancel:
     jz   smpwork_async_busy
     call smpwork_async_owned
     jc   smpwork_async_stale
+    ; Frozen work already finished: keep its result/rows for TAKE and RESULTS
+    ; and refuse, rather than report a cancellation that did not happen.
+    mov  eax, SMPWORK_ASYNC_NOT_CANCELLED
+    cmp  dword [rel smpwork_async_phase], SMPWORK_ASYNC_FROZEN
+    je   smpwork_async_return
     mov  dword [rel smpwork_async_result], SMPWORK_ASYNC_CANCELLED
     mov  dword [rel smpwork_async_phase], SMPWORK_ASYNC_IDLE
     mov  eax, SMPWORK_ASYNC_CANCELLED
@@ -10213,6 +10256,7 @@ smpwork_async_start: dq 0
 smpwork_async_last: dq 0
 smpwork_async_deadline: dq 0
 smpwork_async_expiry: dq 0
+smpwork_async_hold_until: dq 0            ; held BEGIN stays PENDING before this
 smpwork_worker_published_us: times MAXCORE dq 0
 smpwork_snapshot_challenge: dd 0           ; frozen response header
 smpwork_snapshot_epoch:     dd 0

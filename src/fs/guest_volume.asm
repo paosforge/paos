@@ -1100,6 +1100,9 @@ guest_volume_mount_allowed:
     lea rax,[rel fd_ro_ops]
     cmp rdi,rax
     je .ctx
+    lea rax,[rel fd_gesp_ops]             ; the guest-pair boot-ESP handle (root 119659): same dev check
+    cmp rdi,rax
+    je .ctx
     lea rax,[rel fd_selected_ops]
     cmp rdi,rax
     je .ctx

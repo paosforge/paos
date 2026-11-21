@@ -1,6 +1,6 @@
 ;; MODULE fs/vfs
 ;; LAYER 4
-;; EXPORTS vfs_info_facts, vfs_register_guest_source, vfs_open_guest_source, vfs_guest_source_hint, vfs_copy_partial_snapshot, vfs_copy_partial_ready, vfs_builtin_census, vfs_mount_usage, vfs_select_fat_ro_exact, vfs_select_ntfs_exact, vfs_write_generation, vfs_copy_busy, vfs_dirent_name, vfs_dirent_set_long_name, vfs_selftest, vfs_init, vfs_register_mount, vfs_mount_ptr, vfs_writefile, vfs_update, vfs_rename, vfs_readfile, vfs_delete, vfs_stat, vfs_read_at, vfs_info, vfs_list_root, vfs_path_to_name11, vfs_path_stat, vfs_readfile_path, vfs_write_at, vfs_select_disk_by_name, vfs_stat_path, vfs_read_at_path, vfs_write_at_path, vfs_list_dir, vfs_mutate_path, vfs_copy_start, vfs_copy_start_mode, vfs_copy_enqueue, vfs_copy_tick, vfs_copy_cancel, vfs_copy_status, vfs_copy_note_recovery, vfs_copy_recovery, vfs_copy_refusal, vfs_copy_stamp_hook, vfs_copy_session_sweep, vfs_copy_dropped_status, vfs_file_extents, vfs_file_extents_current, vfs_open_boot_esp, vfs_copy_start_between, vfs_ntfs_selection_state, vfs_copy_snapshot, vfs_copy_current, vfs_copy_item_note, vfs_copy_paths, vfs_copy_progress, vfs_copy_fail_note, vfs_copy_begin_failure, vfs_copy_source_note, vfs_copy_fail_entry, vfs_copy_check, vfs_copy_check_issue, vfs_check, vfs_list_skip, vfs_copy_scan, vfs_copy_scan_issue, vfs_copy_wait_note, vfs_copy_wait_entry, vfs_copy_answer, vfs_copy_policy_ptr, vfs_copy_differs, vfs_ask_job, vfs_ask_phase, vfs_ask_answer, vfs_ask_n, vfs_dos_to_unix, vfs_mtime_older
+;; EXPORTS vfs_info_facts, vfs_register_guest_source, vfs_register_guest_esp, vfs_open_guest_source, vfs_open_guest_esp, vfs_guest_pair_state, vfs_guest_source_hint, vfs_copy_partial_snapshot, vfs_copy_partial_ready, vfs_builtin_census, vfs_mount_usage, vfs_select_fat_ro_exact, vfs_select_ntfs_exact, vfs_write_generation, vfs_copy_busy, vfs_dirent_name, vfs_dirent_set_long_name, vfs_selftest, vfs_init, vfs_register_mount, vfs_mount_ptr, vfs_writefile, vfs_update, vfs_rename, vfs_readfile, vfs_delete, vfs_stat, vfs_read_at, vfs_info, vfs_list_root, vfs_path_to_name11, vfs_path_stat, vfs_readfile_path, vfs_write_at, vfs_select_disk_by_name, vfs_stat_path, vfs_read_at_path, vfs_write_at_path, vfs_list_dir, vfs_mutate_path, vfs_copy_start, vfs_copy_start_mode, vfs_copy_enqueue, vfs_copy_tick, vfs_copy_cancel, vfs_copy_status, vfs_copy_note_recovery, vfs_copy_recovery, vfs_copy_refusal, vfs_copy_stamp_hook, vfs_copy_session_sweep, vfs_copy_dropped_status, vfs_file_extents, vfs_file_extents_current, vfs_open_boot_esp, vfs_copy_start_between, vfs_ntfs_selection_state, vfs_copy_snapshot, vfs_copy_current, vfs_copy_item_note, vfs_copy_paths, vfs_copy_progress, vfs_copy_fail_note, vfs_copy_begin_failure, vfs_copy_source_note, vfs_copy_fail_entry, vfs_copy_check, vfs_copy_check_issue, vfs_check, vfs_list_skip, vfs_copy_scan, vfs_copy_scan_issue, vfs_copy_wait_note, vfs_copy_wait_entry, vfs_copy_answer, vfs_copy_policy_ptr, vfs_copy_differs, vfs_ask_job, vfs_ask_phase, vfs_ask_answer, vfs_ask_n, vfs_dos_to_unix, vfs_mtime_older
 ;; IMPORTS boot/serial, boot/header, boot/nvram_access, core/lib/mem, core/lib/fmt, core/lib/sha256, core/heap, fs/blockdev, fs/fat32_disk, fs/ntfs_disk, fs/ext4_disk, fs/data_crypto_store, fs/guest_volume, fs/vfs_copy_service, fs/fs_format
 ;; CAPS
 ;; OWNER saga:vfs_fat_seam
@@ -840,6 +840,13 @@ vfs_mount_usage:
 vfs_register_guest_source:
     lea  rdi, [rel fd_guest_ops]
     lea  rsi, [rel fd_guest_ctx]
+    xor  edx, edx
+    jmp  vfs_register_mount.read_only
+
+; The guest-pair scoped boot-ESP handle: the same fixed unnamed RO registration.
+vfs_register_guest_esp:
+    lea  rdi, [rel fd_gesp_ops]
+    lea  rsi, [rel fd_gesp_ctx]
     xor  edx, edx
     jmp  vfs_register_mount.read_only
 
@@ -5602,6 +5609,17 @@ vfs_open_boot_esp:
 ; artifact identity, this API supplies location only. Same GUID cached once.
 vfs_open_guest_source:
     jmp fat32_disk_guest_source_open
+
+; BSP/non-reentrant. The guest-pair consumer's boot-ESP open (hv_guest_files_begin only):
+; the boot-ESP GUID scan with the scoped fault rule on its own unnamed RO handle; never the
+; shared vfs_open_boot_esp handle. Location only: the signed VM profile pins every byte.
+vfs_open_guest_esp:
+    jmp fat32_disk_guest_esp_open
+
+; vfs_guest_pair_state(EDI = 0 boot-ESP pair scan / 1 SOURCE.BIN scan) -> EAX = its last FD_PAIR_*,
+;   RDX = its faulting medium's kept name ("-" = none). Values only, for GUESTVM STAT (root 119659).
+vfs_guest_pair_state:
+    jmp fat32_disk_pair_report_state
 
 ; EDI=existing bootESP RO handle, RSI=path, EDX=len, RCX=64B output.
 ; 0 exact64, 1 proven complete absence, -1 every other failure.

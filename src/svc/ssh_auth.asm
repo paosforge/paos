@@ -1373,6 +1373,9 @@ cmd_verb_sshkeyadd:
     mov  r14, rdi
     mov  r12, [rdi + REQ_ARG]
     call ssh_keyverb_out_begin
+    call principal_owner_change_ready
+    test eax, eax
+    jz .pending_owner
     mov  rdi, r14
     call ssh_keyverb_owner_signed
     test eax, eax
@@ -1498,6 +1501,10 @@ cmd_verb_sshkeyadd:
     mov  rdi, r15
     call ssh_keyverb_finish_ok
     jmp  .out
+.pending_owner:
+    lea rdi, [rel str_sshkey_pending_owner]
+    call ssh_txt_put_str
+    jmp .err
 .need_auth1:
     lea  rdi, [rel str_sshkeyadd_need_auth1]
     call ssh_txt_put_str
@@ -1547,6 +1554,9 @@ cmd_verb_sshkeydel:
     mov  r13, rsi
     mov  r12, rdi
     call ssh_keyverb_out_begin
+    call principal_owner_change_ready
+    test eax, eax
+    jz .pending_owner
     mov  rdi, r12
     call ssh_keyverb_owner_signed
     test eax, eax
@@ -1589,6 +1599,10 @@ cmd_verb_sshkeydel:
     mov  rdi, r13
     call ssh_keyverb_finish_ok
     jmp  .out
+.pending_owner:
+    lea rdi, [rel str_sshkey_pending_owner]
+    call ssh_txt_put_str
+    jmp .err
 .need_auth1:
     lea  rdi, [rel str_sshkeydel_need_auth1]
     call ssh_txt_put_str
@@ -2554,6 +2568,7 @@ str_ssh_audit_rc:        db " rc=",0
 str_ssh_audit_argb:      db " argb=",0
 str_ssh_audit_verb:      db " ",0
 str_ssh_kat_audit_expect: db "SSH auth=refused reason=bad_signature fp=SHA256:bbXpuKG6zhzdmnxq x5",0
+str_sshkey_pending_owner: db "Available after PaOS next starts",0
 str_sshkeyadd_ok:        db "SSHKEYADD ok slot=",0
 str_sshkeyadd_exists:    db "SSHKEYADD exists slot=",0
 str_sshkey_fp:           db " fingerprint=SHA256:",0

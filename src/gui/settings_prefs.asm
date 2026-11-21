@@ -1,6 +1,6 @@
 ;; MODULE gui/settings_prefs
 ;; LAYER 6
-;; EXPORTS settings_prefs_show, settings_prefs_click, settings_prefs_key, settings_prefs_tick, stp_ids, stp_slot, stp_live, stp_pending
+;; EXPORTS settings_prefs_show, settings_prefs_click, settings_prefs_key, settings_prefs_tick, stp_ids, stp_slot, stp_live, stp_pending, stp_page
 ;; IMPORTS gui/widget, gui/wm_pointer, gui/window, gui/command_gui, gui/clock_prefs, gui/kbd_prefs, gui/lang_prefs, gui/config_prefs, gui/input_route, sec/session, sec/principal, svc/command, svc/command_auth, dev/input/ps2, gui/form_loader
 ;; CAPS CAP_GUI
 ;; OWNER saga:msi_start_programs_settings
@@ -76,7 +76,27 @@ STP_W_APPS      equ 9                   ; declared last, so 0..8 keep
 STP_W_UPDATES   equ 10                  ; settings_updates' entry (not used here)
 STP_W_NAME      equ 11                  ; Peter 107784: computer name, read-only
 STP_W_ABOUT     equ 12                  ; opens the existing About this PC (form 3)
-STP_W_COUNT     equ 13
+STP_W_NAV0      equ 13                  ; T5-14.C4a: the sidebar, nav_0..nav_11, appended so 0..12 keep
+STP_W_TITLE     equ 25                  ; names the page shown
+STP_W_LATER     equ 26                  ; "Coming later": the pages with no 0.1 controls
+STP_W_TERMINAL_NET equ 27              ; AV: opens the Terminal network editor (form STNC_FORM); Network page
+STP_W_BADGE     equ 28                  ; T5-14.U7's update-ready slot: hidden at open, its owner shows it
+STP_W_PAGED     equ 28                  ; 0..27 follow the page mask; the badge (declared last) never does
+STP_W_COUNT     equ 29
+STP_PAGES       equ 12                  ; section 21.2.6 order (stp_page_names)
+STP_PAGE_SYSTEM equ 0                   ; shown at open
+STP_PAGE_NETWORK equ 2                  ; AV: Terminal network
+STP_PAGE_APPS   equ 4
+STP_PAGE_TIME   equ 7                   ; Time and language: the preferences
+STP_PAGE_UPDATES equ 11
+STP_PG_SYSTEM   equ 1 << STP_PAGE_SYSTEM
+STP_PG_NETWORK  equ 1 << STP_PAGE_NETWORK
+STP_PG_APPS     equ 1 << STP_PAGE_APPS
+STP_PG_TIME     equ 1 << STP_PAGE_TIME
+STP_PG_UPDATES  equ 1 << STP_PAGE_UPDATES
+STP_PG_ALL      equ (1 << STP_PAGES) - 1
+STP_PG_LATER    equ STP_PG_ALL & ~(STP_PG_SYSTEM | STP_PG_NETWORK | STP_PG_APPS | STP_PG_TIME | STP_PG_UPDATES)
+STP_PAGE_NAME_SZ equ 24                 ; stp_page_names stride
 STP_LANG_LAST   equ 3                   ; rows 0..3 = lang_prefs ordinals en, es, fr, de
 STP_LANG_TAG_LEN equ 2                  ; stp_lang_tags slot, passed as the tag length
 STP_LANG_NONE   equ 2                   ; no select call (lang_prefs_select answers 1..-4)
@@ -91,26 +111,23 @@ STP_CANCEL      equ 2
 STP_RESET       equ 3
 STP_APPS        equ 4
 STP_ABOUT       equ 5
+STP_PAGE        equ 6                   ; T5-14.C4a: a sidebar entry; stp_page_new is the page
 
-;; settings_prefs_show(): the Settings window was just opened or raised. Its
-;; list marks the zone in force, the status line names it, and the keyboard
-;; rests on Apply (a form without a text field has no focus of its own, so its
-;; keys would be dropped). Needs stp_live.
+;; settings_prefs_show(): the Settings window was just opened or raised. It
+;; opens on the System page (T5-14.C4a) with the keyboard on that sidebar entry
+;; (a form without a text field has no focus of its own, so its keys would be
+;; dropped). The list marks the zone in force and the status line names it.
+;; Needs stp_live.
 settings_prefs_show:
     cmp  byte [rel stp_live], 1
     jne  .out
     call stp_unpin                      ; a re-created form starts with no pick
     mov  byte [rel stp_pending], STP_NONE
-    mov  eax, [rel stp_ids + STP_W_APPLY*4]
-    mov  ecx, [rel stp_slot]
-    lea  rdx, [rel wgt_focus_by_win]
-    mov  [rdx + rcx*4], eax
-    cmp  ecx, [rel wm_focus]
-    jne  .focused
-    mov  [rel wgt_focus_id], eax
-.focused:
-    mov  edi, eax
-    call wgt_draw_id
+    mov  edi, [rel stp_ids + STP_W_BADGE*4]
+    call wgt_slot_ptr
+    and  dword [rax + WGI_FLAGS], ~1    ; U7's slot starts hidden; only its owner shows it
+    mov  eax, STP_PAGE_SYSTEM
+    call stp_page_show
     call about_device_name_line         ; Peter 107784: read-only, top of Settings
     mov  edi, [rel stp_ids + STP_W_NAME*4]
     mov  rsi, rax
@@ -132,6 +149,21 @@ settings_prefs_click:
     jne  .out
     cmp  byte [rel session_locked], SESSION_LOCKED
     je   .out
+    cmp  edi, [rel wgt_count]
+    jae  .out
+    push rdi
+    call wgt_slot_ptr
+    pop  rdi
+    test dword [rax + WGI_FLAGS], 1
+    mov  eax, 0
+    jz   .out                           ; T5-14.C4a: a control of another page takes no press
+    lea  rdx, [rel stp_ids + STP_W_NAV0*4]
+    mov  ecx, STP_PAGES - 1
+.nav:
+    cmp  edi, [rdx + rcx*4]
+    je   .page
+    dec  ecx
+    jns  .nav
     cmp  edi, [rel stp_ids + STP_W_KBD*4]
     je   .kbd_click
     cmp  edi, [rel stp_ids + STP_W_LANG*4]
@@ -145,6 +177,11 @@ settings_prefs_click:
     cmp  edi, [rel stp_ids + STP_W_ABOUT*4]
     jne  .buttons
     mov  byte [rel stp_pending], STP_ABOUT ; only opens a read-only window
+    mov  eax, 1
+    ret
+.page:
+    mov  [rel stp_page_new], cl         ; any origin, as Apps/About: it only changes which
+    mov  byte [rel stp_pending], STP_PAGE ; controls show (SEC R1 K2 still keeps injected keys off it)
     mov  eax, 1
     ret
 .buttons:
@@ -229,6 +266,12 @@ settings_prefs_key:
     je   .pressed
     jmp  .taken
 .human:
+    cmp  r12d, GUI_KEY_ENTER
+    je   .pressed
+    cmp  r12d, ' '
+    je   .pressed
+    cmp  byte [rel stp_page], STP_PAGE_TIME
+    jne  .no                            ; T5-14.C4a: the lists' keys only where the lists show
     cmp  r12d, GUI_KEY_UP
     je   .up
     cmp  r12d, GUI_KEY_DOWN
@@ -241,10 +284,7 @@ settings_prefs_key:
     je   .pgup
     cmp  r12d, GUI_KEY_PGDN
     je   .pgdn
-    cmp  r12d, GUI_KEY_ENTER
-    je   .pressed
-    cmp  r12d, ' '
-    jne  .no
+    jmp  .no
 .pressed:
     cmp  ebx, [rel stp_ids + STP_W_KBD*4]
     je   .no                            ; L2-F3: a key on the list is not a pointer pick
@@ -337,6 +377,8 @@ settings_prefs_tick:
     je   .apps
     cmp  eax, STP_ABOUT
     je   .about
+    cmp  eax, STP_PAGE
+    je   .page
     cmp  byte [rel command_auth_remote_active], 0
     jne  .wait                          ; never inside a remote request: later
     push rax
@@ -468,9 +510,65 @@ settings_prefs_tick:
     call stp_kbd_mark_in_force
     lea  rsi, [rel stp_s_unchanged]
     jmp  stp_say_zone
+.page:
+    call sp_disarm_settings             ; SEC R1 F1: arming ignores visibility, so a switch never
+    movzx eax, byte [rel stp_page_new]  ; reveals an Apply/Reset armed while hidden
+    jmp  stp_page_show
 .wait:
     mov  [rel stp_pending], al          ; the same action, on a later tick
 .out:
+    ret
+
+;; stp_page_show(EAX = page 0..STP_PAGES-1): T5-14.C4a. That page's controls
+;; shown and every other paged control hidden (WGI_FLAGS bit 0: not painted,
+;; hit, focused or listed), the title names it, and the keyboard moves to Apply
+;; on Time and language (as at open before the sidebar) or to the page's own
+;; sidebar entry, never onto a hidden control. Then the desktop repaints.
+stp_page_show:
+    push rbx
+    push r12
+    mov  r12d, eax
+    mov  [rel stp_page], al
+    xor  ebx, ebx
+.next:
+    lea  rax, [rel stp_ids]
+    mov  edi, [rax + rbx*4]
+    cmp  edi, [rel wgt_count]
+    jae  .skip
+    call wgt_slot_ptr
+    lea  rcx, [rel stp_page_mask]
+    movzx ecx, word [rcx + rbx*2]
+    bt   ecx, r12d
+    jc   .shown
+    and  dword [rax + WGI_FLAGS], ~1
+    jmp  .skip
+.shown:
+    or   dword [rax + WGI_FLAGS], 1
+.skip:
+    inc  ebx
+    cmp  ebx, STP_W_PAGED
+    jb   .next
+    imul esi, r12d, STP_PAGE_NAME_SZ
+    lea  rax, [rel stp_page_names]
+    add  rsi, rax
+    mov  edi, [rel stp_ids + STP_W_TITLE*4]
+    call wgt_set_text
+    mov  eax, [rel stp_ids + STP_W_APPLY*4]
+    cmp  r12d, STP_PAGE_TIME
+    je   .focus
+    lea  rax, [rel stp_ids + STP_W_NAV0*4]
+    mov  eax, [rax + r12*4]
+.focus:
+    mov  ecx, [rel stp_slot]
+    lea  rdx, [rel wgt_focus_by_win]
+    mov  [rdx + rcx*4], eax
+    cmp  ecx, [rel wm_focus]
+    jne  .focused
+    mov  [rel wgt_focus_id], eax
+.focused:
+    call wmx_draw_all
+    pop  r12
+    pop  rbx
     ret
 
 ; stp_zone_row -> EAX the list row of the zone in force.
@@ -501,6 +599,7 @@ stp_mark_row:
     mov  edi, [rel stp_ids + STP_W_ZONE*4]
     call wgt_slot_ptr
     mov  [rax + WGI_SEL_LO], ebx
+    mov  [rax + WGI_SEL_HI], ebx        ; one row: WIDGETGET sel answers r,r, which WIDGETSET takes
     mov  edi, [rel stp_ids + STP_W_ZONE*4]
     call wgt_draw_id
     pop  rbx
@@ -585,6 +684,7 @@ stp_kbd_mark:
     mov  edi, [rel stp_ids + STP_W_KBD*4]
     call wgt_slot_ptr
     mov  [rax + WGI_SEL_LO], ebx
+    mov  [rax + WGI_SEL_HI], ebx        ; one row: WIDGETGET sel answers r,r, which WIDGETSET takes
     mov  edi, [rel stp_ids + STP_W_KBD*4]
     call wgt_draw_id
     pop  rbx
@@ -715,6 +815,7 @@ stp_lang_mark:
     mov  edi, [rel stp_ids + STP_W_LANG*4]
     call wgt_slot_ptr
     mov  [rax + WGI_SEL_LO], ebx
+    mov  [rax + WGI_SEL_HI], ebx        ; one row: WIDGETGET sel answers r,r, which WIDGETSET takes
     mov  edi, [rel stp_ids + STP_W_LANG*4]
     call wgt_draw_id
     pop  rbx
@@ -843,6 +944,53 @@ stp_s_plus:        db "+", 0
 stp_s_minus:       db "-", 0
 stp_s_colon:       db ":", 0
 
+; T5-14.C4a: which pages show each paged control (bit n = page n), in
+; declaration order 0..STP_W_PAGED-1. The status line also shows on System
+; (the zone in force, read there by the Start search producer) and on Apps (an
+; Apps/About refusal is said there).
+stp_page_mask:
+    dw STP_PG_SYSTEM                    ; facts
+    dw STP_PG_TIME                      ; Preferences heading
+    dw STP_PG_SYSTEM | STP_PG_APPS | STP_PG_TIME ; status line
+    dw STP_PG_TIME                      ; zone
+    dw STP_PG_TIME                      ; Apply
+    dw STP_PG_TIME                      ; Cancel
+    dw STP_PG_TIME                      ; Reset
+    dw STP_PG_TIME                      ; keyboard layout
+    dw STP_PG_TIME                      ; language
+    dw STP_PG_APPS                      ; Apps
+    dw STP_PG_SYSTEM | STP_PG_UPDATES   ; Updates: Update now (U7: on the first page too)
+    dw STP_PG_SYSTEM                    ; device name
+    dw STP_PG_SYSTEM                    ; About
+    times STP_PAGES dw STP_PG_ALL       ; the sidebar
+    dw STP_PG_ALL                       ; page title
+    dw STP_PG_LATER                     ; Coming later
+    dw STP_PG_NETWORK                   ; Terminal network (AV)
+%if ($ - stp_page_mask) != STP_W_PAGED * 2
+%error "stp_page_mask: one row per paged Settings control"
+%endif
+
+%macro STP_PAGE_NAME 1
+%%name: db %1, 0
+    times STP_PAGE_NAME_SZ - ($ - %%name) db 0
+%endmacro
+stp_page_names:                         ; section 21.2.6; the sidebar's own labels in settings.frm
+    STP_PAGE_NAME "System"
+    STP_PAGE_NAME "Devices"
+    STP_PAGE_NAME "Network"
+    STP_PAGE_NAME "Personalization"
+    STP_PAGE_NAME "Apps"
+    STP_PAGE_NAME "Accounts and sign-in"
+    STP_PAGE_NAME "AI"
+    STP_PAGE_NAME "Time and language"
+    STP_PAGE_NAME "Accessibility"
+    STP_PAGE_NAME "Privacy and security"
+    STP_PAGE_NAME "Files"
+    STP_PAGE_NAME "Updates and recovery"
+%if ($ - stp_page_names) != STP_PAGES * STP_PAGE_NAME_SZ
+%error "stp_page_names: one name per page"
+%endif
+
 %include "core/abi/wdata.inc"
 %macro WDATA_gui_settings_prefs 0
 align 4, db 0
@@ -862,5 +1010,7 @@ stp_kbd_pick_row: dd -1                 ; and the row picked; -1 = none
 stp_lang_pick_row: dd -1                ; RCQ-38 L3: the language list's pin, as the layout's
 stp_lang_pick_seq: dq 0
 stp_lang_reset:   db 0                  ; set only by the tick's Reset, spent by stp_lang_apply
+stp_page:         db STP_PAGE_SYSTEM    ; T5-14.C4a: the page shown
+stp_page_new:     db 0                  ; a sidebar press's page, for the tick
 %endmacro
 WDATA_DEFER WDATA_gui_settings_prefs

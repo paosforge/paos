@@ -1300,6 +1300,9 @@ fs_format_mount_allowed:
     lea  rax, [rel fd_guest_ops]
     cmp  rdi, rax
     je   .ctx
+    lea  rax, [rel fd_gesp_ops]
+    cmp  rdi, rax
+    je   .ctx
     lea  rax, [rel ext_ops]
     cmp  rdi, rax
     je   .ctx

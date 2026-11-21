@@ -2314,9 +2314,9 @@ vtd_scoped_snapshot_ok:
 ; secondary function is touched, its live topology goes through
 ; hv/device_assignment's builder and classifier; any refusal (shared, aliased,
 ; RMRR, protected peer, no IOMMU, incomplete facts) keeps it host-owned and is
-; reported by VTD POLICY. Config access is mechanism #1 (256 bytes per
-; function), so the ACS extended capability is unreadable here: every port
-; counts as ACS-less, which only widens the group (fail-closed).
+; reported by VTD POLICY. Conf1 supplies topology; native VT-d ownership
+; also permits the admitted ECAM ACS reader. Each gate takes fresh stable
+; Capability/Control bytes, with no write in the snapshot or classifier.
 ; Everything below reads config space and ACPI only.
 ; ---------------------------------------------------------------------------
 
@@ -2539,6 +2539,7 @@ vtd_iso_snapshot:
     push r12
     push r13
     push r14
+    sub  rsp, 72                         ; aligned calls and private ACS sample[64]
     xor  r12d, r12d
     xor  r13d, r13d
     mov  byte [rel vtd_iso_incomplete], 0
@@ -2590,10 +2591,43 @@ vtd_iso_snapshot:
     call pci_bdf_read
     shr  eax, 20
     and  eax, 0xF                        ; device/port type
+    mov  [r14 + 6], al                   ; private port type, not a fact flag
     cmp  eax, 7                          ; PCIe to PCI/PCI-X bridge
     je   .pci_bridge
     cmp  eax, 8                          ; PCI/PCI-X to PCIe bridge
+    je   .pci_bridge
+    test byte [r14 + 2], DA_S_BRIDGE
+    jz   .lifeline
+    cmp  byte [rel vtd_native_ready], 1
     jne  .lifeline
+    cmp  eax, 4
+    je   .acs
+    cmp  eax, 5
+    je   .acs
+    cmp  eax, 6
+    jne  .lifeline
+.acs:
+    mov  edi, ebx
+    mov  rsi, rsp
+    call pci_ecam_acs_snapshot
+    test eax, eax
+    jnz  .lifeline                      ; never use stale output on a refusal
+    mov  eax, [rsp + 8]
+    mov  edx, eax
+    and  eax, 0x1D                      ; SV | RR | CR | UF capabilities
+    cmp  eax, 0x1D
+    jne  .lifeline
+    shr  edx, 16
+    and  edx, 0x5D                      ; required controls enabled, DT disabled
+    cmp  edx, 0x1D
+    jne  .lifeline
+    mov  byte [r14 + 5], 1               ; fresh per-port proof for the NIC path
+    cmp  byte [r14 + 6], 4               ; group cuts only at a top Root Port
+    jne  .lifeline
+    test bh, bh                         ; packed BDF bus must be zero
+    jnz  .lifeline
+    or   byte [r14 + 2], DA_S_ACS
+    jmp  .lifeline
 .pci_bridge:
     or   byte [r14 + 2], DA_S_PCI_BRIDGE
 .lifeline:
@@ -2613,15 +2647,103 @@ vtd_iso_snapshot:
     mov  [rel vtd_iso_snap_n], r13d
     call vtd_iso_mark_rmrr
     mov  eax, [rel vtd_iso_snap_n]
+    add  rsp, 72
     pop  r14
     pop  r13
     pop  r12
     pop  rbx
     ret
 
+; Fresh VT-d ACS proof for one target after vtd_iso_snapshot. EDI=BDF,
+; EAX=0 only for a complete path to bus 0 with ACS on EVERY intervening
+; PCIe port. Private snapshot bytes 5/6 carry proof/type; no cached enable
+; record is consulted. Only the top Root Port receives DA_S_ACS, so the
+; existing group builder still includes all downstream DMA peers. Missing,
+; ambiguous, over-depth, malformed, absent or disabled ACS always refuses.
+; Read-only hardware; writes only this snapshot's derived DA_S_ACS flag.
+vtd_iso_acs_target:
+    lea  rsi, [rel vtd_iso_snap]
+    xor  ecx, ecx
+.clear:
+    cmp  ecx, [rel vtd_iso_snap_n]
+    jae  .start
+    cmp  ecx, DA_SNAP_MAX
+    jae  .refuse
+    and  byte [rsi + rcx*8 + 2], ~DA_S_ACS & 0xFF
+    inc  ecx
+    jmp  .clear
+.start:
+    cmp  byte [rel vtd_native_ready], 1
+    jne  .refuse
+    cmp  byte [rel vtd_iso_incomplete], 0
+    jne  .refuse
+    movzx edi, di
+    shr  edi, 8                         ; target bus (all windows must cover it)
+    mov  r9d, edi
+    xor  r10d, r10d
+.up:
+    test r9d, r9d
+    jz   .refuse                        ; bus-zero endpoint has no proven port
+    cmp  r10d, DA_CHAIN_MAX
+    jae  .refuse
+    inc  r10d
+    xor  ecx, ecx
+    mov  edx, -1
+.find:
+    cmp  ecx, [rel vtd_iso_snap_n]
+    jae  .found
+    test byte [rsi + rcx*8 + 2], DA_S_BRIDGE
+    jz   .next
+    movzx eax, byte [rsi + rcx*8 + 3]
+    cmp  eax, r9d
+    jne  .next
+    cmp  edx, -1
+    jne  .refuse
+    mov  edx, ecx
+.next:
+    inc  ecx
+    jmp  .find
+.found:
+    cmp  edx, -1
+    je   .refuse
+    lea  r11, [rsi + rdx*8]
+    test byte [r11 + 2], DA_S_PCIE
+    jz   .refuse
+    cmp  byte [r11 + 5], 1              ; exact success from THIS fresh read
+    jne  .refuse
+    movzx eax, byte [r11 + 3]
+    cmp  edi, eax
+    jb   .refuse
+    movzx eax, byte [r11 + 4]
+    cmp  edi, eax
+    ja   .refuse
+    movzx eax, word [r11]
+    shr  eax, 8
+    test eax, eax
+    jz   .root
+    cmp  eax, r9d
+    je   .refuse
+    cmp  byte [r11 + 6], 5
+    je   .parent
+    cmp  byte [r11 + 6], 6
+    jne  .refuse                        ; a non-root cannot impersonate Root Port
+.parent:
+    mov  r9d, eax
+    jmp  .up
+.root:
+    cmp  byte [r11 + 6], 4
+    jne  .refuse
+    or   byte [r11 + 2], DA_S_ACS
+    xor  eax, eax
+    ret
+.refuse:
+    mov  eax, ISO_SHARED_DMA
+    ret
+
 ; EAX = ISO_* verdict for the secondary function (ISO_ELIGIBLE = 0). Also
 ; leaves vtd_iso_record (the fact record) for VTD POLICY. Read-only.
 vtd_iso_check:
+    push rbx                           ; align calls, including the ACS snapshot
     mov  byte [rel vtd_iso_valid], 0
     call vtd_native_nic_current
     test eax, eax
@@ -2651,13 +2773,19 @@ vtd_iso_check:
     jnz  .verdict
     lea  rdi, [rel vtd_iso_record]
     call devassign_classify
+    test eax, eax
+    jnz  .verdict                       ; preserve RMRR/lifeline/fact refusals
+    mov  edi, [rel vtd_secondary_bdf]
+    call vtd_iso_acs_target             ; singleton needs the whole fresh path
 .verdict:
     mov  [rel vtd_iso_reason], al
     mov  byte [rel vtd_iso_valid], 1
+    pop  rbx
     ret
 .no_target:
     mov  byte [rel vtd_iso_valid], 2
     mov  eax, ISO_TRUNC_ACPI             ; nothing to assign is never eligible
+    pop  rbx
     ret
 
 ; Append " assign_iso=<verdict> iso_parent=<bb:dd.f|root|none> iso_group=<n>

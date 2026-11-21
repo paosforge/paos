@@ -10,6 +10,8 @@ cmd_verb_blkpolicy:
     push r12
     push r13
     push r14
+    push r15
+    mov r15,rsi                          ; response, for the refusal code
     call blk_arg_common
     test rax,rax
     jz .out
@@ -113,9 +115,11 @@ cmd_verb_blkpolicy:
 .bad:
     lea rdi,[rel blk_policy_bad]
     call blk_out_str
+    mov qword [r15+RSP_CODE],CMDE_BADARG ; ROOT 122100 (SEC 122037): a refusal reports CMDE_BADARG, not the dispatch OK
 .ready:
     mov byte [rel blk_out_ready],1
 .out:
+    pop r15
     pop r14
     pop r13
     pop r12

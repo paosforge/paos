@@ -6,13 +6,14 @@ This is the plan, not a promise. Things move between versions as we learn. There
 
 ## 0.1 Preview: a solid base you can try
 
-**Done** (11 of 47 required items when this snapshot was made), as tested on our current hardware:
+**Done** (12 of 47 required items when this snapshot was made), as tested on our current hardware:
 - One PaOS image that starts on all six reference machines
 - The core Secure Boot chain: tampered boot files are refused (the full try-and-install journey isn't checked yet)
 - Recovery from a bad start
 - All processor cores in use; hardware discovery; interrupts and clocks; memory protection
 - Hardware error handling
 - Common driver framework, where each device reports its real state, including when it is limited or not working
+- The old separate Console retired from view in favour of Terminal: it is hidden, never opens by itself and has no Start entry; a protected recovery path stays
 - Cryptography and identity base
 
 **In progress for 0.1:**

@@ -1,7 +1,7 @@
 ;; MODULE gui/widget
 ;; LAYER 6
-;; EXPORTS wgt_menu_text_ptr, wgt_menu_get, wgt_secret_key, wgt_sensitive_current, wgt_sensitive_plan, wgt_sensitive_set_result, wgt_provider_bind, wgt_provider_plan, wgt_provider_pending, wgt_provider_decision, wgt_provider_set_result, wgt_provider_result, wgt_guard_bind, wgt_guard_provider_refused, wgt_birth_lifetime, wgt_terminal_fill_op, wgt_button_paint_hook, wgt_form_event_hook, wgt_secret_owner, wgt_text_paint_hook, wgt_secret_human, wgt_secret_revision, wgt_secret_hidden, str_wgt_withheld, wgt_focus_visible, wgt_reserve_run, wgt_alloc_next, wgt_library_init, wgt_declare, wgt_type_register, wgt_type_bind_capture, wgt_type_capture_buttons, wgt_type_capture_motion, wgt_pointer_motion, wgt_pointer_capture_press, wgt_pointer_capture_press_button, wgt_pointer_capture_find, wgt_pointer_capture_event, wgt_type_headroom_report, wgt_create, wgt_slot_ptr, wgt_draw_id, wgt_draw_desktop, wgt_desktop_erase_rect, wgt_draw_glyph, wgt_rect_hittest, wgt_focus_window, wgt_focus_at, wgt_textfield_key, wgt_tab_reverse, wgt_textfield_event_hook, wgt_textfield_event_hook2, wgt_textfield_clip_get, wgt_textfield_clip_set, wgt_focus_id, wgt_count, wgt_out_buf, wgt_out_ready, wgt_m_library, wgt_m_registry, wgt_fill_rect, wgt_draw_text, wgt_pointer_hit_dispatch, wgt_type_name_of, wgt_shift_window, wgt_resize_window, wgt_secret_register, wgt_secret_clear, wgt_secret_selftest, wgt_secret_type, wgt_secret_bytes, wgt_secret_len, wgt_key_filter, wgt_click_hook, wgt_button_open_hook, wgt_button_get_hook, wgt_action_hook, wgt_hot_id, wgt_press_id, wgt_state_of, wgt_focus_ring_draw, wgt_hover_at, wgt_press_set, wgt_row_shown, wgt_overlay_host_shown, wgt_flyout_painted, wgt_mark_sectext, wgt_mark_formtext, wgt_mark_ascii, wgt_text_buf, wgt_text_len, wgt_text_refused, wgt_textfield_preedit, wgt_tf_buf, wgt_tf_long_free, wgt_textfield_long
-;; IMPORTS gui/form_events, gui/summon_palette, gui/form_loader, gui/calendar, boot/serial, core/unicode_edit, gui/window, gui/window_mgmt, gui/widget_containers, gui/chat_app, gui/cadence_mark, svc/command, svc/clipboard, core/lib/fmt, core/lib/str, dev/input/ps2, sec/keyprov, sec/session, gui/widget_image, gui/widget_scalar_inputs, gui/lock_screen, gui/input_route
+;; EXPORTS wgt_menu_text_ptr, wgt_menu_get, wgt_secret_key, wgt_sensitive_current, wgt_sensitive_plan, wgt_sensitive_set_result, wgt_provider_bind, wgt_provider_plan, wgt_provider_pending, wgt_provider_decision, wgt_provider_set_result, wgt_provider_result, wgt_guard_bind, wgt_guard_provider_refused, wgt_birth_lifetime, wgt_terminal_fill_op, wgt_button_paint_hook, wgt_form_event_hook, wgt_form_signal_hook, wgt_secret_owner, wgt_text_paint_hook, wgt_secret_human, wgt_secret_revision, wgt_secret_hidden, str_wgt_withheld, wgt_focus_visible, wgt_reserve_run, wgt_alloc_next, wgt_library_init, wgt_declare, wgt_type_register, wgt_type_bind_capture, wgt_type_capture_buttons, wgt_type_capture_motion, wgt_pointer_motion, wgt_pointer_capture_press, wgt_pointer_capture_press_button, wgt_pointer_capture_find, wgt_pointer_capture_event, wgt_type_headroom_report, wgt_create, wgt_slot_ptr, wgt_draw_id, wgt_draw_desktop, wgt_desktop_erase_rect, wgt_draw_glyph, wgt_rect_hittest, wgt_focus_window, wgt_focus_at, wgt_textfield_key, wgt_tab_reverse, wgt_textfield_event_hook, wgt_textfield_event_hook2, wgt_textfield_clip_get, wgt_textfield_clip_set, wgt_focus_id, wgt_count, wgt_out_buf, wgt_out_ready, wgt_m_library, wgt_m_registry, wgt_fill_rect, wgt_draw_text, wgt_pointer_hit_dispatch, wgt_type_name_of, wgt_shift_window, wgt_resize_window, wgt_secret_register, wgt_secret_clear, wgt_secret_selftest, wgt_secret_type, wgt_secret_bytes, wgt_secret_len, wgt_key_filter, wgt_click_hook, wgt_button_open_hook, wgt_button_get_hook, wgt_action_hook, wgt_hot_id, wgt_press_id, wgt_state_of, wgt_focus_ring_draw, wgt_hover_at, wgt_press_set, wgt_row_shown, wgt_overlay_host_shown, wgt_flyout_painted, wgt_mark_sectext, wgt_mark_formtext, wgt_mark_ascii, wgt_text_buf, wgt_text_len, wgt_text_refused, wgt_textfield_preedit, wgt_tf_buf, wgt_tf_long_free, wgt_textfield_long
+;; IMPORTS gui/form_events, gui/summon_palette, gui/settings_terminal_network, gui/form_loader, gui/calendar, boot/serial, core/unicode_edit, gui/window, gui/window_mgmt, gui/widget_containers, gui/chat_app, gui/cadence_mark, svc/command, svc/clipboard, core/lib/fmt, core/lib/str, dev/input/ps2, sec/keyprov, sec/session, gui/widget_image, gui/widget_scalar_inputs, gui/lock_screen, gui/input_route
 ;; CAPS
 ;; OWNER saga:gui
 ; ============================================================================
@@ -175,7 +175,7 @@ WGT_EDIT_INSET_ACTION equ 0x2000        ; field: reserve trailing 40px; EDITPAD 
 WGT_EDIT_HELP_ICON equ 0x4000           ; button: question glyph; public name on hover/keyboard focus
 WGT_EDIT_WARNING equ 0x8000           ; label only: red warning, paired with explicit text
 WGT_TEXT_CAP      equ 196               ; RCQ-38 L3b: one GUI_KEY_TEXT payload / the pre-edit (= I3a IME_VIEW_CAP)
-WGT_LONG_N        equ 4                 ; RCQ-38 L3c: long textfield value buffers (wgt_long_pool)
+WGT_LONG_N        equ 16                ; RCQ-38 L3c: long textfield value buffers (wgt_long_pool); ROOT 120979: 16 x 256 B, no reservation
 WGT_LONG_MAX      equ 255               ; a long field's value bytes (+ NUL in a 256 B entry)
 WGT_SEC_TEXT_MAX  equ 168               ; escaped WGI_VAL: 39 bytes x '\xNN' + NUL, rounded so the frame + RSI is 16n
 WGT_BUTTON_INTENT_VERB_SET equ 4
@@ -189,6 +189,14 @@ WGT_TF_BRD  equ GUI_TOK_FIELD_BORDER  ; textfield 1px border (RCQ-16: 3:1 bounda
 WGT_TYPE_TEXTFIELD equ 2               ; WGI_TYPE stores vtable index + 1
 WGT_TYPE_BUTTON   equ 1                ; wgt_library_init registration order: button, textfield, label
 WGT_TYPE_LABEL    equ 3
+WGT_SIG_SELECT    equ 1                ; wgt_form_signal_hook sources: list selection,
+WGT_SIG_SUBMIT    equ 2                ; Enter in a field, tab change, menu choice;
+WGT_SIG_TAB       equ 3                ; | WGT_SIG_KEY when a key (not a pointer) drove it
+WGT_SIG_MENU      equ 4
+WGT_SIG_KEY       equ 0x100
+FE_BIND_CLICK     equ 0                ; form event key -> form_events_bind EDX: on_click,
+FE_BIND_SELECT    equ 1                ; on_select (listview), on_submit (textfield). Here so
+FE_BIND_SUBMIT    equ 2                ; the loader and FE share one definition.
 ; RCQ-16 S4: the shared control-state model (wgt_state_of). DISABLED masks every other bit.
 WGT_ST_DISABLED equ 0x01               ; WGI_EDIT holds WGT_EDIT_DISABLED
 WGT_ST_HOT      equ 0x02               ; the pointer rests on it (wgt_hot_id)
@@ -3835,7 +3843,12 @@ wgt_textfield_key:
     jmp  .redraw
 .submit:
     inc  dword [rbx + WGI_SUBMITS]
-    jmp  .redraw
+    mov  rax, [rel wgt_form_signal_hook] ; app on_submit; the hook checks the hand
+    test rax, rax
+    jz   .redraw
+    mov  edi, r12d
+    mov  esi, WGT_SIG_SUBMIT | WGT_SIG_KEY
+    call rax
 .redraw:
     mov  edi, r12d
     call wgt_draw_id
@@ -4012,7 +4025,7 @@ wgt_tf_long_free:
 ; wgt_textfield_long(EDI = textfield id) -> EAX 0 the field now holds up to
 ;   WGT_LONG_MAX bytes (its value moves into a free wgt_long_pool entry; a field
 ;   that is long already stays as it is), 1 refused (no such textfield, or the
-;   pool is full). A field opts in by code, never by .frm. RCQ-38 L3c (root
+;   pool is full). Native callers and form long=1 opt in explicitly. RCQ-38 L3c (root
 ;   18:16:22: the 255 B search field). Clobbers caller-saved.
 wgt_textfield_long:
     cmp  edi, [rel wgt_count]
@@ -6857,6 +6870,7 @@ wgt_secret_bytes: times 128 db 0
 wgt_key_filter: dq 0
 wgt_click_hook: dq 0
 wgt_form_event_hook: dq 0              ; trusted data-event observer, independent of click chain
+wgt_form_signal_hook: dq 0             ; same observer for selection/submit/tab/menu changes
 wgt_button_paint_hook: dq 0             ; native cached button content, no guest setter
 wgt_text_paint_hook: dq 0               ; boot-installed public label/button adapter
 wgt_button_open_hook: dq 0

@@ -196,6 +196,20 @@ sha256_hash:
     mov  rsi, r12
     call sha256_stream_final
 .out:
+    ; trackb L74 (SEC, track A 122062; rc-root ROOT-3f77642b6f12): the one-shot
+    ; context is a module static that kept this call's input tail (partial
+    ; block) and final state after return: a long PBKDF2 password's
+    ; K0 = SHA256(pw) and its plaintext tail, the setup password. Wipe all of it
+    ; on every path; the digest is already in [r12]. (The compression schedule
+    ; and round state live in sha256_transform's own frame, wiped there.)
+    ; Inline (no new import): RDI/RCX are caller-saved, R12 holds the result.
+    mov  r12, rax                       ; result; the output pointer is done with
+    lea  rdi, [rel sha256_one_ctx]
+    xor  eax, eax
+    mov  ecx, S256_CTX_SZ
+    cld
+    rep  stosb
+    mov  rax, r12
     pop  r14
     pop  r13
     pop  r12

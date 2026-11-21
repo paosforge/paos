@@ -32,9 +32,15 @@ A1N_E_BUDGET     equ 48        ; no calibrated TSC or original budget left for o
 ; quirk key) decides, and an unresolved or failed SMBIOS read refuses. The
 ; Beelink leaf rechecks XID itself. HP 0x10001 is only an op1 discovery label;
 ; the method bound for ops2..5 is AMD's qualified choice under a new attempt.
+; 10ec:8125 is the RTL8125 family method (VM 119226; Reatan per root 119178):
+; the row keys on vendor/device only; class, revision and subsystem in the
+; request are this START's native capture (A1NS +16, config +0x2c), which the
+; leaf requires to be Ethernet and compares with fresh reads (SEC 119244 N1).
 a1_original_method:
     cmp edi, 0x816110ec
     je .lenovo
+    cmp edi, 0x812510ec
+    je .reatan
     cmp edi, 0x15d78086
     je .dell
     cmp edi, 0x500010ec
@@ -57,6 +63,9 @@ a1_original_method:
     ret
 .lenovo:
     mov eax, A1_METHOD_LENOVO_RTL8161
+    ret
+.reatan:
+    mov eax, A1_METHOD_REATAN_RTL8125
     ret
 .dell:
     mov eax, A1_METHOD_DELL_I219

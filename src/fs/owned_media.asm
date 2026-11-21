@@ -52,6 +52,9 @@ vfs_retire_device:
     lea rcx,[rel fd_ro_ops]
     cmp rdx,rcx
     je .ctx
+    lea rcx,[rel fd_gesp_ops]             ; the guest-pair boot-ESP handle retires with its medium (root 119659)
+    cmp rdx,rcx
+    je .ctx
     lea rcx,[rel fd_selected_ops]
     cmp rdx,rcx
     je .ctx

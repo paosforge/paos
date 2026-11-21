@@ -2,7 +2,7 @@
 ;; LAYER 6
 ;; PURPOSE Typed app-owned form and widget adapter through the existing guest route.
 ;; EXPORTS app_widget_observe, app_widget_init, app_widget_tick, app_widget_handle
-;; IMPORTS gui/app_reader, hv/app_widget_transport, hv/guest_request, sec/app_binding, gui/chat_send, gui/widget, gui/widget_listview, gui/widget_chart, gui/widget_scalar_inputs, gui/widget_progress, gui/window_mgmt, core/lib/fmt, core/lib/sha256
+;; IMPORTS gui/app_reader, hv/app_widget_transport, hv/guest_request, sec/app_binding, gui/chat_send, gui/widget, gui/widget_listview, gui/widget_tabstrip, gui/widget_chart, gui/widget_scalar_inputs, gui/widget_progress, gui/window_mgmt, core/lib/fmt, core/lib/sha256
 ;; CAPS CAP_GUI
 ;; OWNER saga:app_widget
 ;; CONTEXT: bsp_only
@@ -42,6 +42,17 @@ app_widget_init:
 ; One desktop tick's SET budget. Unwired or starved ticks fail closed.
 app_widget_tick:
     mov dword [rel awg_tick_sets],0
+    ret
+
+; ECX registered type index (-1 none), EDX WGI_TYPE -> ZF=1 on match. Keeps RAX.
+awg_type_is:
+    cmp ecx,-1
+    je .no
+    inc ecx
+    cmp edx,ecx
+    ret
+.no:
+    cmp ecx,0
     ret
 
 ; RDI native frame328, RSI native reply288, RDX current binding48 -> EAX code.
@@ -292,15 +303,32 @@ app_widget_handle:
     jnz .badarg
     jmp .ok
 .selection:
-    mov ecx,[rel wgt_listview_type]
-    cmp ecx,-1
-    je .deny
-    inc ecx
-    cmp [rax+WGI_TYPE],ecx
-    jne .deny
+    ; listview: selected row; tabstrip: active tab; menu: last chosen item
+    ; (the readback for their on_select/on_click records). Never secret text.
     test dword [rax+WGI_EDIT],WGT_EDIT_SECTEXT
     jnz .deny
+    mov edx,[rax+WGI_TYPE]
+    mov ecx,[rel wgt_listview_type]
+    call awg_type_is
+    je .selection_list
+    mov ecx,[rel wgt_menu_type]
+    call awg_type_is
+    je .selection_menu
+    mov ecx,[rel wgt_tabstrip_type]
+    call awg_type_is
+    jne .deny
+    mov edi,r15d
+    call wgt_tabstrip_active_of
+    cmp eax,-1
+    je .deny
+    mov edi,eax
+    jmp .selection_value
+.selection_menu:
+    mov edi,[rax+WGI_SEL_HI]
+    jmp .selection_value
+.selection_list:
     mov edi,[rax+WGI_SEL_LO]
+.selection_value:
     lea rsi,[r12+AWG_R_VALUE]
     call fmt_dec
     mov [r12+AWG_R_LEN],rax

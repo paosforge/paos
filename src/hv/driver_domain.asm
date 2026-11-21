@@ -1,7 +1,7 @@
 ;; MODULE hv/driver_domain
 ;; LAYER 5
 ;; EXPORTS nd_begin, nd_prepare, nd_current, nd_stop, nd_backend_stopped, nd_tick, nd_snapshot, nd_cmdline, nd_reserve_allowed
-;; IMPORTS hv/driver_domain_restart, core/memory_budget, hv/filesystem_domain, hv/vmx, hv/vm_profile, hv/nic_selection, hv/a1_nic_selection, hv/nic_assignment, boot/header, boot/native_driver_preload, boot/native_driver_gate, hv/wifi_channel, hv/guestpower, hv/nd_isolation
+;; IMPORTS boot/serial, core/lib/fmt, hv/driver_domain_restart, core/memory_budget, hv/filesystem_domain, hv/vmx, hv/vm_profile, hv/nic_selection, hv/a1_nic_selection, hv/nic_assignment, boot/header, boot/native_driver_preload, boot/native_driver_gate, hv/wifi_channel, hv/guestpower, hv/nd_isolation
 ;; CAPS extension
 ;; OWNER saga:hv
 ;; CONTEXT: bsp_only
@@ -602,11 +602,19 @@ nd_stop:
     jne .ok
     mov eax,[rel hv_linux_start_consumed]
     cmp rax,[rel nd_generation]
-    je .ok
+    je nd_stop_loader_returned           ; ROOT 121790 b1 (after nd_backend_stopped)
     mov eax,[rel hv_linux_start_gen]
     cmp rax,[rel nd_generation]
     jne .quarantine
     cmp dword [rel nd_attached],0
+    jne .quarantine
+    ; No task consumed this START. Withdraw only while every CPU/root receipt
+    ; is actually off; a contradictory receipt retains the pending STOP.
+    cmp byte [rel hv_linux_running],0
+    jne .quarantine
+    cmp byte [rel hv_linux_vmx_live],0
+    jne .quarantine
+    cmp qword [rel hv_svm_cur_vmcb],0
     jne .quarantine
     mov byte [rel hv_linux_run_req],0
     mov dword [rel nd_state],4
@@ -616,6 +624,7 @@ nd_stop:
     mov dword [rel nd_released],1
     mov dword [rel nd_state],4
     call nd_transport_retire
+    mov byte [rel hv_linux_stop_req],0   ; original unconsumed START withdrawn
 .ok:
     xor eax,eax
     jmp .out
@@ -628,10 +637,134 @@ nd_stop:
     ret
 
 nd_fault_stop:
+    mov edi,ND_FS_START                 ; nd_prepare; nd_a1_error names an A1 refusal
+nd_fault_stop_from:
+    call nd_fault_record
     mov dword [rel nd_fault],1
     mov rdi,[rel nd_generation]
     lea rsi,[rel nd_nonce]
     jmp nd_stop
+
+; ROOT 121790 (a). EDI caller: ND_FS_START (nd_prepare), ND_FS_CURRENT (an
+; attached domain is no longer current, nd_tick), ND_FS_CLOCK (the clock failed
+; while armed, nd_tick). The first fault-stop of this START keeps the caller,
+; nd_state, nd_a1_error, the loader/stop/run receipts, the loader phase and the
+; boot ms, all read
+; before nd_stop changes any of them. It prints them once, as one serial line,
+; and NDSTAT1 carries them while the fault bit is set. Observation only:
+; no STOP, retire, return or custody decision reads this record.
+nd_fault_record:
+    mov rax,[rel nd_generation]
+    test rax,rax
+    jz .out
+    cmp rax,[rel nd_fs_generation]
+    je .out                             ; first fault-stop of this START only
+    push rbx
+    push rbp
+    sub rsp,208                         ; entry 0 mod 16, two pushes: calls stay ABI-aligned
+    mov [rel nd_fs_generation],rax
+    mov [rel nd_fs_caller],dil
+    mov eax,[rel nd_state]
+    mov [rel nd_fs_state],al
+    xor ebx,ebx
+    cmp byte [rel hv_linux_start_active],0
+    je .stop_req
+    or ebx,ND_FS_START_ACTIVE
+.stop_req:
+    cmp byte [rel hv_linux_stop_req],0
+    je .running
+    or ebx,ND_FS_STOP_REQ
+.running:
+    cmp byte [rel hv_linux_running],0
+    je .consumed
+    or ebx,ND_FS_RUNNING
+.consumed:
+    mov eax,[rel hv_linux_start_consumed]
+    cmp rax,[rel nd_generation]
+    jne .vmx
+    or ebx,ND_FS_CONSUMED
+.vmx:
+    cmp byte [rel hv_linux_vmx_live],0
+    je .vmcb
+    or ebx,ND_FS_VMX_LIVE
+.vmcb:
+    cmp qword [rel hv_svm_cur_vmcb],0
+    je .flags
+    or ebx,ND_FS_VMCB
+.flags:
+    mov [rel nd_fs_flags],bl
+    xor eax,eax                         ; loader phase only for this START's own prepare
+    mov ecx,[rel hv_linux_load_gen]
+    cmp rcx,[rel nd_generation]
+    jne .phase
+    movzx eax,byte [rel hv_linux_load_phase]
+.phase:
+    mov [rel nd_fs_phase],al
+    mov eax,[rel nd_a1_error]
+    mov [rel nd_fs_a1_error],eax
+    call boot_ms_now
+    mov [rel nd_fs_ms],rax
+    mov rsi,rsp
+    lea rdi,[rel nd_fs_caller_str]
+    movzx edx,byte [rel nd_fs_caller]
+    call nd_fs_put
+    lea rdi,[rel nd_fs_state_str]
+    movzx edx,byte [rel nd_fs_state]
+    call nd_fs_put
+    lea rdi,[rel nd_fs_a1_str]
+    mov edx,[rel nd_fs_a1_error]
+    call nd_fs_put
+    lea rbp,[rel nd_fs_flag_strs]
+    xor ebx,ebx
+.flag:
+    mov rdi,rbp
+    movzx edx,byte [rel nd_fs_flags]
+    mov ecx,ebx
+    shr edx,cl
+    and edx,1
+    call nd_fs_put
+    add rbp,ND_FS_FLAG_STR
+    inc ebx
+    cmp ebx,ND_FS_FLAG_COUNT
+    jb .flag
+    lea rdi,[rel nd_fs_ms_str]
+    mov rdx,[rel nd_fs_ms]
+    call nd_fs_put
+    lea rdi,[rel nd_fs_phase_str]
+    movzx edx,byte [rel nd_fs_phase]
+    call nd_fs_put
+    lea rdi,[rel nd_fs_tail]
+.tail:
+    mov al,[rdi]
+    mov [rsi],al
+    inc rdi
+    inc rsi
+    test al,al
+    jnz .tail
+    mov rdi,rsp
+    call serial_string                  ; one call: no other CPU splits the line
+    add rsp,208
+    pop rbp
+    pop rbx
+.out:
+    ret
+
+; RDI NUL-terminated label, RSI output, RDX value ->RSI past the decimal.
+nd_fs_put:
+    mov al,[rdi]
+    test al,al
+    jz .number
+    mov [rsi],al
+    inc rdi
+    inc rsi
+    jmp nd_fs_put
+.number:
+    push rsi
+    mov rdi,rdx
+    call fmt_dec
+    pop rsi
+    add rsi,rax
+    ret
 
 nd_tick:
     mov eax,[rel nd_state]
@@ -646,7 +779,8 @@ nd_tick:
     call nd_power_tick                 ; T5-1.C10b-1b bounded Shut down (VM 106671 Q1)
     jmp .done
 .fault:
-    call nd_fault_stop
+    mov edi,ND_FS_CURRENT
+    call nd_fault_stop_from
 .done:
     add rsp,8
 .out:
@@ -656,10 +790,12 @@ nd_tick:
     call nd_clock
     test eax,eax
     jnz .done
-    call nd_fault_stop
+    mov edi,ND_FS_CLOCK
+    call nd_fault_stop_from
     jmp .done
 
-; Called ONLY by original native terminal path, before RAM release.
+; Called ONLY by original native terminal path, before RAM release, and by
+; nd_stop for this START's loader that returned before that path (ROOT 121790 b1).
 nd_backend_stopped:
     mov eax,[rel nd_state]
     cmp eax,1
@@ -670,6 +806,8 @@ nd_backend_stopped:
     cmp rax,[rel nd_generation]
     jne .out
     sub rsp,8
+    cmp eax,[rel hv_linux_start_gen]
+    jne .uncertain                     ; old terminal cannot spend a new STOP
     cmp byte [rel hv_linux_running],0
     jne .uncertain
     cmp byte [rel hv_linux_vmx_live],0
@@ -677,7 +815,7 @@ nd_backend_stopped:
     cmp qword [rel hv_svm_cur_vmcb],0
     jne .uncertain
     mov dword [rel nd_terminal],1
-    mov byte [rel hv_linux_stop_req],1
+    ; Terminal fences teardown. Do not re-publish a STOP consumed by the vCPU.
     cmp dword [rel nd_attached],0
     je .retired
     cmp dword [rel nd_mode],0
@@ -691,10 +829,14 @@ nd_backend_stopped:
     test eax,eax
     jnz .uncertain
 .retired:
+    mov eax,[rel hv_linux_start_gen]
+    cmp rax,[rel nd_generation]
+    jne .uncertain
     mov dword [rel nd_released],1
     mov dword [rel nd_state],4
     call nd_transport_retire
     call guestpower_retired             ; C10b-1a S5: clean only here, marker == nd_generation
+    mov byte [rel hv_linux_stop_req],0   ; exact CPU-off/released generation only
     add rsp,8
 .out:
     ret
@@ -702,6 +844,24 @@ nd_backend_stopped:
     mov dword [rel nd_state],6
     add rsp,8
     ret
+
+; ROOT 121790 (b1), nd_stop's tail (rbx pushed; returns through nd_stop.ok, so
+; nd_stop keeps its lines and the U1 receipt's citations hold). This START's
+; loader has returned (start_active 0, consumed == START). Through its .done it
+; already ran nd_backend_stopped and left 4 or 6, so nd_state 3 here means it
+; left before .done (an early hv_guest_linux_start refusal, before any RAM, pair
+; or device binding): nothing later retires this START, and a fault-stop or a
+; return waits on it to the budget (Reatan 786 refused: nd_state 3, terminal 0).
+; nd_backend_stopped's own predicates decide: CPU/VMCS/VMCB receipts off ->
+; terminal, released, 4; a receipt still held, or a failed release -> 6.
+nd_stop_loader_returned:
+    ; Re-read after consumed: the loader publishes active before consumed
+    ; (vmx.asm hv_guest_linux_task), so active 0 now, after consumed == START,
+    ; is its own clear on return, never a loader preempted between the two.
+    cmp byte [rel hv_linux_start_active],0
+    jne nd_stop.ok
+    call nd_backend_stopped
+    jmp nd_stop.ok
 
 ; Shared allocator may reserve only the exact original loader; DMA/reuse while
 ; running, stopping or quarantined refuses. Terminal state permits ordinary use.
@@ -859,6 +1019,28 @@ nd_snapshot:
     mov [rbx+104],eax
     mov rax,[rel nd_bridge_ms]
     mov [rbx+112],rax
+    ; ROOT 121790 (a), only while the fault bit is set and only for this START's
+    ; own first fault-stop: +108 caller, +109 nd_state then, +110 receipts then,
+    ; +111 loader phase then (this START only), +120 nd_a1_error then, +124 boot
+    ; ms (low 32). Zero otherwise, as before.
+    cmp dword [rel nd_fault],0
+    je .no_fault_record
+    mov rax,[rel nd_generation]
+    cmp rax,[rel nd_fs_generation]
+    jne .no_fault_record
+    mov al,[rel nd_fs_caller]
+    mov [rbx+108],al
+    mov al,[rel nd_fs_state]
+    mov [rbx+109],al
+    mov al,[rel nd_fs_flags]
+    mov [rbx+110],al
+    mov al,[rel nd_fs_phase]
+    mov [rbx+111],al
+    mov eax,[rel nd_fs_a1_error]
+    mov [rbx+120],eax
+    mov eax,[rel nd_fs_ms]
+    mov [rbx+124],eax
+.no_fault_record:
     mov rsi,[rel nd_profile]
     test rsi,rsi
     jz .no_profile
@@ -1098,6 +1280,32 @@ nd_start_prefix_end:
 nd_nonce_prefix: db ' paos.ndnonce='
 nd_nonce_prefix_end:
 nd_hex: db '0123456789abcdef'
+ND_FS_START equ 1
+ND_FS_CURRENT equ 2
+ND_FS_CLOCK equ 3
+ND_FS_START_ACTIVE equ 1                ; hv_linux_start_active
+ND_FS_STOP_REQ equ 2                    ; hv_linux_stop_req
+ND_FS_RUNNING equ 4                     ; hv_linux_running
+ND_FS_CONSUMED equ 8                    ; hv_linux_start_consumed == this START
+ND_FS_VMX_LIVE equ 16                   ; hv_linux_vmx_live
+ND_FS_VMCB equ 32                       ; hv_svm_cur_vmcb != 0
+ND_FS_FLAG_COUNT equ 6
+ND_FS_FLAG_STR equ 16
+nd_fs_caller_str: db '[PAOS64] nd.fault_stop caller=',0
+nd_fs_state_str: db ' state=',0
+nd_fs_a1_str: db ' a1_error=',0
+nd_fs_flag_strs:                        ; bit order, ND_FS_FLAG_STR bytes each
+    db ' start_active=',0,0
+    db ' stop_req=',0,0,0,0,0,0
+    db ' running=',0,0,0,0,0,0,0
+    db ' consumed=',0,0,0,0,0,0
+    db ' vmx_live=',0,0,0,0,0,0
+    db ' vmcb=',0,0,0,0,0,0,0,0,0,0
+nd_fs_ms_str: db ' ms=',0
+nd_fs_phase_str: db ' load_phase=',0
+nd_fs_tail: db ' [nd.fault_stop]',13,10,0
+times (nd_fs_ms_str-nd_fs_flag_strs-ND_FS_FLAG_COUNT*ND_FS_FLAG_STR) * -1 db 0
+times (nd_fs_flag_strs+ND_FS_FLAG_COUNT*ND_FS_FLAG_STR-nd_fs_ms_str) * -1 db 0
 
 %include "core/abi/wdata.inc"
 %macro WDATA_hv_driver_domain 0
@@ -1139,6 +1347,14 @@ nd_a1_request: times 320 db 0
 nd_a1_map: times 64 db 0
 nd_a1_result: times 256 db 0
 nd_a1_scope: dq 0
+; ROOT 121790 (a): this START's first fault-stop (nd_fault_record). Observation only.
+nd_fs_generation: dq 0
+nd_fs_ms: dq 0
+nd_fs_a1_error: dd 0
+nd_fs_caller: db 0
+nd_fs_state: db 0
+nd_fs_flags: db 0
+nd_fs_phase: db 0                       ; hv_linux_load_phase when load_gen == START, else 0
 nd_storage_end:
 %endmacro
 WDATA_DEFER WDATA_hv_driver_domain

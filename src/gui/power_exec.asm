@@ -2102,6 +2102,16 @@ power_s5_nic_trace:
 ; attempted mask288, irreversible292, final aggregate296. No uncalled record.
 power_s5_nic_stop:
     push rbx
+    ; T4-4 328 (ROOT 121217(2), SEC 121222 A4): the AHCI terminal's read-only
+    ; all-port preflight runs before the first native terminal effect. A refusal
+    ; is a before-effect -1 (callers' .nic_refused: USB released, no wipe/reset,
+    ; the UI resumes). -2 (a latched replay, BOH prepare uncertainty, or an empty-port
+    ; row with earlier acquisition effects) takes each caller's existing terminal
+    ; edge, which fails closed; preflight itself has made no effect. No reporter runs
+    ; on either (VM 121467 N1).
+    call ahci_terminal_preflight
+    test eax,eax
+    js .preflight_out
     sub rsp,1328
     mov dword [rsp+288],0
     mov dword [rsp+292],0
@@ -2310,6 +2320,7 @@ power_s5_nic_stop:
 .out:
     mov eax,[rsp+296]
     add rsp,1328
+.preflight_out:
     pop rbx
     ret
 

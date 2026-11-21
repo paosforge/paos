@@ -2,7 +2,7 @@
 %include "core/abi/build_profile.inc"
 ;; LAYER 6
 ;; EXPORTS form_load_app_member_blob, form_app_member_current, form_app_members_busy, form_app_members_close, form_lab_provider_matches, form_lab_guard_matches, form_lab_toggle_matches, form_guest_policy_observe, form_sysprops_policy_page, form_loader_declare, form_loader_selftest, form_verb_unlocked, form_load_internal, form_load_index, form_load_blob, form_load_app_blob, form_load_app_staged_blob, form_lint_blob, form_ephemeral_close, form_ephemeral_reap, form_ephemeral_busy, form_error_string, form_table_ptr, form_launcher_flags, form_out_reset, form_out_put_str, form_out_put_dec, form_out_buf, form_out_ready, form_out_cur, form_active_slot, form_card_loading, form_summon_gate, form_widget_tree_text_ptr, form_sysprops_diagnostics, form_wintree_append_state, form_netmon_tick, form_cadence_live_init, form_netmon_bind, form_netmon_unbind, form_netmon_members_fn, form_netmon_address_fn, form_netmon_refresh_tick, form_netmon_refresh_done, form_netmon_refresh_ms, form_netmon_refresh_window, form_netmon_refresh_generation, form_wifi_guard_matches
-;; IMPORTS fs/format_job, fs/fs_format, gui/format_confirm, fs/vol_owner, gui/adopt_confirm, gui/app_launcher, gui/settings_updates, gui/wm_pointer, hv/guest_request, hv/vmx, gui/input_route, svc/cpu_policy_report, boot/smbios, core/smp, core/memmap, svc/clipboard, gui/widget_tabstrip, sec/platform_key_health, gui/form_events, fs/fat32_disk, fs/exfat_disk, fs/ext4_disk, fs/ext4_copy, core/unicode_edit, gui/widget, gui/widget_containers, gui/widget_progress, gui/widget_chart, gui/window, gui/window_mgmt, gui/wintree, gui/taskbar, gui/liveness_panel, svc/command, boot/pmod_loader, svc/command_udp, svc/boot_ab, dev/net/e1000e, boot/header, boot/gop, core/cadence, core/time, core/lib/fmt, core/lib/str, gui/widget_image, gui/img/img_core, gui/img/img_cache, fs/vfs, fs/ntfs_disk, svc/command_fs, gui/lock_screen, sec/session, sec/principal, sec/cpu_security_report
+;; IMPORTS gui/settings_terminal_network, fs/format_job, fs/fs_format, gui/format_confirm, fs/vol_owner, gui/adopt_confirm, gui/app_launcher, gui/settings_updates, gui/wm_pointer, hv/guest_request, hv/vmx, gui/input_route, svc/cpu_policy_report, boot/smbios, core/smp, core/memmap, svc/clipboard, gui/widget_tabstrip, sec/platform_key_health, gui/form_events, fs/fat32_disk, fs/exfat_disk, fs/ext4_disk, fs/ext4_copy, core/unicode_edit, gui/widget, gui/widget_containers, gui/widget_progress, gui/widget_chart, gui/window, gui/window_mgmt, gui/wintree, gui/taskbar, gui/liveness_panel, svc/command, gui/netmon_form, svc/command_udp, svc/boot_ab, dev/net/e1000e, boot/header, boot/gop, core/cadence, core/time, core/lib/fmt, core/lib/str, gui/widget_image, gui/img/img_core, gui/img/img_cache, fs/vfs, fs/ntfs_disk, svc/command_fs, gui/lock_screen, sec/session, sec/principal, sec/cpu_security_report
 ;; CAPS
 ;; OWNER saga:gui_foundation_ladder
 
@@ -47,6 +47,7 @@ FORM_BIND_FS_DRIVES equ 12
 FORM_BIND_FS_DETAILS equ 13
 FORM_BIND_FS_CONTEXT equ 14
 FORM_BIND_FS_FORMAT equ 18
+FORM_BIND_TERMINAL_NETWORK equ 19
 FORM_BIND_NET_ADDRESS    equ 11       ; netmon.address: effective selected address/route rows
 
 FORM_ERR_NONE       equ 0
@@ -95,7 +96,8 @@ FORM_LAB_GUARD_INDEX equ 30
 FORM_LAB_PROVIDER_INDEX equ 31
 FORM_UPDATES_INDEX equ 32
 FORM_LAB_EDITOR_INDEX equ 33
-FORM_COUNT    equ 34
+FORM_TERMINAL_NETWORK_INDEX equ 34
+FORM_COUNT    equ 35
 FORM_APP_MEMBERS equ 4                 ; checked package form limit
 FORM_SLOT_COUNT equ (FORM_COUNT + 1 + FORM_APP_MEMBERS)
 FORM_EPHEMERAL_INDEX equ FORM_COUNT
@@ -181,6 +183,9 @@ form_blob_terminal:
     db "window title=Terminal w=360 h=120 x=180 y=120 resizable=0 min_w=360 min_h=120 chrome=standard restore=never",10
     db "widget type=label id=route x=16 y=56 w=320 h=24 text=Opens_a_Terminal_window role=label",10
 form_blob_terminal_end: db 0
+form_name_terminal_network: db "settings_terminal_network",0
+form_blob_terminal_network: incbin "gui/forms/settings_terminal_network.frm"
+form_blob_terminal_network_end: db 0
 form_name_updates: db "settings_updates",0
 form_blob_updates: incbin "gui/forms/settings_updates.frm"
 form_blob_updates_end: db 0
@@ -274,7 +279,15 @@ form_launcher_flags:
 
     db FORM_LAUNCHABLE                ; 32 Settings Updates
 
+    db 0                              ; 33 disposable editor fixture
+    db FORM_LAUNCHABLE                 ; 34 Terminal network
+
 forms_table_init:
+    lea rax,[rel form_name_terminal_network]
+    mov [rel forms_table+FORM_TERMINAL_NETWORK_INDEX*FORM_ENT_SZ+FORM_NAME],rax
+    lea rax,[rel form_blob_terminal_network]
+    mov [rel forms_table+FORM_TERMINAL_NETWORK_INDEX*FORM_ENT_SZ+FORM_BLOB_PTR],rax
+    mov qword [rel forms_table+FORM_TERMINAL_NETWORK_INDEX*FORM_ENT_SZ+FORM_LEN],form_blob_terminal_network_end-form_blob_terminal_network
     lea rax, [rel form_name_updates]
     mov [rel forms_table+FORM_UPDATES_INDEX*FORM_ENT_SZ+FORM_NAME], rax
     lea rax, [rel form_blob_updates]
@@ -630,14 +643,20 @@ form_lookup:
 ; The Apps built-in needs more scratch than public v1 declarations. Only its
 ; native address AND compiled length select that fixed bound; a copied blob,
 ; matching name, or guest member retains the public byte/node limits.
+; T5-14.C4a: the Settings built-in (sidebar and pages) gets the same bound by
+; the same exact address-and-length rule.
 form_copy_blob_ptr:
     mov  dword [rel form_node_limit], FORM_NODE_MAX
     mov  edx, FORM_PARSE_MAX - 1
+    lea  rax, [rel form_blob_settings]
+    cmp  rdi, rax
+    je   .settings
     lea  rax, [rel form_blob_apps]
     cmp  rdi, rax
     jne  .bounded
     cmp  rsi, form_blob_apps_end - form_blob_apps
     jne  .bounded
+.storage:
     mov  edx, FORM_PARSE_STORAGE - 1
     mov  dword [rel form_node_limit], FORM_NODE_STORAGE
 .bounded:
@@ -665,6 +684,10 @@ form_copy_blob_ptr:
     mov  eax, 1
 .out:
     ret
+.settings:
+    cmp  rsi, form_blob_settings_end - form_blob_settings
+    je   .storage                       ; the exact compiled Settings blob
+    jmp  .bounded                       ; a copy or another length: public limits
 
 ; Compatibility wrapper for table callers and the baked oversize KAT.
 form_copy_blob:
@@ -739,7 +762,9 @@ form_widget_type_lookup:
     ret
 
 ; ---------------------------------------------------------------------------
-; First line: `form <name> spec=v1` exactly.
+; First line: `form <name> spec=v1` or `form <name> spec=v2` exactly (APP_FORMAT
+; 0.1 section 0.1, root 122186). spec=v2 needs forms level 2 in the caller's context
+; (form_forms_level); otherwise it is refused like any other bad header.
 form_parse_header:
     push rbx
     push r12
@@ -764,11 +789,21 @@ form_parse_header:
     call wgt_tok_split
     cmp  byte [rax], 0                  ; no fourth token
     jne  .bad
+    mov  byte [rel form_spec_level], 1
     mov  rdi, r13
     lea  rsi, [rel str_spec_v1]
     call strcmp
     test rax, rax
+    jz   .ok
+    mov  rdi, r13
+    lea  rsi, [rel str_spec_v2]
+    call strcmp
+    test rax, rax
     jnz  .bad
+    cmp  byte [rel form_forms_level], 2
+    jb   .bad                           ; spec=v2 only where forms=2 is declared
+    mov  byte [rel form_spec_level], 2
+.ok:
     xor  eax, eax
     jmp  .out
 .bad:
@@ -1061,6 +1096,8 @@ form_parse_widget:
     mov  qword [rel form_w_text], 0
     mov  qword [rel form_w_role], 0
     mov  qword [rel form_w_click], 0
+    mov  dword [rel form_w_event], FE_BIND_CLICK
+    mov  dword [rel form_w_long], 0
     mov  dword [rel form_w_bind], FORM_BIND_NONE
     mov  dword [rel form_w_scroll], 0
     mov  qword [rel form_w_value], 0
@@ -1113,6 +1150,9 @@ form_parse_widget:
     WKEY key_text, .text
     WKEY key_role, .role
     WKEY key_on_click, .on_click       ; bounded data event, never a verb
+    WKEY key_on_select, .on_select     ; G6-7 listview selection record
+    WKEY key_on_submit, .on_submit     ; G6-7 textfield Enter record
+    WKEY key_long, .long_field
     WKEY key_bind, .bind
     WKEY key_cadence, .cadence
     WKEY key_scroll, .scroll
@@ -1285,9 +1325,34 @@ form_parse_widget:
     mov  [rel form_w_role], rax
     or   r13d, 128
     jmp  .next
+.long_field:
+    cmp  byte [rel form_spec_level], 2
+    jb   .unknown                      ; level-2 key: unknown in a spec=v1 form
+    cmp  dword [rel form_w_long], 0
+    jne  .bad                          ; no duplicate capacity declaration
+    cmp  byte [rax+1], 0
+    jne  .bad                          ; exactly one token, not a numeric prefix
+    cmp  byte [rax], '0'
+    je   .long_default                 ; long=0: the explicit spec=v2 default
+    cmp  byte [rax], '1'
+    jne  .bad
+    mov  dword [rel form_w_long], 1
+    jmp  .next
+.long_default:
+    mov  dword [rel form_w_long], 2    ; declared, ordinary 31 B storage
+    jmp  .next
+.on_select:
+    cmp  byte [rel form_spec_level], 2
+    jb   .unknown                      ; level-2 event key
+    mov  dword [rel form_w_event], FE_BIND_SELECT
+    jmp  .on_click
+.on_submit:
+    cmp  byte [rel form_spec_level], 2
+    jb   .unknown                      ; level-2 event key
+    mov  dword [rel form_w_event], FE_BIND_SUBMIT
 .on_click:
     cmp  qword [rel form_w_click], 0
-    jne  .bad
+    jne  .bad                          ; one event key per widget
     mov  [rel form_w_click], rax
     mov  rdi, rax
     call form_events_name_valid
@@ -1314,17 +1379,22 @@ form_parse_widget:
     pop rdi
     test eax,eax
     jz .bind_guest_policy
+    push rdi
+    lea rsi,[rel val_bind_terminal_network]
+    call strcmp
+    pop rdi
+    test eax,eax
+    jz .bind_terminal_network
     lea  rsi, [rel val_bind_sysprops]
     call strcmp
     test rax, rax
     jz   .bind_sysprops
-%if !PAOS_PUBLIC_BUILD
     mov  rdi, rbx
     lea  rsi, [rel key_bind]
     call form_key_value
     mov  rsi, rax
     mov  edi, 4
-    call pmod_netmon_query
+    call netmon_builtin_query
     test r8d, r8d
     jz   .bind_fs
     cmp  r8d, FORM_BIND_NETMON
@@ -1333,7 +1403,6 @@ form_parse_widget:
     ja   .bad
     mov  [rel form_w_bind], r8d
     jmp  .next
-%endif
 .bind_fs:
     ; explorer (desktop bring-up 2026-09-07): fs.root / fs.status live rows
     mov  rdi, rbx
@@ -1461,6 +1530,9 @@ form_parse_widget:
     jmp .next
 .bind_about_os:
     mov dword [rel form_w_bind], FORM_BIND_ABOUT_OS
+    jmp .next
+.bind_terminal_network:
+    mov dword [rel form_w_bind],FORM_BIND_TERMINAL_NETWORK
     jmp .next
 .bind_guest_policy:
     mov dword [rel form_w_bind], FORM_BIND_GUEST_POLICY
@@ -1608,11 +1680,62 @@ form_parse_widget:
     or   r13d, 512
     jmp  .next
 .finish:
+    ; on_click: button, tabstrip or menu; on_select: listview; on_submit:
+    ; textfield. Never on a native live-bound widget except the plain button.
     cmp  qword [rel form_w_click], 0
     je   .event_checked
+    mov  eax, [rel wgt_listview_type]
+    cmp  dword [rel form_w_event], FE_BIND_SELECT
+    je   .event_type
+    mov  eax, WGT_TYPE_TEXTFIELD-1
+    cmp  dword [rel form_w_event], FE_BIND_SUBMIT
+    je   .event_type
     cmp  dword [rel form_w_type], WGT_TYPE_BUTTON-1
+    je   .event_checked
+    mov  eax, [rel wgt_tabstrip_type]
+    cmp  eax, -1
+    je   .event_menu
+    cmp  [rel form_w_type], eax
+    je   .event_plain
+.event_menu:
+    mov  eax, [rel wgt_menu_type]
+.event_type:
+    cmp  eax, -1
+    je   .bad
+    cmp  [rel form_w_type], eax
+    jne  .bad
+.event_plain:
+    cmp  dword [rel form_w_bind], FORM_BIND_NONE
     jne  .bad
 .event_checked:
+    cmp  dword [rel form_w_long], 0
+    je   .long_checked
+    cmp  dword [rel form_w_type], WGT_TYPE_TEXTFIELD-1
+    jne  .bad                          ; secret and other widget kinds never declare it
+    cmp  dword [rel form_w_long], 1
+    jne  .long_checked                 ; long=0 keeps the ordinary text caps
+    mov  rdi, [rel form_w_text]
+    test rdi, rdi
+    jz   .long_checked                 ; the ordinary required-text check follows
+    xor  ecx, ecx
+.long_text_byte:
+    movzx eax, byte [rdi+rcx]
+    test eax, eax
+    jz   .long_text_utf8
+    cmp  ecx, WGT_LONG_MAX
+    jae  .bad                          ; refuse, never truncate a declared long value
+    cmp  eax, 0x20
+    jb   .bad
+    cmp  eax, 0x7f
+    je   .bad
+    inc  ecx
+    jmp  .long_text_byte
+.long_text_utf8:
+    mov  esi, ecx
+    call ue_utf8_validate
+    cmp  eax, 1
+    jne  .bad
+.long_checked:
     mov  eax, [rel form_w_type]
     cmp  eax, 3                       ; the one registered listview type
     je   .list_mode_check
@@ -2414,6 +2537,15 @@ form_allocate_widget:
     mov  [rbx + WGI_STEP], rax
     mov  eax, [rel form_w_bind]
     mov  [rbx + WGI_BIND], eax
+    cmp  dword [rel form_w_long], 1
+    jne  .text_ready
+    mov  edi, r12d
+    call wgt_textfield_long             ; declared 255 B: no silent inline fallback
+    test eax, eax
+    jnz  .bad                          ; form_load_index rolls back the whole new run
+.text_ready:
+    cmp  dword [rel form_w_long], 1
+    je   .long_text_value
     mov  rdi, [rel form_w_text]
     test rdi, rdi
     jz   .geometry
@@ -2422,6 +2554,12 @@ form_allocate_widget:
     call wgt_set_text
     mov  edi, r12d
     call wgt_mark_formtext              ; declared label/button text: '_' paints as ' '
+    jmp  .geometry
+.long_text_value:
+    mov  edi, r12d
+    mov  rsi, [rel form_w_text]
+    mov  edx, WGT_LONG_MAX
+    call wgt_set_text_cap               ; lint proved the complete UTF-8 value fits
 .geometry:
     mov  edi, r12d
     call wgt_slot_ptr
@@ -2514,6 +2652,7 @@ form_allocate_widget:
     mov  [rax + LV_DISABLED], rdx
     mov  edx, [rel form_w_value]
     mov  [rax + WGI_SEL_LO], edx
+    mov  [rax + WGI_SEL_HI], edx        ; a radio row is one row: sel reads r,r (root 11/14)
     mov  rbx, rax
 .draw:
     mov  eax, [rel form_w_type]
@@ -2549,6 +2688,7 @@ form_allocate_widget:
 .draw_now:
     mov  edi, r12d
     mov  rsi, [rel form_w_click]
+    mov  edx, [rel form_w_event]
     call form_events_bind
     mov  edi, r12d
     call wgt_draw_id
@@ -3064,6 +3204,7 @@ form_load_index:
     jae  .rollback_shrink
     mov  edi, ebx
     call wgt_slot_ptr
+    call wgt_tf_long_free               ; wipe before retiring, also on an adopted shell
     mov  dword [rax + WGI_TYPE], 0
     inc  ebx
     jmp  .rollback_run
@@ -3105,6 +3246,12 @@ form_load_index:
     call settings_updates_loaded
     pop rax
 .updates_ready:
+    cmp r12d,FORM_TERMINAL_NETWORK_INDEX
+    jne .terminal_network_ready
+    push rax
+    call settings_terminal_network_loaded
+    pop rax
+.terminal_network_ready:
     mov  ecx, [rel form_result_slot]
     mov  edx, [rel form_result_widgets]
 .out:
@@ -3183,10 +3330,19 @@ form_verb_unlocked:
 .out:
     ret
 
-; Internal boot/demo entry: EDI=index, EDX=focus flag.
+; Internal boot/demo entry: EDI=index, EDX=focus flag. Kernel-owned forms have
+; no bundle, so they get forms levels 1..2 for this load only. Every app, guest
+; and command path keeps form_forms_level 1, the installer's forms=1 pin
+; (app_script_members), until forms=2 bundle admission exists.
 form_load_internal:
+    movzx eax, byte [rel form_forms_level]
+    push rax
+    mov  byte [rel form_forms_level], 2
     xor  esi, esi
-    jmp  form_load_index
+    call form_load_index
+    pop  r11
+    mov  [rel form_forms_level], r11b  ; EAX/ECX/EDX loader ABI untouched
+    ret
 
 ; Trusted native app entry: RDI=immutable checked blob, RSI=length,
 ; RDX=stable native name, RCX=actual enforced app principal (> reserved IDs).
@@ -4236,13 +4392,11 @@ form_build_sysprops:
     ret
 
 form_build_netmon:
-%if !PAOS_PUBLIC_BUILD
     mov  edi, 1
     xor  esi, esi
-    call pmod_netmon_query
+    call netmon_builtin_query
     test rax, rax
     jnz  .out
-%endif
     lea  rax, [rel form_optional_empty]
 .out:
     ret
@@ -4308,8 +4462,12 @@ form_sysprops_current:
     lea rcx, [rel wm_state]
     cmp dword [rcx + rbx*4], WM_VISIBLE
     jne .missing
+    ; SEC119469: the built-in About is stamped by wmx_owner_open with the
+    ; opener's principal, never WM_OWNER_CHROME. Only PRIN_OWNER (a local
+    ; human action, or owner console/runner dispatch) credits; 0 (no
+    ; authenticated principal), chrome, Try, system and app principals refuse.
     lea rcx, [rel wm_owner]
-    cmp qword [rcx + rbx*8], WM_OWNER_CHROME
+    cmp qword [rcx + rbx*8], PRIN_OWNER
     jne .missing
     lea rcx, [rel wm_title]
     lea rdx, [rel form_titles + 3*FORM_TITLE_MAX]
@@ -4355,6 +4513,8 @@ form_widget_tree_text_ptr:
     jmp  .out
 .text_binding:
     mov  ebx, [rax + WGI_BIND]
+    cmp ebx,FORM_BIND_TERMINAL_NETWORK
+    je .terminal_network
     cmp ebx, FORM_BIND_GUEST_POLICY
     je .guest_policy
     cmp ebx, FORM_BIND_ABOUT_DEVICE
@@ -4385,6 +4545,10 @@ form_widget_tree_text_ptr:
     je   .summon
     xor  eax, eax
     jmp  .out
+.terminal_network:
+    mov edi,r12d
+    call settings_terminal_network_rows
+    jmp .out
 .guest_policy:
     mov edi,r12d
     call form_guest_policy_text
@@ -8400,11 +8564,9 @@ form_netmon_tick:
     call serial_string
 .autoload_done:
 %endif
-%if !PAOS_PUBLIC_BUILD
     mov  edi, 2
     xor  esi, esi
-    call pmod_netmon_query
-%endif
+    call netmon_builtin_query
     call form_netmon_refresh_begin
     xor  ebx, ebx
 .loop:
@@ -8441,8 +8603,7 @@ form_netmon_tick:
     call wgt_draw_id                  ; refresh on the next wmx_draw_all (raise/open).
     jmp  .next
 .module_value:
-%if !PAOS_PUBLIC_BUILD
-    ; The signed provider chooses text/number and applies its binding policy.
+    ; The built-in provider chooses text/number and applies its binding policy.
     ; The keep only publishes the returned field through the existing widget API.
     mov  rdx, [rax + WGI_MAXVAL]
     mov  edi, [rax + WGI_TYPE]
@@ -8455,7 +8616,7 @@ form_netmon_tick:
     push rcx
     mov  rsi, rsp
     mov  edi, 5
-    call pmod_netmon_query
+    call netmon_builtin_query
     add  rsp, 16
     cmp  r8d, 1
     je   .text_value
@@ -8491,7 +8652,6 @@ form_netmon_tick:
     mov  rsi, rax
     mov  edi, ebx
     call wgt_set_text
-%endif
 .next:
     inc  ebx
     jmp  .loop
@@ -8576,11 +8736,9 @@ form_cadence_live_init:
     push rbx
     call cadence_registry_init
     ; Preserve the shipped first-sample baseline in disposable module state.
-%if !PAOS_PUBLIC_BUILD
     mov  edi, 3
     xor  esi, esi
-    call pmod_netmon_query
-%endif
+    call netmon_builtin_query
     mov  rbx, [rel tsc_khz]
     imul rbx, rbx, 1000
     test rbx, rbx
@@ -9192,6 +9350,8 @@ form_w_parent: dq 0
 form_w_text: dq 0
 form_w_role: dq 0
 form_w_click: dq 0
+form_w_event: dd 0                     ; FE_BIND_* of form_w_click's key
+form_w_long: dd 0                      ; 0 absent, 1 long=1, 2 long=0
 form_w_value: dq 0
 form_w_min: dq 0
 form_w_max: dq 100
@@ -9277,6 +9437,8 @@ form_w_fit: dd -1
 form_win_restore: db WM_RESTORE_FRESH
 form_parse_mode: db 0
 form_out_ready: db 0
+form_spec_level: db 1                  ; header spec=v1/v2 of the form being parsed
+form_forms_level: db 1                 ; caller's admitted forms level (1, or 2 for kernel forms)
 align 8
 form_node_limit: dd FORM_NODE_MAX
 form_parse_buf: times FORM_PARSE_STORAGE db 0
@@ -9686,6 +9848,7 @@ str_form_kw: db "form",0
 str_window_kw: db "window",0
 str_widget_kw: db "widget",0
 str_spec_v1: db "spec=v1",0
+str_spec_v2: db "spec=v2",0
 key_title: db "title",0
 key_w: db "w",0
 key_h: db "h",0
@@ -9702,6 +9865,9 @@ key_parent: db "parent",0
 key_text: db "text",0
 key_role: db "role",0
 key_on_click: db "on_click",0
+key_on_select: db "on_select",0
+key_on_submit: db "on_submit",0
+key_long: db "long",0
 key_bind: db "bind",0
 key_cadence: db "cadence",0
 key_scroll: db "scroll",0
@@ -9722,6 +9888,7 @@ val_never: db "never",0
 val_bind_about_device: db "sysprops.device",0
 val_bind_guest_policy: db "guest.policy",0
 val_bind_about_os: db "sysprops.os",0
+val_bind_terminal_network: db "terminal_network.draft",0
 val_bind_sysprops: db "sysprops.live",0
 form_optional_empty: db 0
 val_bind_fsdrives: db "fs.drives",0

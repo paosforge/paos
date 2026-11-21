@@ -574,6 +574,7 @@ vsm_dispatch:
     mov rax, [r11 + VMCB_EXITCODE]
     mov [rel vsm_progress_exit0], rax
     inc qword [rel vsm_progress_returns0]
+    call vsm_s7f_observe                ; T1-5 S7 (VM 118485, LIVE 118487): passive, keeps every register
 .progress_ap:
     cmp dword [rel vca_status], 2
     jne .progress_done
@@ -696,6 +697,84 @@ vsm_dispatch:
     pop rbx
     ret
 
+; T1-5 S7 (VM 118485, LIVE 118487): the AMD side of the vCPU0 freeze record kept in
+; hv/vmx (hv_s7f_*), after the progress sample of an actual vCPU0 VMRUN return.
+; Reads vCPU0's VMCB only: no VMCB write, injection, scheduling or dispatch change.
+; Gate: vsr_enabled == 1 and vca_ready == 1, before the latch. Every register and
+; flag is kept. The reason is the full EXITCODE qword (an invalid entry reads -1).
+;   sync   one ring slot (EXITCODE, RIP, EXITINFO1); the stall run restarts.
+;   async  (0x60 INTR, 0x61 NMI, 0x64 VINTR) counts exits at one unchanged RIP; at
+;          HV_S7F_STALL the vsm_s7f_fields qwords are copied once and latched = 2.
+vsm_s7f_observe:
+    pushfq
+    push rax
+    push rcx
+    push rdx
+    push rsi
+    push rbx
+    cmp  qword [rel vsr_enabled], 1
+    jne  .done
+    cmp  qword [rel vca_ready], 1
+    jne  .done
+    cmp  byte [rel hv_s7f_latched], 0
+    jne  .done
+    mov  rdx, [rel vsr_ctx0 + VSP_VMCB]
+    test rdx, rdx
+    jz   .done
+    mov  rbx, [rdx + VMCB_EXITCODE]
+    cmp  rbx, 0x60
+    je   .async
+    cmp  rbx, 0x61
+    je   .async
+    cmp  rbx, 0x64
+    je   .async
+    mov  rax, [rel hv_s7f_sync]
+    inc  qword [rel hv_s7f_sync]
+    and  eax, 3
+    imul eax, eax, 24
+    lea  rsi, [rel hv_s7f_ring]
+    add  rsi, rax
+    mov  [rsi], rbx
+    mov  rax, [rdx + VMCB_RIP]
+    mov  [rsi + 8], rax
+    mov  rax, [rdx + VMCB_EXITINFO1]
+    mov  [rsi + 16], rax
+    mov  qword [rel hv_s7f_run], 0
+    jmp  .done
+.async:
+    inc  qword [rel hv_s7f_async]
+    mov  rax, [rdx + VMCB_RIP]
+    cmp  qword [rel hv_s7f_run], 0
+    je   .baseline
+    cmp  rax, [rel hv_s7f_rip]
+    jne  .baseline
+    inc  qword [rel hv_s7f_run]
+    cmp  qword [rel hv_s7f_run], HV_S7F_STALL
+    jb   .done
+    xor  ebx, ebx
+.field:
+    lea  rax, [rel vsm_s7f_fields]
+    movzx ecx, word [rax + rbx * 2]
+    mov  rax, [rdx + rcx]
+    lea  rcx, [rel hv_s7f_vmcs]
+    mov  [rcx + rbx * 8], rax
+    inc  ebx
+    cmp  ebx, HV_S7F_VMCS
+    jb   .field
+    mov  byte [rel hv_s7f_latched], 2
+    jmp  .done
+.baseline:
+    mov  [rel hv_s7f_rip], rax
+    mov  qword [rel hv_s7f_run], 1
+.done:
+    pop  rbx
+    pop  rsi
+    pop  rdx
+    pop  rcx
+    pop  rax
+    popfq
+    ret
+
 ; V_INTR_MASKING virtualizes hardware CR8 through V_TPR. Fold the actual
 ; exiting nibble into the selected LAPIC before service, then publish any
 ; emulated TPR change back before the next entry. No native CR8 write.
@@ -747,6 +826,16 @@ vsm_msr_map:
     dd 0x174,0x628,3, 0x175,0x630,2, 0x176,0x638,2
     dd 0xC0000100,VMCB_FS+8,2, 0xC0000101,VMCB_GS+8,2
     dd 0,0,0
+; T1-5 S7 freeze record, AMD side: vCPU0 VMCB qword offsets, in hv_s7f_vmcs order.
+; s7fbv = interrupt shadow, V_INTR, EVENTINJ, EXITINTINFO, EXITINFO1, EXITINFO2, RFLAGS;
+; s7fbc = CR0, CR3, CR4, EFER, NRIP, exception|ICPT1 (0x08), ICPT2 (0x10).
+vsm_s7f_fields:
+    dw VMCB_SHADOW, VMCB_VINTR, VMCB_EVENTINJ, VMCB_EXITINTINFO
+    dw VMCB_EXITINFO1, VMCB_EXITINFO2, VMCB_RFLAGS
+    dw VMCB_CR0, VMCB_CR3, VMCB_CR4, VMCB_EFER, VMCB_NRIP, VMCB_EXC, VMCB_ICPT2
+%if $ - vsm_s7f_fields != HV_S7F_VMCS * 2
+    %error "vsm_s7f_fields must list exactly HV_S7F_VMCS fields"
+%endif
 %macro WDATA_hv_vcpu_svm_dispatch 0
 align 8
 ; Keep this eight-qword reset span contiguous.

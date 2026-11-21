@@ -10,7 +10,8 @@ whose Terminus/Unifont inputs and complete grants are now delivered under `termi
   commit, SHA-256 pins).
 - **Embedded in PaOS binaries as converted glyph cells:**
   - the PaOS payload: `src/gui/font8x16.inc` `font_8x16` (the GUI font: ASCII and U+00A0..U+017F, including `font_8x16_ext_a`) and `src/boot/boot_menu.asm`
-    `bm_face_ocr_font` (the boot-menu face);
+    `bm_face_ocr_font` (the boot-menu face) and `src/boot/boot_face.asm` `bf_font` (the public loading face's version
+    text);
   - the Boot Manager: `src/bootmgr/paos_bootmgr.asm` `face_ocr_font`.
 - **Conversion:** `tools/fonts/font_build.py` (deterministic, cell for cell), with the public
   recipe in `spleen/SOURCE.md` and checks in `tools/fonts/test_font_build.py`.

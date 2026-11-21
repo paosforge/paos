@@ -20,7 +20,7 @@ Website: https://paosforge.com · Simulator: https://paosforge.com/simulator/
 
 ## What this repository is
 
-- A **one-way snapshot** of the source, copied from our private development system. This is snapshot 6: source version 0.0.324, an engineering build of 2026-11-13.
+- A **one-way snapshot** of the source, copied from our private development system. This is snapshot 7: source version 0.0.328, an engineering build of 2026-11-18.
 - It has **no development history**. Each new snapshot is added as one new commit on top of the last.
 - It contains the OS source, the programs that run inside the Linux virtual machines, the SDK, the generators for the font, Unicode, text and input-method tables, the third-party sources those use, and the license files.
 - It does **not** contain our test lab tools, internal notes, prebuilt boot files or signing keys.
@@ -35,9 +35,9 @@ Website: https://paosforge.com · Simulator: https://paosforge.com/simulator/
 ## Where things stand
 
 PaOS 0.1 is defined as 47 required items. Each closes only when its checks pass on all six reference machines on one build.
-When this snapshot was made, **11 of 47** were closed.
+When this snapshot was made, **12 of 47** were closed.
 
-Closed so far are mostly the low-level foundations, as tested on our current hardware: one image that boots on all six machines, the core Secure Boot chain (the full try-and-install journey isn't checked yet), recovery from a bad boot, use of all processor cores, hardware discovery, interrupts and clocks, memory protection, hardware error handling, the common driver framework, and the cryptography and identity base.
+Closed so far are mostly the low-level foundations, as tested on our current hardware: one image that boots on all six machines, the core Secure Boot chain (the full try-and-install journey isn't checked yet), recovery from a bad boot, use of all processor cores, hardware discovery, interrupts and clocks, memory protection, hardware error handling, the common driver framework, the old separate Console retired from view in favour of Terminal (hidden, with no Start entry; a protected recovery path stays), and the cryptography and identity base.
 The desktop apps, the Linux guest, storage, networking features and the Try/install journey are **still open**.
 
 ## The six machines we test on

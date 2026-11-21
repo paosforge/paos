@@ -15,7 +15,8 @@ BDF = Path('third_party/fonts/spleen/spleen-8x16.bdf')
 GUI = Path('src/gui/font8x16.inc')
 BOOT = Path('src/boot/boot_menu.asm')
 MANAGER = Path('src/bootmgr/paos_bootmgr.asm')
-CLOSURE = (TOOL, Path('tools/fonts/test_font_build.py'), BDF, GUI, BOOT, MANAGER,
+FACE = Path('src/boot/boot_face.asm')
+CLOSURE = (TOOL, Path('tools/fonts/test_font_build.py'), BDF, GUI, BOOT, MANAGER, FACE,
            Path('third_party/fonts/spleen/SOURCE.md'), Path('third_party/fonts/spleen/LICENSE'),
            Path('third_party/fonts/THIRD_PARTY_NOTICES.md'), Path('THIRD_PARTY_NOTICES.md'))
 
@@ -71,7 +72,7 @@ class PublicSpleen(unittest.TestCase):
 
     def test_two_clean_emits(self):
         a, b = self.emit('a'), self.emit('b')
-        self.assertEqual(sorted(p.name for p in a.iterdir()), ['bootmenu.inc', 'font8x16.inc', 'manager.inc'])
+        self.assertEqual(sorted(p.name for p in a.iterdir()), ['bootface.inc', 'bootmenu.inc', 'font8x16.inc', 'manager.inc'])
         for p in a.iterdir():
             self.assertEqual(p.read_bytes(), (b / p.name).read_bytes())
             self.assertNotIn(b'\r', p.read_bytes())
@@ -79,7 +80,8 @@ class PublicSpleen(unittest.TestCase):
     def test_faces_exact_current_rows(self):
         out = self.emit()
         for file, label, result, count in ((BOOT, 'bm_face_ocr_font:', 'bootmenu.inc', 22),
-                                           (MANAGER, 'face_ocr_font:', 'manager.inc', 128)):
+                                           (MANAGER, 'face_ocr_font:', 'manager.inc', 128),
+                                           (FACE, 'bf_font:', 'bootface.inc', 41)):
             text = (ROOT / file).read_text().split(label+'\n', 1)[1]
             rows = []
             for line in text.splitlines():

@@ -1,6 +1,6 @@
 ;; MODULE fs/data_config_authority
 ;; LAYER 4
-;; EXPORTS data_config_bind_provisioned, data_config_acquire_provisioned, data_config_write_learned, data_config_write_local_guarded, data_config_write_app_guarded, data_config_write_documents, data_config_write_updates_guarded, data_config_write_daily_guarded
+;; EXPORTS data_config_bind_provisioned, data_config_acquire_provisioned, data_config_write_learned, data_config_write_local_guarded, data_config_write_app_guarded, data_config_write_documents, data_config_write_updates_guarded, data_config_write_daily_guarded, data_config_write_terminal_network_guarded
 ;; IMPORTS fs/data_config_provider, fs/fat32_disk, fs/vol_owner_data, fs/storage_access, fs/blockdev, fs/vfs, core/lib/mem
 ;; CAPS
 ;; OWNER saga:fs_wave
@@ -168,6 +168,13 @@ data_config_write_daily_guarded:
     mov r10d, 6
     jmp fd_data_write_common
 
+; Private native entry for the dedicated provider-policy writer. R11 is its
+; fixed synchronous checker, never a guest/request-supplied callback. No current
+; product caller: actual Settings Save/store composition is a separate unit.
+data_config_write_terminal_network_guarded:
+    mov r10d, 7
+    jmp fd_data_write_common
+
 ; Only sec/app_store_authority supplies the fixed checker. R8=intent, R9=op.
 data_config_write_app_guarded:
     mov r10d, 3
@@ -201,6 +208,8 @@ fd_data_authorize_start:
     jne .no
     jmp .role
 .local:
+    cmp r10d, 7
+    je .terminal
     cmp r10d, 6
     je .daily
     cmp r10d, 5
@@ -212,6 +221,10 @@ fd_data_authorize_start:
     cmp r10d, 2
     jne .no
     cmp eax, 1024
+    jne .no
+    jmp .checked
+.terminal:
+    cmp eax, FD_DATA_TERMINAL_CLASS
     jne .no
     jmp .checked
 .daily:
@@ -254,6 +267,8 @@ fd_data_authorize_start:
     test rdi, rdi
     jz .no
     call fd_data_policy
+    cmp eax, FD_DATA_TERMINAL_CLASS
+    je .no
     cmp eax, FD_DATA_DAILY_CLASS
     je .no
     cmp eax, FD_DATA_UPDATES_MAX
@@ -290,6 +305,8 @@ fd_data_role_current:
     ret
 
 fd_data_authorize_effect:
+    cmp dword [rel fd_data_mode], 7
+    je .checked
     cmp dword [rel fd_data_mode], 6
     je .checked
     cmp dword [rel fd_data_mode], 5

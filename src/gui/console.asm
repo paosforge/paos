@@ -30,6 +30,9 @@ headless_cli_declare:
     cmp  eax, -1
     je   .fail
     call headless_cli_selftest
+    ; Its fixture bind/unlock is a KAT transition, not an event in this boot
+    ; (as in session_shell_init). Preserves EAX, so the KAT result still gates.
+    call session_shell_observer_reset
     test eax, eax
     jnz  .fail
     ; LOGINMODE is the authenticated bootstrap from the default locked GUI

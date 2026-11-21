@@ -472,6 +472,9 @@ command_auth_replay_persist:
 ; command_auth_init -- establish the fail-closed boundary and recover the last
 ; durable owner sequence from the dedicated replay record.
 command_auth_init:
+%ifdef PAOS_LAB_CHANNEL
+    LAB_INIT_HOOK
+%endif
     mov  byte [rel command_auth_remote_active], 0
     mov  qword [rel command_auth_remote_ticket], 0
     mov  dword [rel command_auth_intercept_count], 0
@@ -862,6 +865,9 @@ command_auth_remote_begin:
     mov  eax, SA_INTENT_IMPLICIT
     test rdi, rdi
     jz   .intent
+%ifdef PAOS_LAB_CHANNEL
+    LAB_BEGIN_HOOK
+%endif
     cmp  qword [rdi + AUTH_T_PRINCIPAL], PRIN_OWNER
     jne  .intent
     cmp  qword [rdi + AUTH_T_STATE], AUTH_TS_VALID
@@ -1036,6 +1042,9 @@ command_auth_unwrap_line:
     xor  esi, esi
     mov  edx, AUTH_T_SIZE
     call memset
+%ifdef PAOS_LAB_CHANNEL
+    LAB_UNWRAP_HOOK
+%endif
     cmp  dword [r12], 'AUTH'
     jne  .unsigned
     cmp  byte [r12 + 4], '2'
@@ -2679,6 +2688,9 @@ net_audit_reason_name:
     lea  rax, [rel str_auth_reason_card_required]
     cmp  edi, AUTHR_CARD_REQUIRED
     je   .out
+%ifdef PAOS_LAB_CHANNEL
+    LAB_REASON_HOOK
+%endif
     lea  rax, [rel str_net_audit_refused]
 .out:
     ret
@@ -2967,6 +2979,9 @@ command_auth_authorize:
     je   .retired
     cmp  eax, AUTH_TS_WRONG_NODE
     je   .wrong_node
+%ifdef PAOS_LAB_CHANNEL
+    LAB_STATE_HOOK
+%endif
     jmp  .malformed
 .terminal_principal:
     ; SEC owns exact native pointer/inflight/frozen policy validation. Keep the
@@ -3029,6 +3044,9 @@ command_auth_authorize:
     call card_required_for                ; RCQ-40 J6: an injected SYSTEM line, as any ticket
     test eax, eax
     jnz  .card_required
+%ifdef PAOS_LAB_CHANNEL
+    LAB_INJECTED_HOOK
+%endif
     mov  rdi, [r12 + AUTH_T_PRINCIPAL]
     call principal_capabilities
     and  rax, [r12 + AUTH_T_CAP]
@@ -3064,6 +3082,9 @@ command_auth_authorize:
     jnz  .card_required
     cmp  [r12 + AUTH_T_CAP], r13
     jne  .wrong_cap
+%ifdef PAOS_LAB_CHANNEL
+    LAB_AUTHORIZE_HOOK
+%endif
     ; Preserve the already-proven owner path exactly once the byte-for-byte
     ; cap check succeeds.  Every non-owner (including unknown pid 0) must earn
     ; the requested word from the authoritative principal table.
@@ -3527,6 +3548,9 @@ command_auth_reason_ptr:
     lea  rax, [rel str_auth_reason_card_required]
     cmp  edi, AUTHR_CARD_REQUIRED
     je   .out
+%ifdef PAOS_LAB_CHANNEL
+    LAB_REASON_HOOK
+%endif
     lea  rax, [rel str_auth_reason_unknown]
 .out:
     ret
@@ -3720,6 +3744,10 @@ command_authfloor_verb:
     mov  r12, rsi
     call command_auth_out_reset
     mov  r13d, CMDE_AUTHDENY
+    call principal_owner_change_ready
+    lea rdi, [rel str_auth_floor_pending_owner]
+    test eax, eax
+    jz .refuse
     lea  rdi, [rel str_auth_floor_not_console]
     cmp  qword [rbx + REQ_SOURCE], CMD_SOURCE_CONSOLE
     jne  .refuse
@@ -5030,6 +5058,7 @@ pbm_sb_mok_present:    db 0xFF            ; 1=MokListRT present at runtime 0xFF=
 str_verb_secureboot: db "SECUREBOOT",0
 str_verb_authfloor: db "AUTHFLOOR",0
 str_auth_floor_arg: db "RESEED",0
+str_auth_floor_pending_owner: db "AUTHFLOOR REFUSED available after PaOS next starts",0
 str_auth_floor_usage: db "AUTHFLOOR REFUSED usage=AUTHFLOOR_RESEED",0
 str_auth_floor_not_console: db "AUTHFLOOR REFUSED console_owner_only",0
 str_auth_floor_not_lost: db "AUTHFLOOR REFUSED floor_not_lost",0

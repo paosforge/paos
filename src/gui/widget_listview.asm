@@ -1177,10 +1177,16 @@ wgt_listview_pointer_press:
 .record:
     mov  edi, r12d
     call wgt_slot_ptr
+    xor  r13d, r13d                     ; y is spent: R13 = selection changed
+    cmp  [rax + WGI_SEL_LO], r14d
+    setne r13b
     mov  [rax + WGI_SEL_LO], r14d
     mov  dword [rax + WGI_INTENT], LV_INTENT_POINTER
     inc  qword [rax + WGI_INTENT_SEQ]
     call wmx_draw_all
+    mov  edi, r12d
+    mov  esi, r13d
+    call lv_signal_select
     mov  eax, 1
     jmp  .out
 .refuse:
@@ -1190,6 +1196,19 @@ wgt_listview_pointer_press:
     pop  r13
     pop  r12
     pop  rbx
+    ret
+
+; lv_signal_select(EDI=id, ESI=1 when a human press changed WGI_SEL_LO): the
+; app's on_select record. Same selection is no event. Clobbers caller-saved.
+lv_signal_select:
+    test esi, esi
+    jz   .out
+    mov  rax, [rel wgt_form_signal_hook]
+    test rax, rax
+    jz   .out
+    mov  esi, WGT_SIG_SELECT
+    jmp  rax
+.out:
     ret
 
 ; EDI=x, ESI=y -> EAX=0 no live popup, 1 outside-close, 2 selection.
@@ -1267,11 +1286,17 @@ wgt_listview_dropdown_press:
     jae  .outside
     mov  edi, r14d
     call wgt_slot_ptr
+    xor  r13d, r13d                     ; y is spent: R13 = selection changed
+    cmp  [rax + WGI_SEL_LO], ebx
+    setne r13b
     mov  [rax + WGI_SEL_LO], ebx
     mov  byte [rax + LV_OPEN], 0
     mov  dword [rax + WGI_INTENT], LV_INTENT_POINTER
     inc  qword [rax + WGI_INTENT_SEQ]
     call wmx_draw_all
+    mov  edi, r14d
+    mov  esi, r13d
+    call lv_signal_select
     mov  eax, 2
     jmp  .out
 .armed:

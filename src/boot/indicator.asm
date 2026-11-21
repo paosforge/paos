@@ -7,9 +7,12 @@
 ; Normal boot's time-driven dots. BSP-only: bind before timer_init, then call
 ; tick only inside the PIC/BSP LAPIC interrupt's saved-register frame. Neither
 ; entry waits, allocates, calls firmware, changes modes or publishes health.
-; The existing face_owner=2 retirement precedes every GUI/CLI framebuffer write.
-; Bind snapshots one low identity-mapped GOP allocation. Tick refuses changed
-; geometry/base, invalid/backwards clocks and post-retirement work before stores.
+; The face_owner=2 retirement precedes every GUI/CLI scanout write: the CLI and
+; lab paths retire at presentation selection (header); a public GUI boot retires
+; at its first scanout write or scanout identity change (gui/window, lock
+; release; T6-1 R6). Bind snapshots one low identity-mapped GOP allocation. Tick
+; refuses a changed scanout mode/size/format, invalid/backwards clocks and
+; post-retirement work before stores.
 ; Lab builds retain their existing milestone text and do not enable this painter.
 %ifndef PAOS_PUBLICITY_LAB_PROFILE
 %define PAOS_PUBLICITY_LAB_PROFILE 0
@@ -100,12 +103,30 @@ boot_indicator_tick:
     jne  .out
     cmp  byte [rel bi_ready], 1
     jne  .out
-    mov  rax, [rel bi_base]
-    cmp  rax, [rel fb_base]
-    jne  .out
     mov  rax, [rel bi_size]
     cmp  rax, [rel fb_size]
     jne  .out
+    ; T6-1 R6: a public GUI boot keeps the face on the scanout through the GUI
+    ; floor, so fb_base may now name the private back buffer (gui/window attach)
+    ; or read 0 (parked, T5-9). The scanout itself is the bound snapshot until
+    ; bm_face_retire, which every scanout writer/identity change calls first.
+    ; The scanout mode is still checked in each legal state: 2x compose keeps it
+    ; in fb_out_*, a parked surface reads 0, otherwise fb_* is the scanout mode.
+    cmp  byte [rel fb_scale], 2
+    jne  .unscaled
+    mov  eax, [rel bi_width]
+    cmp  eax, [rel fb_out_width]
+    jne  .out
+    mov  eax, [rel bi_height]
+    cmp  eax, [rel fb_out_height]
+    jne  .out
+    mov  eax, [rel bi_stride]
+    cmp  eax, [rel fb_out_stride]
+    jne  .out
+    jmp  .mode_ok
+.unscaled:
+    cmp  qword [rel fb_base], 0
+    je   .mode_ok                     ; parked: only the snapshot remains
     mov  eax, [rel bi_width]
     cmp  eax, [rel fb_width]
     jne  .out
@@ -115,6 +136,7 @@ boot_indicator_tick:
     mov  eax, [rel bi_stride]
     cmp  eax, [rel fb_stride]
     jne  .out
+.mode_ok:
     mov  eax, [rel bi_format]
     cmp  eax, [rel fb_pixel_format]
     jne  .out

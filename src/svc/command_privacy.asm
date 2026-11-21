@@ -116,7 +116,9 @@ cmd_verb_privacytest:
 .nonce_bad:
     lea  rdi, [rel privacy_reply_nonce_bad]
     call privacy_puts
-    jmp  .ready
+    mov  byte [rel privacy_out_ready], 1
+    mov  qword [r12 + RSP_CODE], CMDE_BADARG  ; ROOT 122100 (SEC 122037): a refusal reports CMDE_BADARG, not the dispatch OK
+    jmp  .wipe_frame
 .matrix_bad:
     mov  r14d, r9d                     ; ordinal only, no test values
     lea  rdi, [rel privacy_reply_matrix_bad]
@@ -133,6 +135,7 @@ cmd_verb_privacytest:
 .ready:
     mov  byte [rel privacy_out_ready], 1
     mov  qword [r12 + RSP_CODE], CMDE_OK
+.wipe_frame:
     ; Only public metadata occupied this frame; erase it for clean reuse.
     xor  ecx, ecx
 .wipe:

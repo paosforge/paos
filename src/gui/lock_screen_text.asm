@@ -2,8 +2,8 @@
 %include "core/abi/build_profile.inc"
 ;; LAYER 6
 ;; PURPOSE Paint fixed public lock-card records through the trusted catalog.
-;; EXPORTS lock_card_text_draw
-;; IMPORTS gui/lock_screen, gui/lock_identity, gui/widget, gui/l10n_paint, gui/res_pack_boot, gui/window, gui/chat_app, core/lib/str
+;; EXPORTS lock_card_owner_disclosure, lock_card_text_draw
+;; IMPORTS gui/clock_paint, gui/lock_screen, gui/lock_identity, gui/widget, gui/l10n_paint, gui/res_pack_boot, gui/window, gui/chat_app, core/lib/str, sec/principal, boot/gop
 ;; CAPS
 ;; OWNER saga:login_surfaces
 ;; CONTEXT: bsp_only
@@ -113,7 +113,37 @@ lock_card_text_draw:
     pop  rdx
     pop  rsi
     pop  rdi
+    call clock_paint_lock_mark
     jmp  fb_draw_str_n
+
+; Fixed public disclosure; no inline widget buffer can truncate this text.
+; A single logical line wraps in the clock band during first-owner setup.
+lock_card_owner_disclosure:
+    call principal_first_owner_available
+    cmp eax, 1
+    jne .out
+    push rbx
+    mov r8d, 12
+    mov r9d, 12
+    mov r10d, [rel fb_width]
+    sub r10d, 24
+    mov r11d, 64
+    mov ebx, GUI_TOK_CONTROL_BG
+    call wgt_fill_rect
+    mov r8d, 20
+    mov r9d, 20
+    mov r10d, [rel fb_width]
+    sub r10d, 40
+    shr r10d, 3
+    mov r11d, 3
+    mov ebx, GUI_TOK_CONTROL_TEXT
+    mov ecx, GUI_TOK_CONTROL_BG
+    lea rsi, [rel prin_stage_disclosure]
+    mov edi, L10N_ID_prin_stage_disclosure
+    call l10n_paint_wrap
+    pop rbx
+.out:
+    ret
 
 ; Fixed English anchors for the form's normalized public declarations.
 str_lock_password_display: db "Password",0
@@ -136,7 +166,8 @@ lock_card_text_records:
 %endif
     LOCK_CARD_TEXT 8, str_lock_retry
     LOCK_CARD_TEXT 8, str_lock_setup
-    LOCK_CARD_TEXT 8, str_lock_staged
+    LOCK_CARD_TEXT 8, str_lock_change_not_applied
+    LOCK_CARD_TEXT 8, str_lock_setup_not_applied
     LOCK_CARD_TEXT 8, str_lock_card_recovery
     LOCK_CARD_TEXT 9, str_lock_forgot_display
     LOCK_CARD_TEXT 13, str_lock_back_display

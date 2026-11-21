@@ -1,6 +1,6 @@
 ;; MODULE dev/net/rtl8168
 ;; LAYER 3
-;; EXPORTS rtl8168_link_rearm_counts, rtl8168_witness, rtl8168_terminal_quiesce, rtl8168_create, rtl8168_hw_bringup, rtl8168_boot_bringup, rtl8168_status_line, rtl8168_bootlog_line, rtl8168_rx_diag_emit, rtl8168_frame_stats, rtl8168_dev, rtl8168_carrier_ready, rtl8168_carrier_read, rtl8168_carrier_write, rtl8168_carrier_link
+;; EXPORTS rtl8168_link_rearm_counts, rtl8168_link_live, rtl8168_witness, rtl8168_terminal_quiesce, rtl8168_create, rtl8168_hw_bringup, rtl8168_boot_bringup, rtl8168_status_line, rtl8168_bootlog_line, rtl8168_rx_diag_emit, rtl8168_frame_stats, rtl8168_dev, rtl8168_carrier_ready, rtl8168_carrier_read, rtl8168_carrier_write, rtl8168_carrier_link
 ;; IMPORTS core/time, boot/native_driver_gate, net/netdev, bus/pci, core/dma, core/heap, boot/serial, dev/net/e1000e, net/dns, core/lib/mem, bus/pci_claim, hv/pci_assign
 ;; CAPS mmio dma
 ;; OWNER saga:net
@@ -1711,6 +1711,7 @@ rtl8168_tx:
 .tx_timeout:
     ; A queued descriptor is not wire proof. Leave it/bounce buffer untouched
     ; until a later call sees OWN clear; callers may retry under their budget.
+    lock inc qword [rel rtl8168_tx_timeouts]   ; diagnostic only (ROOT120117)
 .tx_reject:
     mov  rax, -1
     jmp  .tx_out
@@ -2916,12 +2917,14 @@ r68_lr_tick:
     lea rax, [rel rtl8168_link_rearm_state]
     REALTEK_LINK_REARM_BODY r68
 r68_lr_sample:
+    mov edx, REALTEK_LR_UNREAD
     cmp byte [rel rtl8168_bound], 1
     jne .bad
     cmp qword [rel rtl8168_tx_ring], 0
     je .bad
     mov r9, [rel rtl8168_bar2]
     movzx eax, byte [r9+RTL_PHYSTS]
+    mov edx, eax                    ; raw PHYSTS for the diagnostic record
     cmp eax, 0xff
     je .bad
     shr eax, 1
@@ -2929,6 +2932,10 @@ r68_lr_sample:
     ret
 .bad:
     mov rax, -1
+    ret
+r68_lr_cmd:
+    mov r9, [rel rtl8168_bar2]
+    movzx eax, byte [r9+RTL_CMD]
     ret
 r68_lr_own:
     ; This driver publishes only synchronous descriptor zero, with EOR on it.
@@ -2971,6 +2978,9 @@ r68_lr_close:
     mov byte [rel rtl8168_bound], 0
     mov byte [rel rtl8168_link_up], 0
     ret
+; Memory copy only. Five counts down/up/rearmed/stuck/failures; once the tick
+; has run, ten more: phase, saved OWN, live OWN, PHYSTS, BMCR, BMSR, CMD,
+; TX timeouts, rx_poll calls, ticks. EAX = qwords written (5 or 15).
 rtl8168_link_rearm_counts:
     lea r8, [rel rtl8168_link_rearm_state+16]
     xor ecx, ecx
@@ -2980,9 +2990,39 @@ rtl8168_link_rearm_counts:
     inc ecx
     cmp ecx, 5
     jb .copy
+    mov eax, 5
+    lea r8, [rel rtl8168_link_rearm_state]
+    cmp qword [r8+REALTEK_LR_TICKS], 0
+    je .out                          ; never driven: the legacy five-count tuple
+    lea r9, [rdi+40]
+    REALTEK_LR_RECORD
+    mov rax, [rel rtl8168_tx_timeouts]
+    mov [r9+56], rax
+    mov rax, [rel rtl8168_rx_poll_calls]
+    mov [r9+64], rax
+    mov eax, 15
+.out:
+    ret
+; Live command-NIC link for NIC_LINK (ROOT120117): memory only, no hardware
+; read. 1 iff bound, the transition machine is up (phase 1) and its latest
+; raw PHYSTS sample has LinkSts. A down, settling, failed or closed NIC is 0.
+rtl8168_link_live:
+    xor eax, eax
+    cmp byte [rel rtl8168_bound], 1
+    jne .out
+    cmp qword [rel rtl8168_link_rearm_state], 1
+    jne .out
+    mov rdx, [rel rtl8168_link_rearm_state+REALTEK_LR_PHYS]
+    cmp rdx, 0xff
+    jae .out
+    shr edx, 1
+    and edx, 1
+    mov eax, edx
+.out:
     ret
 align 8
 rtl8168_link_rearm_state: times REALTEK_LR_SIZE db 0
+rtl8168_tx_timeouts: dq 0
 
 ; Reset/re-arm only the already bound MAC_VER46 and retained DMA allocation.
 ; Called with the existing producer gate held, never by a private dispatcher.

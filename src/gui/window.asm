@@ -1,7 +1,7 @@
 ;; MODULE gui/window
 ;; LAYER 6
-;; EXPORTS calendar_paint, lock_notice_paint, bat_crit_left_s, taskbar_battery_paint, taskbar_ime_paint, taskbar_ime_cell, ime_glyph, ime_popup_rect, ime_popup_overlaps, ime_popup_hit, ime_popup_paint, taskbar_battery_stale, taskbar_battery_text, gui_compositor_selftest, fb_fill_rect, fb_fill_rect_ref, fb_perf_med, fb_fill_rect_declare, taskbar_clock_tick, taskbar_clock_cadence_arm, fb_blit_rgba, fb_blit_rgba_ref, fb_blit_perf_med, fb_blit_rgba_declare, fb_shadow_attach, fb_damage_rect, fb_present_flush, fb_present_rect, fb_present_all, fb_scanout_base, fb_shadow_base, fb_present_count, fb_present_px, fb_present_tsc_last, fb_cursor_presents, taskbar_read_wall, clock_tz_min, clock_hh, clock_mm, clock_last_hhmm, clock_wall_valid, fb_present_tsc_max, fb_shadow_src, gui_cursor_shape, tray_clock_rearm_if_covered, dpms_force, dpms_blanked, dpms_last_activity_ms, display_probe, fb_present_lock_suppressed, fb_present_input_held, fb_present_boot_hold, fb_surface_epoch, fb_shadow_cap, fb_present_valid, clock_local_offset
-;; IMPORTS gui/calendar, gui/lock_ssh_notice, gui/lock_fade, boot/serial, boot/gop, core/heap, core/time, gui/cadence_mark, gui/widget_image, dev/input/ps2, boot/paging, gui/lock_screen, sec/session, dev/power/ec_power, core/lib/fmt, svc/command_udp, gui/input_route, gui/l10n_paint, gui/widget, gui/summon_palette
+;; EXPORTS calendar_paint, lock_notice_paint, bat_crit_left_s, taskbar_battery_paint, taskbar_ime_paint, taskbar_ime_cell, ime_glyph, ime_popup_rect, ime_popup_overlaps, ime_popup_hit, ime_popup_paint, taskbar_battery_stale, taskbar_battery_text, gui_compositor_selftest, fb_fill_rect, fb_fill_rect_ref, fb_perf_med, fb_fill_rect_declare, taskbar_clock_tick, taskbar_clock_cadence_arm, fb_blit_rgba, fb_blit_rgba_ref, fb_blit_perf_med, fb_blit_rgba_declare, fb_shadow_attach, fb_damage_rect, fb_present_flush, fb_present_rect, fb_present_all, fb_scanout_base, fb_shadow_base, fb_present_count, fb_present_px, fb_present_tsc_last, fb_cursor_presents, taskbar_read_wall, clock_tz_min, clock_hh, clock_mm, clock_last_hhmm, clock_wall_valid, fb_present_tsc_max, fb_shadow_src, gui_cursor_shape, tray_clock_rearm_if_covered, dpms_force, dpms_blanked, dpms_last_activity_ms, display_probe, fb_present_lock_suppressed, fb_present_input_held, fb_present_boot_hold, fb_surface_epoch, fb_shadow_cap, fb_present_valid, clock_local_offset, fb_boot_surface_prepare, fb_boot_surface_restore
+;; IMPORTS gui/clock_paint, boot/boot_menu, gui/calendar, gui/lock_ssh_notice, gui/lock_fade, boot/serial, boot/gop, core/heap, core/time, gui/cadence_mark, gui/widget_image, dev/input/ps2, boot/paging, gui/lock_screen, sec/session, dev/power/ec_power, core/lib/fmt, svc/command_udp, gui/input_route, gui/l10n_paint, gui/widget, gui/summon_palette
 ;; CAPS
 ;; OWNER saga:gui
 ; ============================================================================
@@ -1142,6 +1142,7 @@ fb_shadow_attach:
     cmp  rbx, [rel fb_shadow_cap]
     jbe  .out                           ; attached and the mode still fits
 .detach:
+    call bm_face_retire                 ; T6-1 R6: direct painters own the scanout again
     mov  rax, [rel fb_scanout_base]
     mov  [rel fb_base], rax             ; the mode outgrew the buffer: direct again
     mov  qword [rel fb_scanout_base], 0
@@ -1463,7 +1464,15 @@ fb_present_rect:
     ; Boot render KATs may fill the back buffer, but cannot flash the desktop
     ; on scanout before the completed sign-in composition is ready.
     cmp  byte [rel session_locked], SESSION_LOCKED
-    jne  .present
+    je   .locked_gate
+    ; T5-9 (root 120436 (2)): nothing from the desktop before sign-in. An
+    ; unlocked session shows the desktop only once a real bind started it
+    ; (lock_screen_desktop_start). A self-test's transient unlock (the
+    ; session KAT runs right after the sign-in composes) is not a sign-in,
+    ; so it keeps the locked boot gate and its hold.
+    cmp  byte [rel lock_desktop_started], 1
+    je   .present
+.locked_gate:
     cmp  byte [rel lock_composition_ok], 1
     jne  .lock_withheld
     ; Boot audit (2), spec 7.6.5: the composed sign-in reaches the scanout only on
@@ -1478,6 +1487,7 @@ fb_present_rect:
 .blanked:
     ret
 .present:
+    call bm_face_retire                 ; T6-1 R6: the boot face never writes after an admitted present
     push rax
     push rbx
     push rcx
@@ -1608,6 +1618,7 @@ fb_present_rect:
     call fb_cursor_overlay
     sfence                              ; the scanout is write-combined
     inc  qword [rel fb_present_count]
+    call clock_paint_present           ; only a completed copy can publish a paint
     mov  eax, r10d
     imul eax, r11d
     add  [rel fb_present_px], rax
@@ -1955,6 +1966,63 @@ wm_paint_window:
     sub  r11d, GUI_TITLE_H
     mov  ebx, WIN_BODY_COLOR
     call fb_fill_rect
+    ret
+
+; fb_boot_surface_prepare — boot only (header, before the first desktop self-test
+; draw). Attach the private back buffer. Without one (no memory, a mode larger
+; than the buffer, an unrepresentable mode) the window self-tests would compose
+; straight into the scanout before sign-in (T5-9, root 120436 (2)). Park the
+; framebuffer instead: fb_base/width/height/stride read 0, the no-GOP state every
+; painter and the cursor already honour, so those self-tests skip their display
+; work. lock_screen_init restores it before the sign-in composes. Not used by the
+; runtime RESSET repaint. Preserves all registers.
+fb_boot_surface_prepare:
+    push rax
+    push rdi
+    cmp  qword [rel fb_base], 0
+    je   .out                           ; no GOP: already headless
+    call fb_shadow_attach
+    cmp  qword [rel fb_scanout_base], 0
+    jne  .out                           ; private shadow attached: presents stay gated
+    mov  rax, [rel fb_base]             ; (a second call finds fb_base 0 above: never re-parks)
+    mov  [rel fb_boot_park_base], rax
+    mov  eax, [rel fb_width]
+    mov  [rel fb_boot_park_width], eax
+    mov  eax, [rel fb_height]
+    mov  [rel fb_boot_park_height], eax
+    mov  eax, [rel fb_stride]
+    mov  [rel fb_boot_park_stride], eax
+    mov  qword [rel fb_base], 0
+    mov  dword [rel fb_width], 0
+    mov  dword [rel fb_height], 0
+    mov  dword [rel fb_stride], 0
+    mov  byte [rel fb_boot_parked], 1
+    lea  rdi, [rel str_fb_boot_parked]
+    call serial_string
+.out:
+    pop  rdi
+    pop  rax
+    ret
+
+; fb_boot_surface_restore — undo fb_boot_surface_prepare's park, once
+; (lock_screen_init, after the boot floor windows are retired and before the
+; sign-in composes). No-op when nothing was parked. Preserves all registers.
+fb_boot_surface_restore:
+    cmp  byte [rel fb_boot_parked], 1
+    jne  .out
+    call bm_face_retire                 ; T6-1 R6: the sign-in composes straight into this scanout
+    push rax
+    mov  eax, [rel fb_boot_park_width]
+    mov  [rel fb_width], eax
+    mov  eax, [rel fb_boot_park_height]
+    mov  [rel fb_height], eax
+    mov  eax, [rel fb_boot_park_stride]
+    mov  [rel fb_stride], eax
+    mov  rax, [rel fb_boot_park_base]
+    mov  [rel fb_base], rax
+    mov  byte [rel fb_boot_parked], 0
+    pop  rax
+.out:
     ret
 
 ; gui_compositor_selftest — render the M6 visual floor and emit serial markers.
@@ -3004,7 +3072,14 @@ taskbar_draw_clock_glyphs:
     call fb_fill_rect
     ; RTC is an estimate until a real NTP sample has set the canonical wall.
     ; The spare left glyph cell stays inside the existing80px reservation.
+    mov  esi, '_'
     cmp  byte [rel time_wall_source], TIME_SRC_NTP
+    je   .prefix
+    mov  esi, '~'
+.prefix:
+    xor  edi, edi                      ; tray site
+    call clock_paint_mark
+    cmp  esi, '_'
     je   .synced
     mov  r8d, [rel fb_width]
     sub  r8d, CLOCK_TRAY_XOFF
@@ -3711,6 +3786,7 @@ dpms_fill_black:
     ret
 
 dpms_blank:
+    call bm_face_retire                 ; T6-1 R6: a blanked scanout stays black
     mov  byte [rel dpms_blanked], 1
     lea  rdi, [rel str_dpms_blank_idle]
     cmp  byte [rel dpms_src_verb], 1
@@ -4525,6 +4601,11 @@ fb_scanout_base:     dq 0                ; the GOP scanout while attached; 0 = d
 dpms_keepawake:      db 0                ; Task3477: 1 = never idle-blank
 dpms_blanked:        db 0                ; Task3477: 1 = scanout blanked black
 dpms_src_verb:       db 0                ; RCQ-27 L3: 1 while dpms_force runs (marker source)
+fb_boot_parked:      db 0               ; 1 while fb_boot_surface_prepare parked a direct-scanout surface
+fb_boot_park_width:  dd 0
+fb_boot_park_height: dd 0
+fb_boot_park_stride: dd 0
+fb_boot_park_base:   dq 0
 fb_present_boot_hold: db 0               ; 1 from lock_screen_init until the router's first idle pass (boot audit 2)
 align 8
 dpms_last_activity_ms: dq 0             ; boot-ms of the last observed input
@@ -4672,6 +4753,7 @@ fb_cursor_mask:
 fb_cursor_hot:       db 0,0, 7,7, 7,7, 7,7, 7,7, 7,7   ; hotspot (x,y) per shape
 gui_cursor_shape:    db 0                ; GUI_CURSOR_* chosen by the pointer dispatcher (hover / drag mode)
 str_fb_shadow_on: db "[PAOS64] M6 gui: full-screen back buffer attached (compose in RAM, present damage unions, arrow cursor composited at present) [gui.fb.shadow]", 13, 10, 0
+str_fb_boot_parked: db "[PAOS64] M6 gui: no private back buffer before sign-in - desktop self-tests parked off the scanout [gui.fb.boot_parked]", 13, 10, 0
 str_fb_shadow_oom: db "[PAOS64] M6 gui: back buffer OFF (no memory) - composing straight into the scanout", 13, 10, 0
 str_fb_shadow_small: db "[PAOS64] M6 gui: back buffer OFF (mode larger than the buffer) - composing straight into the scanout", 13, 10, 0
 str_fb_scale_2x: db "[PAOS64] M6 gui: 4K-class mode, the desktop composes in logical units of 2x2 scanout pixels [gui.scale.2x]", 13, 10, 0

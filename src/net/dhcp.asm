@@ -1,10 +1,10 @@
 ;; MODULE net/dhcp
 ;; LAYER 4
-;; EXPORTS dhcp_client_selftest, dhcp_find_option, dhcp_parse_offer, dhcp_parse_ack, dhcp_find_option_kat, dhcp_parse_ack_kat, dhcp_parse_offer_kat, dhcp_wr_u8_kat, dhcp_wire_start, dhcp_wire_start_no_server, dhcp_wire_stop, dhcp_wire_tick, dhcp_wire_ingest, dhcp_wire_mark_bound, dhcp_ack_yiaddr, dhcp_ack_mask_v, dhcp_ack_gw_v, dhcp_ack_dns_v, dhcp_ack_lease_s, dhcp_ack_t1_s, dhcp_ack_t2_s, dhcp_wire_state, dhcp_wire_tx_started, dhcp_wire_tx_attempts, dhcp_wire_tx_ok, dhcp_wire_tx_fail, dhcp_wire_rx_frames, dhcp_wire_rx_port68, dhcp_wire_rx_xid_ok, dhcp_wire_m_discover, dhcp_wire_m_offer, dhcp_wire_m_request, dhcp_wire_m_ack, dhcp_wire_abandon, dhcp_wire_observation, dhcp_wire_lease_snapshot, dhcp_wire_start_preferred
+;; EXPORTS dhcp_client_selftest, dhcp_find_option, dhcp_parse_offer, dhcp_parse_ack, dhcp_find_option_kat, dhcp_parse_ack_kat, dhcp_parse_offer_kat, dhcp_wr_u8_kat, dhcp_wire_start, dhcp_wire_start_no_server, dhcp_wire_stop, dhcp_wire_tick, dhcp_wire_ingest, dhcp_wire_mark_bound, dhcp_ack_yiaddr, dhcp_ack_mask_v, dhcp_ack_gw_v, dhcp_ack_dns_v, dhcp_ack_ntp_v, dhcp_ack_lease_s, dhcp_ack_t1_s, dhcp_ack_t2_s, dhcp_wire_state, dhcp_wire_tx_started, dhcp_wire_tx_attempts, dhcp_wire_tx_ok, dhcp_wire_tx_fail, dhcp_wire_rx_frames, dhcp_wire_rx_port68, dhcp_wire_rx_xid_ok, dhcp_wire_m_discover, dhcp_wire_m_offer, dhcp_wire_m_request, dhcp_wire_m_ack, dhcp_wire_abandon, dhcp_wire_observation, dhcp_wire_lease_snapshot, dhcp_wire_start_preferred, dhcp_wire_ntp_server
 ;; IMPORTS boot/serial, core/lib/mem, core/lib/cksum, lib/safe_buffer, core/time, core/lock, net/netdev, net/arp_cache
 ;; CAPS
 ;; OWNER saga:net
-;; LOCK: dhcp_wire_lock PROTECTS dhcp_wire_preferred_server, dhcp_wire_state, dhcp_wire_no_server, dhcp_wire_owner_handle, dhcp_wire_retry_tsc, dhcp_wire_t1_tsc, dhcp_wire_t2_tsc, dhcp_wire_expire_tsc, dhcp_wire_tx_started, dhcp_wire_tx_attempts, dhcp_wire_tx_ok, dhcp_wire_tx_fail, dhcp_wire_rx_frames, dhcp_wire_rx_port68, dhcp_wire_rx_xid_ok, dhcp_wire_m_discover, dhcp_wire_m_offer, dhcp_wire_m_request, dhcp_wire_m_ack, dhcp_ack_yiaddr, dhcp_ack_mask_v, dhcp_ack_gw_v, dhcp_ack_dns_v, dhcp_ack_lease_s, dhcp_ack_t1_s, dhcp_ack_t2_s
+;; LOCK: dhcp_wire_lock PROTECTS dhcp_wire_preferred_server, dhcp_wire_state, dhcp_wire_no_server, dhcp_wire_owner_handle, dhcp_wire_retry_tsc, dhcp_wire_t1_tsc, dhcp_wire_t2_tsc, dhcp_wire_expire_tsc, dhcp_wire_tx_started, dhcp_wire_tx_attempts, dhcp_wire_tx_ok, dhcp_wire_tx_fail, dhcp_wire_rx_frames, dhcp_wire_rx_port68, dhcp_wire_rx_xid_ok, dhcp_wire_m_discover, dhcp_wire_m_offer, dhcp_wire_m_request, dhcp_wire_m_ack, dhcp_ack_yiaddr, dhcp_ack_mask_v, dhcp_ack_gw_v, dhcp_ack_dns_v, dhcp_ack_ntp_v, dhcp_ack_lease_s, dhcp_ack_t1_s, dhcp_ack_t2_s
 ; ============================================================================
 ; net/dhcp.asm — the DHCP client message-build/parse LOGIC (contract 1046 /
 ; C10e, the qemu rung of the bare-metal 1022/1024/1025). Rides ON TOP of the
@@ -48,6 +48,8 @@ DHCP_MAGIC_LE  equ 0x63538263 ; bytes 63 82 53 63 read as a little-endian dword
 OPT_SUBNET     equ 1          ; subnet mask (4 bytes)
 OPT_ROUTER     equ 3          ; default gateway (4 bytes)
 OPT_DNS        equ 6          ; DNS server (4 bytes)
+OPT_NTP        equ 42         ; NTP servers (RFC 2132 8.3), first address used
+OPT_PRL        equ 55         ; parameter-request list
 OPT_REQIP      equ 50         ; Requested-IP (REQUEST echoes the offered yiaddr)
 OPT_LEASE      equ 51         ; lease duration, network-order seconds
 OPT_MSGTYPE    equ 53         ; DHCP message type (1 byte)
@@ -583,6 +585,15 @@ dhcp_build_request:
     mov  byte [rcx + 1], 1
     mov  byte [rcx + 2], MSG_REQUEST
     add  rcx, 3
+    ; opt55: the DISCOVER's parameter-request list (servers answer the ACK from it)
+    mov  byte [rcx + 0], OPT_PRL
+    mov  byte [rcx + 1], 5
+    mov  byte [rcx + 2], OPT_SUBNET
+    mov  byte [rcx + 3], OPT_ROUTER
+    mov  byte [rcx + 4], OPT_DNS
+    mov  byte [rcx + 5], 51
+    mov  byte [rcx + 6], OPT_NTP
+    add  rcx, 7
     ; opt50: Requested-IP = offered yiaddr (echo)
     mov  byte [rcx + 0], OPT_REQIP
     mov  byte [rcx + 1], 4
@@ -609,6 +620,11 @@ dhcp_build_request:
 ;   RCQ-10 S2: opt3 and opt6 are optional (RFC 2132 3.5, 3.8). An absent router is
 ;   gw=0 (on-link only), an absent resolver is dns=0; a present but short one is
 ;   still malformed and rejected.
+;   Clock unit (ROOT 122029): the first opt42 offers its first NTP server
+;   (dhcp_ack_ntp_v). A zero or partial length refuses the ACK like opt3/opt6;
+;   an absent or non-unicast first address (0/8, 127/8, 224/4, 240/4,
+;   broadcast; SEC 122036 T3) offers none (0). It is committed with the lease
+;   in the same atomic block.
 ;   clobbers: volatiles; saves rbx,r12-r15.
 ;
 ;   TOURNAMENT 1407 (FASTEST variant): the shipped baseline made FIVE passes over the
@@ -626,10 +642,11 @@ dhcp_parse_ack:
     push r13
     push r14
     push r15
-    sub  rsp, 56                            ; option pointers + atomic commit scratch
+    sub  rsp, 72                            ; option pointers + atomic commit scratch
     mov  qword [rsp + 0], 0
     mov  qword [rsp + 8], 0
     mov  qword [rsp + 16], 0
+    mov  qword [rsp + 56], 0                ; first opt42 pointer (clock unit)
     ; --- validate: op=BOOTREPLY + len>=240 + magic cookie (ported from dhcp_validate) ---
     test rdi, rdi
     jz   .bad                                ; reject before the first frame read
@@ -736,6 +753,20 @@ dhcp_parse_ack:
     mov  [rsp + 8], r9
     jmp  .adv
 .not58:
+    cmp  al, OPT_NTP
+    jne  .not42
+    ; Clock unit (ROOT 122029, SEC 122036 T3): an address list like 3/6. A
+    ; zero or partial length refuses the ACK; the FIRST option 42 decides, and
+    ; a later duplicate cannot replace it.
+    cmp  ecx, 4
+    jb   .bad                               ; cannot supply even the first server
+    test ecx, 3
+    jnz  .bad                               ; no partial address at the list tail
+    cmp  qword [rsp + 56], 0
+    jne  .adv
+    mov  [rsp + 56], r9
+    jmp  .adv
+.not42:
     cmp  al, OPT_T2
     jne  .adv
     cmp  ecx, 4
@@ -775,6 +806,21 @@ dhcp_parse_ack:
     mov  eax, [r15]
 .dns_staged:
     mov  [rsp + 36], eax
+    xor  eax, eax                            ; no opt42 = no NTP server offered
+    mov  rdx, [rsp + 56]
+    test rdx, rdx
+    jz   .ntp_staged
+    mov  eax, [rdx]                          ; wire order: AL = first octet
+    test al, al                              ; 0/8 is not a server
+    jz   .ntp_none
+    cmp  al, 127                             ; loopback
+    je   .ntp_none
+    cmp  al, 224                             ; 224/4 multicast, 240/4 and broadcast
+    jb   .ntp_staged
+.ntp_none:
+    xor  eax, eax                            ; SEC T3: unicast only, else no server
+.ntp_staged:
+    mov  [rsp + 64], eax
 
     ; Lease clocks are host-order seconds. RFC 2131 defaults T1 to 1/2 and T2
     ; to 7/8 of the lease when the server omits them. Refuse nonsensical server
@@ -844,12 +890,14 @@ dhcp_parse_ack:
     mov  [rel dhcp_ack_t1_s], eax
     mov  eax, [rsp + 48]
     mov  [rel dhcp_ack_t2_s], eax
+    mov  eax, [rsp + 64]
+    mov  [rel dhcp_ack_ntp_v], eax
     xor  rax, rax
     jmp  .out
 .bad:
     mov  rax, -1
 .out:
-    add  rsp, 56
+    add  rsp, 72
     pop  r15
     pop  r14
     pop  r13
@@ -2086,6 +2134,36 @@ dhcp_wire_lease_snapshot:
     pop  r12
     ret
 
+; dhcp_wire_ntp_server(EDI=wire IPv4 of the live route source) -> EAX = the
+; current lease's first option-42 server, or 0. Clock unit (ROOT 122029): the
+; offer counts only while the lease that carried it is held (BOUND, RENEWING or
+; REBINDING) and is the address the route actually uses; raw ACK fields alone
+; are never configuration. Read-only, under the owner lock.
+dhcp_wire_ntp_server:
+    push rbx
+    mov  ebx, edi
+    call dhcp_wire_lock_acquire
+    xor  edx, edx
+    test ebx, ebx
+    jz   .out
+    cmp  ebx, [rel dhcp_ack_yiaddr]
+    jne  .out
+    movzx eax, byte [rel dhcp_wire_state]
+    cmp  eax, DHCP_WS_BOUND
+    je   .held
+    cmp  eax, DHCP_WS_RENEWING
+    je   .held
+    cmp  eax, DHCP_WS_REBINDING
+    jne  .out
+.held:
+    mov  edx, [rel dhcp_ack_ntp_v]
+.out:
+    push rdx
+    call dhcp_wire_lock_release
+    pop  rax
+    pop  rbx
+    ret
+
 ; RDI=client MAC, RSI=owning netdev handle.
 dhcp_wire_start:
     xor  r8d, r8d
@@ -2152,14 +2230,15 @@ dhcp_wire_start_common:
     mov  byte [rdi + 0], OPT_MSGTYPE
     mov  byte [rdi + 1], 1
     mov  byte [rdi + 2], 1                  ; DHCPDISCOVER
-    mov  byte [rdi + 3], 55                 ; parameter-request list
-    mov  byte [rdi + 4], 4
+    mov  byte [rdi + 3], OPT_PRL            ; parameter-request list
+    mov  byte [rdi + 4], 5
     mov  byte [rdi + 5], OPT_SUBNET
     mov  byte [rdi + 6], OPT_ROUTER
     mov  byte [rdi + 7], OPT_DNS
     mov  byte [rdi + 8], 51                 ; lease time
-    mov  byte [rdi + 9], OPT_END
-    mov  dword [rel dhcp_wire_payload_len], DHCP_OPTIONS + 10
+    mov  byte [rdi + 9], OPT_NTP            ; clock unit (ROOT 122029): boot SNTP server
+    mov  byte [rdi + 10], OPT_END
+    mov  dword [rel dhcp_wire_payload_len], DHCP_OPTIONS + 11
     mov  byte [rel dhcp_wire_state], DHCP_WS_SELECTING
     mov  qword [rel dhcp_wire_retry_tsc], 0
     mov  qword [rel dhcp_wire_t1_tsc], 0
@@ -2176,6 +2255,7 @@ dhcp_wire_start_common:
     mov  dword [rel dhcp_ack_mask_v], 0
     mov  dword [rel dhcp_ack_gw_v], 0
     mov  dword [rel dhcp_ack_dns_v], 0
+    mov  dword [rel dhcp_ack_ntp_v], 0
     mov  dword [rel dhcp_ack_lease_s], 0
     mov  dword [rel dhcp_ack_t1_s], 0
     mov  dword [rel dhcp_ack_t2_s], 0
@@ -2222,6 +2302,7 @@ dhcp_wire_stop:
     mov  dword [rel dhcp_ack_mask_v], 0
     mov  dword [rel dhcp_ack_gw_v], 0
     mov  dword [rel dhcp_ack_dns_v], 0
+    mov  dword [rel dhcp_ack_ntp_v], 0
     mov  dword [rel dhcp_ack_lease_s], 0
     mov  dword [rel dhcp_ack_t1_s], 0
     mov  dword [rel dhcp_ack_t2_s], 0
@@ -2373,8 +2454,8 @@ dhcp_wire_renew_request:
     mov  eax, [rel dhcp_ack_yiaddr]
     mov  [rel dhcp_request_buf + 12], eax      ; ciaddr, not Requested-IP
     mov  word [rel dhcp_request_buf + 10], 0
-    mov  byte [rel dhcp_request_buf + DHCP_OPTIONS + 3], OPT_END
-    mov  dword [rel dhcp_wire_request_len], DHCP_OPTIONS + 4
+    mov  byte [rel dhcp_request_buf + DHCP_OPTIONS + 10], OPT_END ; keep 53 + the 55 list
+    mov  dword [rel dhcp_wire_request_len], DHCP_OPTIONS + 11
     ret
 
 dhcp_wire_fallback:
@@ -2388,6 +2469,7 @@ dhcp_wire_fallback:
     mov  dword [rel dhcp_ack_mask_v], 0
     mov  dword [rel dhcp_ack_gw_v], 0
     mov  dword [rel dhcp_ack_dns_v], 0
+    mov  dword [rel dhcp_ack_ntp_v], 0
     mov  dword [rel dhcp_ack_lease_s], 0
     mov  dword [rel dhcp_ack_t1_s], 0
     mov  dword [rel dhcp_ack_t2_s], 0
@@ -3079,6 +3161,7 @@ dhcp_ack_dns_v:       resd 1
 dhcp_ack_lease_s:     resd 1
 dhcp_ack_t1_s:        resd 1
 dhcp_ack_t2_s:        resd 1
+dhcp_ack_ntp_v:       resd 1  ; first option-42 server, 0 = none (clock unit)
 ; the built REQUEST + its length
 dhcp_request_len:     resd 1
 dhcp_request_buf:     resb 300

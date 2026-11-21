@@ -6,8 +6,13 @@
 ;; OWNER saga:fs_wave
 ;; CONTEXT: bsp_only
 ; One synchronous request owns a fresh file, not raw free space. No selection,
-; adoption, arm, recovery, replacement, cleanup, retry, DATA role or 4Kn grant.
+; adoption, arm, recovery, replacement, retry, DATA role or 4Kn grant.
 ; Caller must finally END before yielding/returning from the original request.
+; END deletes exactly that fresh file while its owned op is still admitted, so a
+; shared volume keeps no probe residue (root 119146). Any failure or identity
+; mismatch before or during the delete is uncertain (-3): retained, never retried.
+; The delete tombstones the entry and frees its chain; it does not erase the four
+; sectors, so no caller may rely on END to erase owner data (SEC 119223 N2).
 
 fat32_probe_window_begin:                 ; EDI=armed scratch handle, RSI=nonce,
                                         ; RDX=2048 initial bytes, RCX=out64
@@ -371,7 +376,10 @@ fat32_probe_window_flush:                 ; handle
     jnz fpw_failure
     ret
 
-fat32_probe_window_end:                   ; terminal cleanup needs no live grant
+fat32_probe_window_end:                   ; close needs no live grant; the delete
+                                        ; writes only via fpw_gate, so a withdrawn
+                                        ; grant refuses it first: -3, file kept
+                                        ; (SEC 119223 N1; never delete ungated)
     cmp byte [rel fpw_active], 1
     jne .no
     test rdi, rdi
@@ -384,6 +392,9 @@ fat32_probe_window_end:                   ; terminal cleanup needs no live grant
     jne .uncertain
     call fpw_current
     test rax, rax
+    jnz .uncertain
+    call fpw_delete
+    test rax, rax
     jz .close
 .uncertain:
     mov rbx, -3
@@ -391,6 +402,22 @@ fat32_probe_window_end:                   ; terminal cleanup needs no live grant
     call fpw_close
     mov rax, rbx
     pop rbx
+    ret
+.no:
+    mov rax, -1
+    ret
+; Exact window file only. END's fpw_current has just re-read the fresh dirent
+; and FAT: same name, first sector, 2048 bytes, one 4-sector extent, on this
+; mount, under the still-held dir gate and TX. The shared delete proves absence.
+fpw_delete:
+    mov rdi, [rel fpw_mount]
+    lea rsi, [rel fpw_name]
+    call fd_delete_locked
+    test rax, rax
+    jnz .no
+    cmp byte [rel fpw_failed], 0         ; a physical IO failure inside the delete
+    jne .no
+    xor eax, eax
     ret
 .no:
     mov rax, -1

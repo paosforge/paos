@@ -3,6 +3,22 @@
 TERM_GUEST_MODE equ 3
 TERM_GUEST_OFFER_KEY equ 0x0f           ; Ctrl+Shift+O: the router folds Ctrl+letter
 
+; D5c (SEC 121684 S1-S3): PAOS_TERMINAL_TOOLS_GUEST picks the console behind
+; `guest` at assemble time only, and this is its one default. 0, in every
+; shipped and lab profile until the cutover unit, is the driver route,
+; preprocessed exactly as before. 1 calls hv/tools_vm's tools_vm_terminal_*
+; facade, which must be the real module (no stub). No verb, hook, config or
+; runtime state selects a route. The cutover sets 1 and removes the driver
+; route in one unit (S3).
+%ifndef PAOS_TERMINAL_TOOLS_GUEST
+%define PAOS_TERMINAL_TOOLS_GUEST 0
+%endif
+%if PAOS_TERMINAL_TOOLS_GUEST == 1
+%define TERM_GUEST_TOOLS
+%elif PAOS_TERMINAL_TOOLS_GUEST != 0
+%error the tools-guest route selector must be 0 or 1 ; %error expands macro names
+%endif
+
 term_guest_attach:
     cmp byte [r12 + TI_SSH], 0
     jne .bad
@@ -12,6 +28,13 @@ term_guest_attach:
     jne .usage
     cmp qword [rel term_guest_instance], 0
     jne .bad                           ; old view retires before a new attachment
+%ifdef TERM_GUEST_TOOLS
+    mov rdi, r12
+    call tools_vm_terminal_attach       ; EAX the RUNNING instance's START /0
+    test eax, eax
+    jz .bad
+    mov esi, eax
+%else
     mov esi, [rel hv_linux_start_consumed]
     mov rdi, r12
     push rsi
@@ -19,6 +42,7 @@ term_guest_attach:
     pop rsi
     test eax, eax
     jz .bad
+%endif
     mov [rel term_guest_generation], esi
     mov [rel term_guest_instance], r12
     mov qword [rel term_guest_rx], 0
@@ -27,7 +51,11 @@ term_guest_attach:
     mov rax, [r12 + TI_VT]
     mov dword [rax + VT.replylen], 0
     mov byte [r12 + TI_SSH], TERM_GUEST_MODE
+%ifdef TERM_GUEST_TOOLS
+    lea rsi, [rel term_guest_connected_tools]
+%else
     lea rsi, [rel term_guest_connected]
+%endif
     jmp term_out_cstr
 .usage:
     lea rsi, [rel term_guest_usage]
@@ -101,6 +129,12 @@ term_guest_key:
 ; hvc0 is the shell's own output, so printed text can never open a card. One key
 ; from the owner's hand arms one offer for this attachment, and again disarms it.
 term_guest_offer_key:
+%ifdef TERM_GUEST_TOOLS
+    ; Refused for good in 0.1 (SEC 121684 Q3): the tools VM is isolated from
+    ; the app and driver VMs and has no guest bridge. Never gbr_arm.
+    lea rsi, [rel term_guest_offer_refused]
+    jmp term_out_cstr
+%else
     call keyprov_key_is_human
     test eax, eax
     jz .refused
@@ -125,6 +159,7 @@ term_guest_offer_key:
 .refused:
     lea rsi, [rel term_guest_offer_refused]
     jmp term_out_cstr
+%endif
 
 ; Hash-checked bytes go to the owner's card with the Terminal's origin, native
 ; here and never from the guest. The offer copies them; every end scrubs ours.
@@ -171,52 +206,7 @@ term_guest_text:
 .out:
     ret
 
-; One complete paste, including optional bracket markers, fits the transport
-; event. Larger pastes are visibly refused rather than split or retained.
-term_guest_paste:
-    push rbx
-    push r13
-    call term_guest_input_ok
-    test eax, eax
-    jz .out
-    mov ebx, [rel term_clip_len]
-    test ebx, ebx
-    jz .out
-    cmp ebx, 244                       ; reserve two six-byte bracket markers
-    ja .pressure
-    mov rdi, [r12 + TI_VT]
-    lea rsi, [rel term_guest_paste_buf]
-    call vt_paste_prefix
-    mov r13d, eax
-    xor ecx, ecx
-.copy:
-    lea rdx, [rel term_clip]
-    mov al, [rdx + rcx]
-    cmp al, 10
-    jne .byte
-    mov al, 13
-.byte:
-    lea rdx, [rel term_guest_paste_buf]
-    mov [rdx + r13], al
-    inc r13d
-    inc ecx
-    cmp ecx, ebx
-    jb .copy
-    mov rdi, [r12 + TI_VT]
-    lea rsi, [rel term_guest_paste_buf]
-    add rsi, r13
-    call vt_paste_suffix
-    lea ecx, [r13 + rax]
-    lea rdx, [rel term_guest_paste_buf]
-    call term_guest_send
-    jmp .out
-.pressure:
-    lea rsi, [rel term_guest_paste_limit]
-    call term_out_cstr
-.out:
-    pop r13
-    pop rbx
-    ret
+%include "gui/terminal_guest_paste.inc"
 
 ; Exact whole input event or a visible refusal; no automatic replay/retry.
 term_guest_send:
@@ -232,6 +222,8 @@ term_guest_send:
 ; Quiet form for fixed focus transitions, which may retry on the next tick.
 ; EAX=1 only after complete transport acceptance, 0 otherwise.
 term_guest_try_send:
+    cmp qword [rel term_guest_paste_instance], 0
+    jne .refused
     cmp byte [rel session_locked], SESSION_UNLOCKED
     jne .refused
     cmp r12, [rel term_guest_instance]
@@ -246,7 +238,11 @@ term_guest_try_send:
     mov esi, [rel term_guest_generation]
     mov rdi, r12
     push rcx
+%ifdef TERM_GUEST_TOOLS
+    call tools_vm_terminal_write
+%else
     call hv_terminal_write
+%endif
     pop rcx
     test eax, eax
     jz .refused
@@ -257,35 +253,78 @@ term_guest_try_send:
     xor eax, eax
     ret
 
-; Actual guest output only. One bounded chunk per GUI tick; capture then VT.
-; Hidden/minimized windows retain bounded transport output, not user input.
+; Actual guest output only. At most 32 chunks/8192 bytes per GUI tick; capture
+; then VT. Whole reply batches must clear before another chunk is consumed.
+; Guest paste has a separate bounded, lifetime-bound input frame.
 term_guest_tick:
     cmp r12, [rel term_guest_instance]
-    jne .out
+    je .attached
+    ; A stale view may still receive its final tick after attachment retirement.
+    jmp term_guest_paste_retire
+.attached:
     call term_guest_offer_tick
     mov rdi, r12
     mov esi, [rel term_guest_generation]
+%ifdef TERM_GUEST_TOOLS
+    call tools_vm_terminal_status
+    test eax, eax
+    jz .ended
+    ; SEC 121911 d2: a fresh binding and a guest device reset (Status 0) leave
+    ; the console size 0x0, so publish the grid every tick; the same pair
+    ; again changes nothing (Z4). A refusal here is the next status's to end.
+    mov rdi, r12
+    mov esi, [rel term_guest_generation]
+    mov edx, [r12 + TI_COLS]
+    mov ecx, [r12 + TI_ROWS]
+    call tools_vm_terminal_resize
+    mov rdi, r12
+    mov esi, [rel term_guest_generation]
+    call tools_vm_terminal_poll
+%else
     call hv_terminal_status
     test eax, eax
     jz .ended
+    mov rdi, r12
+    mov esi, [rel term_guest_generation]
+    call hv_terminal_poll
+%endif
+    call term_guest_paste_drain
+    test eax, eax
+    jz .out
     call term_guest_flush_replies
     test eax, eax
     jz .out
     call term_focus_report
+    push rbx
+    mov ebx, 32
+.read:
     mov rdi, r12
     mov esi, [rel term_guest_generation]
     lea rdx, [rel term_guest_chunk]
     mov ecx, 256
+%ifdef TERM_GUEST_TOOLS
+    call tools_vm_terminal_read
+%else
     call hv_terminal_read
+%endif
     test eax, eax
-    js .ended
-    jz .out
+    js .read_ended
+    jz .read_done
     add [rel term_guest_rx], rax
     push rax
     call term_echo_sample
     pop rdx
     lea rsi, [rel term_guest_chunk]
-    jmp term_guest_output
+    call term_guest_output
+    test eax, eax
+    jz .read_done                       ; a pending VT reply precedes more output
+    dec ebx
+    jnz .read
+.read_done:
+    pop rbx
+    ret
+.read_ended:
+    pop rbx
 .ended:
     call term_guest_forget
     call term_session_reset
@@ -303,6 +342,8 @@ term_guest_output:
 ; the next tick, before any later guest bytes. Lock/detach discards it. RAW's
 ; existing quarantine restores replylen and cannot bind a new reply batch.
 term_guest_flush_replies:
+    cmp qword [rel term_guest_paste_instance], 0
+    jne .pending
     mov rax, [r12 + TI_VT]
     mov ecx, [rax + VT.replylen]
     test ecx, ecx
@@ -316,7 +357,11 @@ term_guest_flush_replies:
     mov rdi, r12
     push rax
     push rcx
+%ifdef TERM_GUEST_TOOLS
+    call tools_vm_terminal_write
+%else
     call hv_terminal_write
+%endif
     pop rcx
     test eax, eax
     pop rax
@@ -360,11 +405,16 @@ term_guest_leave:
 term_guest_forget:
     cmp r12, [rel term_guest_instance]
     jne .out
+    call term_guest_paste_retire
     call gbr_disarm
     mov byte [rel term_guest_offer], 0
     mov rdi, r12
     mov esi, [rel term_guest_generation]
+%ifdef TERM_GUEST_TOOLS
+    call tools_vm_terminal_detach       ; close, lock, Ctrl+] and ended (SEC 121723)
+%else
     call hv_terminal_detach
+%endif
     mov qword [rel term_guest_instance], 0
     mov dword [rel term_guest_generation], 0
     mov byte [r12 + TI_SSH], 0
@@ -402,6 +452,9 @@ term_guest_stat:
 %include "core/abi/wdata.inc"
 %macro WDATA_gui_terminal_guest 0
 term_guest_connected: db "[guest console attached; Enter for prompt, Ctrl+] to detach, Ctrl+Shift+O to take an app]",13,10,0
+%ifdef TERM_GUEST_TOOLS
+term_guest_connected_tools: db "[guest console attached; Enter for prompt, Ctrl+] to detach]",13,10,0
+%endif
 term_guest_unavailable: db "guest: no available Linux shell console (running guest, ready transport and exclusive ownership required)",13,10,0
 term_guest_usage: db "usage: guest (attach to the running Linux guest)",13,10,0
 term_guest_offer_armed: db 13,10,"[app offer on for 2 minutes; print an app here. Ctrl+Shift+O cancels]",13,10,0
@@ -410,7 +463,7 @@ term_guest_offer_ended: db 13,10,"[app offer ended; no app received]",13,10,0
 term_guest_offer_shown: db 13,10,"[app offer ended; see the install card]",13,10,0
 term_guest_offer_refused: db 13,10,"[app offer refused]",13,10,0
 term_guest_pressure: db 7,"[guest input refused; event was not queued]",13,10,0
-term_guest_paste_limit: db 7,"[guest paste refused; maximum 244 bytes]",13,10,0
+term_guest_paste_limit: db 7,"[guest paste refused; busy or maximum 8192 bytes]",13,10,0
 term_guest_ended: db 13,10,"[guest console ended or output overflowed; detached]",13,10,0
 term_guest_detached: db 13,10,"[guest console detached; guest left running]",13,10,0
 term_guest_stat_gen: db " GUEST_GEN=",0
@@ -427,6 +480,5 @@ term_guest_generation: resd 1
 term_guest_offer: resb 1
 alignb 4
 term_guest_chunk: resb 256
-term_guest_paste_buf: resb 256
 %endmacro
 WDATA_BSS_DEFER WDATA_BSS_gui_terminal_guest

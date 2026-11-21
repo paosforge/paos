@@ -1,0 +1,11 @@
+#!/bin/sh
+# Creator: Codex / rc-codex-av. Compatibility environment; native enforces egress.
+# VM launcher owns invocation and must already have the per-START service alive.
+if [ "$#" -eq 0 ]; then
+    echo 'Usage: run-proxied COMMAND [ARG ...]' >&2
+    exit 2
+fi
+exec env -u ALL_PROXY -u all_proxy \
+    HTTP_PROXY=http://127.0.0.1:3128 http_proxy=http://127.0.0.1:3128 \
+    HTTPS_PROXY=http://127.0.0.1:3128 https_proxy=http://127.0.0.1:3128 \
+    NO_PROXY= no_proxy= "$@"

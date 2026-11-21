@@ -1,7 +1,7 @@
 ;; MODULE core/time
 ; Task1230e1 seam: NTP may publish only through the canonical wall-offset record.
 ;; LAYER 1
-;; EXPORTS tsc_now, tsc_calibrate, tsc_delay_us, time_selftest, tsc_khz, time_monotonic_now_us, time_wall_set_us, time_wall_now_us, time_wall_now_s, time_wall_utc_now_s, wall_offset, time_wall_seq, time_wall_valid, time_wall_source, time_wall_clear, time_wall_window_now_s, time_wall_local_issue_s, time_wall_local_issue_end, time_rtc_read_count, time_rtc_write_count, timer_init, timer_selftest, timer_ticks, timer_irq0_count, timer_irq0_snapshot, preempt_selftest, time_zone_hook, time_utc_offset, time_local_to_utc
+;; EXPORTS tsc_now, tsc_calibrate, tsc_delay_us, time_selftest, tsc_khz, time_monotonic_now_us, time_wall_set_us, time_wall_now_us, time_wall_now_s, time_wall_utc_now_s, wall_offset, time_wall_seq, time_wall_valid, time_wall_source, time_wall_clear, time_wall_selftest_run, time_wall_window_now_s, time_wall_local_issue_s, time_wall_local_issue_end, time_rtc_read_count, time_rtc_write_count, timer_init, timer_selftest, timer_ticks, timer_irq0_count, timer_irq0_snapshot, preempt_selftest, time_zone_hook, time_utc_offset, time_local_to_utc
 ;; IMPORTS boot/serial, core/idt, core/heap, boot/indicator, core/normal_deadman
 ;; CAPS
 ;; OWNER saga:core
@@ -353,8 +353,8 @@ time_wall_set_us:
     sub  rbx, rax                      ; desired wall - monotonic = new offset
     inc  dword [rel time_wall_seq]
     ; Only an NTP step over a valid wall keeps the frame it replaced, with the
-    ; hold that frame had (for time_wall_window_now_s); RTC seeds and the KAT
-    ; restore keep none. Any backward set over a valid wall raises the hold to
+    ; hold that frame had (for time_wall_window_now_s); RTC seeds keep none.
+    ; Any backward set over a valid wall raises the hold to
     ; the replaced frame's second: no window issued at or before it is read in
     ; a later frame, so a backward step never revives an expired ticket.
     mov  byte [rel time_wall_prev_valid], 0
@@ -387,10 +387,8 @@ time_wall_set_us:
     pop  rbx
     ret
 
-; time_wall_clear — RCQ-17: return the wall to unseeded (valid=0, source none) in
-; the same seq-bracketed critical section the setter uses. Only the NTP self-test
-; calls it: its known-answer reply is applied for real, and without this an
-; unseeded wall (rejected CMOS seed) kept the fixture time as a valid ntp wall.
+; time_wall_clear — return the wall to unseeded in the same seq-bracketed
+; critical section as the setter. Real backward-step holds outlive a clear.
 time_wall_clear:
     pushfq
     cli
@@ -400,6 +398,46 @@ time_wall_clear:
     mov  byte [rel time_wall_prev_valid], 0
     inc  dword [rel time_wall_seq]
     popfq
+    ret
+
+; time_wall_selftest_run(RDI=boot-only known-answer callback). The NTP boot
+; KAT applies its 2023 fixture through the real setter before command service
+; starts. Restoring only its absolute wall/source left a backward-step hold
+; in the live clock and falsely expired fresh AUTH2 offers in that second.
+; Keep the complete original frame on the stack, owned here, then restore it
+; atomically. Restore the OFFSET, not an old absolute wall: elapsed monotonic
+; time still counts. Real setters and their anti-revival holds are unchanged.
+; The four flag bytes starting at time_wall_valid are contiguous (see WDATA).
+; This is not a clock command and takes no wire-controlled callback or state.
+time_wall_selftest_run:
+    push rbx
+    mov  rbx, rdi
+    pushfq
+    cli
+    push qword [rel wall_offset]
+    mov  eax, [rel time_wall_valid]       ; valid, source, previous-valid, local-armed
+    push rax
+    push qword [rel time_wall_prev_offset]
+    push qword [rel time_wall_step_mono_us]
+    push qword [rel time_wall_prev_hold_s]
+    push qword [rel time_wall_hold_s]
+    push qword [rel time_wall_local_s]
+    push qword [rsp + 56]                ; run the KAT with the caller's IRQ state
+    popfq
+    call rbx
+    cli
+    inc  dword [rel time_wall_seq]
+    pop  qword [rel time_wall_local_s]
+    pop  qword [rel time_wall_hold_s]
+    pop  qword [rel time_wall_prev_hold_s]
+    pop  qword [rel time_wall_step_mono_us]
+    pop  qword [rel time_wall_prev_offset]
+    pop  rax
+    mov  [rel time_wall_valid], eax
+    pop  qword [rel wall_offset]
+    inc  dword [rel time_wall_seq]
+    popfq
+    pop  rbx
     ret
 
 ; time_wall_now_us() -> RAX=Unix microseconds, or zero before an epoch seed.

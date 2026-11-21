@@ -1,7 +1,7 @@
 ;; MODULE boot/boot_menu
 ;; LAYER 0
 ;; EXPORTS boot_menu_run, bm_face_progress_run, bm_face_refresh, bm_face_milestone, bm_face_retire, bm_face_boot_services_live, bm_face_draw_status, bm_face_owner, bm_m_state, bm_m_checkpoints, bm_m_menu, bm_m_clready, bm_boot_mode, bm_diag_mode
-;; IMPORTS boot/firmware_logo_draw, boot/gop, boot/serial, boot/chainload, boot/header, boot/boot_v2_health, boot/paging
+;; IMPORTS boot/boot_face, boot/firmware_logo_draw, boot/gop, boot/serial, boot/chainload, boot/header, boot/boot_v2_health, boot/paging
 ;; CAPS
 ;; OWNER saga:boot_menu_chainload
 ; ============================================================================
@@ -423,6 +423,13 @@ bm_face_progress_run:
     cmp  byte [rel bm_face_owner], 0
     jne  .out
     mov  byte [rel bm_face_owner], 1
+%if !PAOS_PUBLICITY_LAB_PROFILE
+    ; T6-1 R1/R2 (root 120520): the public face is one renderer, drawn on the
+    ; mode gop_query just set. A refused surface keeps today's static face.
+    call boot_face_paint
+    test eax, eax
+    jnz  .logo_ready
+%endif
     call firmware_logo_draw
     test eax, eax
     jnz  .logo_ready
@@ -452,6 +459,11 @@ bm_face_refresh:
     call bm_face_surface_valid
     test eax, eax
     jz   .out
+%if !PAOS_PUBLICITY_LAB_PROFILE
+    call boot_face_paint                ; T6-1: the same renderer on the revalidated mode
+    test eax, eax
+    jnz  .logo_ready
+%endif
     call firmware_logo_draw
     test eax, eax
     jnz  .logo_ready

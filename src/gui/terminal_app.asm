@@ -1,7 +1,7 @@
 ;; MODULE gui/terminal_app
 ;; LAYER 6
 ;; EXPORTS terminal_terminal_launch_op, terminal_app_init, terminal_ui_launch, terminal_app_tick, terminal_key_hook, terminal_find_window, terminal_termfeed, terminal_ssh_sink, terminal_wheel, terminal_key_filter, terminal_wheel_hook, terminal_cmd_launch, terminal_cmd_termfeed, terminal_power_refusal
-;; IMPORTS svc/command_shutdown, gui/interpreter_feed, hv/context_execution, gui/calendar, hv/vmx, sec/session, net/dns, svc/ssh_client, boot/serial, gui/window, gui/vt/vt_engine, core/heap, gui/widget, gui/window_mgmt, gui/wm_pointer, gui/input_route, gui/form_loader, gui/cadence_mark, svc/command, svc/command_auth, svc/command_cons, dev/input/ps2, core/time, gui/power_exec, core/lib/fmt, sec/keyprov
+;; IMPORTS svc/clipboard, svc/command_shutdown, gui/interpreter_feed, hv/context_execution, gui/calendar, hv/vmx, sec/session, net/dns, svc/ssh_client, boot/serial, gui/window, gui/vt/vt_engine, core/heap, gui/widget, gui/window_mgmt, gui/wm_pointer, gui/input_route, gui/form_loader, gui/cadence_mark, svc/command, svc/command_auth, svc/command_cons, dev/input/ps2, core/time, gui/power_exec, core/lib/fmt, sec/keyprov
 ;; CAPS CAP_GUI
 ;; OWNER saga:msi_terminal_input_ux
 ;
@@ -179,7 +179,8 @@ TI_SIZE         equ TI_NAME + 16
 TERM_SSH_KEY    equ 0                   ; term_ssh_input_ok: judge the key being delivered
 TERM_SSH_EXEC_KEY equ 2                ; typed exec input/control, same key origin admission
 TERM_SSH_PTR    equ 1                   ; ... the pointer event being delivered
-TERM_CLIP_MAX   equ 8192                ; the Terminals' shared copy/paste buffer
+TERM_CLIP_MAX   equ 8192                ; temporary copy/paste arena, wiped after shortcut
+%include "gui/terminal_clipboard.inc"
 
 ; Hub: GUI_KEY_DELETE (0x10A) and GUI_KEY_PGUP/PGDN/INSERT/F1..F12 (0x10B..0x11B)
 ; are gui/widget.asm's one key-code table (MSI conflict map rule 6); the hub
@@ -856,7 +857,11 @@ term_refit:
     mov esi, [rel term_guest_generation]
     mov edx, [r12 + TI_COLS]
     mov ecx, [r12 + TI_ROWS]
+%ifdef TERM_GUEST_TOOLS
+    call tools_vm_terminal_resize
+%else
     call hv_terminal_resize
+%endif
 %endif
 .out:
     pop  rbx
@@ -3563,6 +3568,9 @@ term_paste_drain:
 ;; Retire before release, detach or a new dial; never reset on instance reuse.
 ;; Eagerly forgetting its paste and VT replies also makes generation wrap harmless.
 term_paste_retire:
+%ifdef PAOS_TERMINAL_GUEST
+    call term_guest_paste_retire
+%endif
     call term_inst_index
     lea  rdx, [rel term_paste_generations]
     inc  qword [rdx + rax*8]
@@ -3576,6 +3584,17 @@ term_paste_retire:
     ret
 
 term_paste_forget:
+    push rax
+    push rcx
+    push rdi
+    lea rdi, [rel term_paste_buf]
+    mov ecx, TERM_CLIP_MAX + 16
+    xor eax, eax
+    cld
+    rep stosb
+    pop rdi
+    pop rcx
+    pop rax
     mov  dword [rel term_paste_inst], -1
     mov  dword [rel term_paste_session], -1
     mov  qword [rel term_paste_generation], 0
@@ -3671,8 +3690,7 @@ term_clip_key:
 .copy:
     cmp  byte [r12 + TI_SEL], 2
     jne  .yes                           ; nothing selected: Ctrl+Shift+C does nothing
-    call term_copy_selection
-    call term_sel_clear
+    call term_clip_copy_human
     jmp  .yes
 .not_c:
     cmp  r13d, 0x16                     ; Ctrl+V
@@ -3686,7 +3704,7 @@ term_clip_key:
     test r14d, 1
     jz   .no
 .paste:
-    call term_paste
+    call term_clip_paste_human
 .yes:
     mov  eax, 1
     ret
@@ -7681,7 +7699,7 @@ terminal_termfeed:
     call grid_out_dec
     jmp  .ok
 .clip:
-    ; @CLIP <offset>: selection state and the shared clipboard (hex, <=160 B)
+    ; @CLIP <offset>: metadata only. Neither native content nor its length.
     mov  rdi, rax
     call term_parse_dec
     mov  r14d, eax
@@ -7693,8 +7711,8 @@ terminal_termfeed:
     call grid_out_dec
     lea  rdi, [rel term_out_clip_len]
     call grid_out_str
-    mov  edi, [rel term_clip_len]
-    call grid_out_dec
+    lea  rdi, [rel term_clip_length_withheld]
+    call grid_out_str
     lea  rdi, [rel term_out_clip_copies]
     call grid_out_str
     mov  edi, [rel term_clip_copies]
@@ -7705,27 +7723,7 @@ terminal_termfeed:
     call grid_out_dec
     lea  rdi, [rel term_out_clip_hex]
     call grid_out_str
-    lea  ebx, [r14d + 160]
-    cmp  ebx, [rel term_clip_len]
-    jbe  .clip_byte
-    mov  ebx, [rel term_clip_len]
-.clip_byte:
-    cmp  r14d, ebx
-    jae  .ok
-    lea  rax, [rel term_clip]
-    movzx eax, byte [rax + r14]
-    push rax
-    shr  eax, 4
-    lea  rcx, [rel term_hexdigits]
-    movzx edi, byte [rcx + rax]
-    call grid_out_char
-    pop  rax
-    and  eax, 15
-    lea  rcx, [rel term_hexdigits]
-    movzx edi, byte [rcx + rax]
-    call grid_out_char
-    inc  r14d
-    jmp  .clip_byte
+    jmp  .ok
 .oversized:
     mov  eax, 5
     jmp  .refuse

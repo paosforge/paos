@@ -1,6 +1,6 @@
 ;; MODULE net/usb_command_member
 ;; LAYER 4
-;; EXPORTS usb_command_member, usb_nic_link_repoll, usb_nic_bound_backend
+;; EXPORTS usb_command_member, usb_nic_link_repoll, usb_nic_bound_backend, usb_command_counters
 ;; IMPORTS net/netdev, dev/net/ax88179, dev/net/ax88179b, dev/net/cdc_ecm, dev/net/cdc_ncm, core/time, boot/serial
 ;; CAPS
 ;; OWNER saga:net
@@ -43,6 +43,13 @@ UCM_MAC         equ 56
 %if netdev_minfo_size > UCM_EPOCH
 %error "usb_command_member: netdev_minfo outgrew its frame slot"
 %endif
+
+; usb_command_counters(RDI=attached handle, RSI=80-byte output) -> EAX 0 / -1.
+; Software counters of the attached backend for NETCFG USB SHOW (ROOT118715);
+; only cdc_ecm exports them today, every other backend answers -1. Pointer
+; equality inside the backend: RDI is a key and is never dereferenced here.
+usb_command_counters:
+    jmp  cdc_ecm_usb_counters
 
 usb_command_member:
     push rbx

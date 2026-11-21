@@ -779,6 +779,8 @@ htc_record:
 
 ; Legacy receipts end after syn_reaps. Current native receipts carry ordered
 ; five-u64 rearm tuples and, if a family did not fit, its exact omitted mask.
+; A driven family's tuple carries its diagnostic record instead: exactly 25
+; (r25lr) or 15 (r26lr, r68lr) u64 values; any other count refuses (ROOT120117).
 ; This read-only suffix never enters the six-field table-state witness.
 htc_realtek_tail:
     cmp byte [rdi], 0
@@ -796,17 +798,26 @@ htc_realtek_tail:
     test eax, eax
     jz .absent
     or r12d, r13d
-    mov r10d, 5
+    xor r10d, r10d                    ; values consumed in this tuple
 .value:
     call htc_decimal
     test eax, eax
     jz .bad
-    dec r10d
-    jz .next
+    inc r10d
     cmp byte [rdi], ','
-    jne .bad
+    jne .tuple_end
+    cmp r10d, 25
+    jae .bad
     inc rdi
     jmp .value
+.tuple_end:
+    cmp r10d, 5
+    je .next
+    lea rax, [rel htc_realtek_record]
+    movzx eax, byte [rax + r13 - 1]
+    cmp r10d, eax
+    jne .bad
+    jmp .next
 .absent:
     mov rdi, r9
 .next:
@@ -851,6 +862,7 @@ htc_realtek_keys:
     db " r26lr=", 0
     db " r68lr=", 0
 htc_realtek_omitted: db " lr_omitted=", 0
+htc_realtek_record: db 25, 15, 0, 15  ; tuple length with the record, by family bit
 
 ; UINT64_MAX is valid; overflow, signs and leading zeros refuse.
 htc_decimal:

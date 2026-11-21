@@ -2,7 +2,7 @@
 ;; LAYER 6
 ;; PURPOSE Finite native GUI Terminal planner and original-request handler delegation.
 ;; EXPORTS terminal_gui_provider_init, terminal_gui_provider_table
-;; IMPORTS gui/snapshot, gui/window_mgmt, gui/chat_app, gui/widget, gui/form_events, gui/summon_palette, gui/terminal_app, gui/app_launcher, gui/app_launch_flow, sec/session, sec/terminal_command, sec/terminal_policy, svc/command, svc/command_auth, core/lib/sha256, core/smp, core/csprng
+;; IMPORTS gui/snapshot, gui/window_mgmt, gui/chat_app, gui/widget, gui/form_events, gui/summon_palette, gui/settings_terminal_network, gui/terminal_app, gui/app_launcher, gui/app_launch_flow, sec/session, sec/terminal_command, sec/terminal_policy, svc/command, svc/command_auth, core/lib/sha256, core/smp, core/csprng
 ;; CAPS CAP_GUI
 ;; OWNER saga:live_terminal_consent
 ;; CONTEXT: bsp_only
@@ -604,6 +604,9 @@ tg_field_current:
     test rcx,rcx
     jz .hook_ok
     lea rdx,[rel summon_palette_text_event]
+    cmp rcx,rdx
+    je .hook_ok
+    lea rdx,[rel settings_terminal_network_text_event]
     cmp rcx,rdx
     jne .bad
 .hook_ok:

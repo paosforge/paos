@@ -1,13 +1,15 @@
 ;; MODULE hv/app_vm_boot
 ;; LAYER 5
 ;; EXPORTS app_vm_boot_begin, app_vm_boot_tick, app_vm_boot_current, avm_runtime_gen, avm_boot_phase, avm_kernel_bytes, avm_initrd_gpa
-;; IMPORTS hv/app_runtime, hv/app_vm_memory, hv/app_vm_payload, core/lib/sha256
+;; IMPORTS hv/app_runtime, hv/app_vm_memory, hv/app_vm_payload, hv/isolated_vm_boot_tables, hv/isolated_vm_initrd, core/lib/sha256
 ;; CAPS
 ;; OWNER saga:hv
 ;; CONTEXT: bsp_only
 ; Actual signed-runtime descriptor and bounded file reads, independently hashed
 ; AFTER copying into this VM's own memory. No driver-profile/global mutation.
 %include "hv/app_vm.inc"
+%include "hv/isolated_vm_boot_tables.asm"
+%include "hv/isolated_vm_initrd.asm"
 
 ; LOADING, private RAM scrubbed. ->1 initialized/0 rejected. No guest identity.
 app_vm_boot_begin:
@@ -150,13 +152,22 @@ app_vm_boot_tick:
     jne .failed
     cmp word [r12+0x206],0x020c
     jb .failed
+    ; Setup header ends at 0x202+byte[0x201] (boot protocol). It must cover
+    ; init_size (0x260..0x263), the last field this loader reads, and stay
+    ; below the zero page's edd/e820 area at 0x290. Shipped kernels: 0x26c.
+    movzx eax,byte [r12+0x201]
+    cmp eax,0x264-0x202
+    jb .failed
+    cmp eax,0x290-0x202
+    ja .failed
     ; Actual selected recipe may be fixed at16MiB. A fixed kernel must
-    ; name that exact protected-mode and preferred entry; no blind relocation.
+    ; prefer exactly that load address; no blind relocation. code32_start
+    ; (0x214) is the loader's field: a stock bzImage holds 0x100000 there
+    ; whatever PHYSICAL_START is, entry here is the 64-bit one at
+    ; AVM_KERNEL+0x200, and .finish writes 0x214 itself (VM, desktop 118753).
     cmp byte [r12+0x234],1
     ja .failed
     je .alignment
-    cmp dword [r12+0x214],AVM_KERNEL
-    jne .failed
     cmp qword [r12+0x258],AVM_KERNEL
     jne .failed
 .alignment:
@@ -190,34 +201,33 @@ app_vm_boot_tick:
     jb .failed
     test r14,r14
     jz .failed
-    ; Initrd at top of own RAM, page aligned. It must lie beyond the real
-    ; init_size, not merely the compressed kernel's file extent.
-    mov rax,[rel avm_ram_bytes]
-    sub rax,[rbx+AVM_RUNTIME_DESC+24]
-    jc .failed
-    and rax,-4096
-    lea rdx,[r14+AVM_KERNEL]
-    cmp rax,rdx
-    jb .failed
-    cmp rax,AVM_KERNEL
-    jbe .failed
-    mov [rel avm_initrd_gpa],rax
-    ; Respect kernel's actual initrd ceiling (Linux boot protocol).
-    add rax,[rbx+AVM_RUNTIME_DESC+24]
-    jc .failed
-    dec rax
-    mov edx,[r12+0x22c]
-    test edx,edx
+    ; Highest page below both own RAM and the actual inclusive kernel ceiling;
+    ; disjoint from the real startup workspace, not just compressed file bytes.
+    mov rdi,[rel avm_ram_bytes]
+    mov rsi,[rbx+AVM_RUNTIME_DESC+24]
+    mov rdx,r14
+    mov ecx,[r12+0x22c]
+    call isolated_vm_initrd
+    test rax,rax
     jz .failed
-    cmp rax,rdx
-    ja .failed
-    ; Save setup header into this VM's boot_params (never driver RAM).
+    mov [rel avm_initrd_gpa],rax
+    ; This VM's boot_params (never driver RAM) is a zeroed page carrying only
+    ; the kernel's own setup header, 0x1f1 .. 0x202+byte[0x201]. The rest of
+    ; the file's first 4 KiB is boot-sector code and filler: a stock bzImage
+    ; holds 0xffffffff at ext_cmd_line_ptr (0xc8), which sent the 6.6
+    ; decompressor to 0xffffffff_00020000 (#PF->#DF; track B be886f79d).
     mov rdi,[rel avm_ram]
     add rdi,AVM_BP
-    mov rsi,r12
+    mov rdx,rdi
+    xor eax,eax
     mov ecx,4096/8
     cld
-    rep movsq
+    rep stosq
+    lea rdi,[rdx+0x1f1]
+    lea rsi,[r12+0x1f1]
+    movzx ecx,byte [r12+0x201]
+    add ecx,0x202-0x1f1
+    rep movsb
     lea rdi,[rbx+AVM_HASH_CTX]
     call sha256_stream_init
     lea rdi,[rbx+AVM_HASH_CTX]
@@ -362,16 +372,11 @@ app_vm_boot_tick:
     mov [rdi+0x2ec],rax
     mov dword [rdi+0x2f4],1
     ; Private guest long-mode tables and GDT/TSS, all guest physical offsets.
-    mov qword [r12+0x1000],0x2003
-    mov qword [r12+0x2000],0x3003
-    lea rdi,[r12+0x3000]
-    mov rcx,[rel avm_ram_bytes]
-    shr rcx,21
-    mov eax,0x83
-.pt:
-    stosq
-    add rax,0x200000
-    loop .pt
+    mov rdi,r12
+    mov rsi,[rel avm_ram_bytes]
+    call isolated_vm_boot_tables
+    test eax,eax
+    jz .failed
     mov rax,0x00af9b000000ffff
     mov [r12+0x508],rax
     mov rax,0x00cf93000000ffff
@@ -401,7 +406,7 @@ app_vm_boot_tick:
     xor eax,eax
     ret
 
-avm_boot_cmd: db "console=ttyS0,115200 quiet loglevel=0 noapic nolapic hpet=disable clocksource=tsc tsc=reliable rdinit=/init panic=-1",0
+avm_boot_cmd: db "console=ttyS0,115200 quiet loglevel=0 noapic nolapic hpet=disable clocksource=tsc tsc=reliable rdinit=/init rootfstype=ramfs panic=-1",0
 avm_boot_cmd_end:
 %include "core/abi/wdata.inc"
 %macro WDATA_hv_app_vm_boot 0

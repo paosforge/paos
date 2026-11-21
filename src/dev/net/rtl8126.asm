@@ -1839,13 +1839,24 @@ r26_lr_sample:
     call e5b_rd
     jc .bad
     movzx eax, ax
+    mov edx, eax                   ; raw PHY status for the diagnostic record
     cmp eax, 0xffff
     je .bad
     shr eax, 1
     and eax, 1
     ret
 .bad:
+    mov edx, REALTEK_LR_UNREAD
     mov rax, -1
+    ret
+r26_lr_cmd:
+    mov esi, R26_CMD_DWORD         ; command byte at +3
+    call e5b_rd
+    jc .bad
+    shr eax, 24
+    ret
+.bad:
+    mov eax, REALTEK_LR_UNREAD
     ret
 r26_lr_own:
     mov r8, [rel e5000b_tx_ring]
@@ -1876,6 +1887,8 @@ r26_lr_close:
     mov byte [rel e5000b_rings_ok], 0
     mov byte [rel e5000b_link_up], 0
     ret
+; Five counts; once the tick has run, ten more: phase, saved OWN, live OWN,
+; PHY status, BMCR, BMSR, CMD, TX timeouts, rx_poll calls, ticks. EAX = 5/15.
 rtl8126_link_rearm_counts:
     lea r8, [rel rtl8126_link_rearm_state+16]
     xor ecx, ecx
@@ -1885,6 +1898,18 @@ rtl8126_link_rearm_counts:
     inc ecx
     cmp ecx, 5
     jb .copy
+    mov eax, 5
+    lea r8, [rel rtl8126_link_rearm_state]
+    cmp qword [r8+REALTEK_LR_TICKS], 0
+    je .out                          ; never driven: the legacy five-count tuple
+    lea r9, [rdi+40]
+    REALTEK_LR_RECORD
+    mov rax, [rel e5000b_tx_timeouts]
+    mov [r9+56], rax
+    mov rax, [rel e5000b_rx_poll_calls]
+    mov [r9+64], rax
+    mov eax, 15
+.out:
     ret
 align 8
 rtl8126_link_rearm_state: times REALTEK_LR_SIZE db 0

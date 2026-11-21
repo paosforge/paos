@@ -105,6 +105,8 @@ reset_wipe_all:
     RW_WIPE  ows_j_key, 32
     RW_WIPE  ows_j_digest, 32
     RW_WIPE  ows_stage_key, 32
+    ; Terminal-network record seed/key, owner handoff, readiness and MAC scratch.
+    RW_WIPE_RANGE tnr_private_begin, tnr_private_end
     ; c2a retained public base/derived MAC and all per-request material.
     RW_CLEAR ows_wr_ready
     RW_WIPE  ows_wr_base, 512

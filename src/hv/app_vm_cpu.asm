@@ -1,11 +1,39 @@
 ;; MODULE hv/app_vm_cpu
 ;; LAYER 5
-;; EXPORTS app_vm_cpu_prepare, app_vm_cpu_turn, app_vm_cpu_retire, app_vm_field_read, app_vm_field_write, app_vm_cpu_stop, avm_arch, avm_cpu_ready, avm_gpr, avm_exit, avm_guest_cr2, avm_debug, avm_host_debug, avm_svm, avm_guest_aux, avm_fields, avm_values
+;; EXPORTS app_vm_isolation_ready, app_vm_cpu_prepare, app_vm_cpu_turn, app_vm_cpu_retire, app_vm_field_read, app_vm_field_write, app_vm_cpu_stop, avm_arch, avm_cpu_ready, avm_gpr, avm_exit, avm_guest_cr2, avm_debug, avm_host_debug, avm_svm, avm_guest_aux, avm_fields, avm_values
 ;; IMPORTS hv/app_vm_memory, hv/app_vm_cpuid, hv/app_vm_intel, hv/app_vm_amd, hv/vcpu_svm_record, core/smp, sec/cpu_boundary_fault
 ;; CAPS
 ;; OWNER saga:hv
 ;; CONTEXT: bsp_only
 %include "hv/app_vm_cpu.inc"
+
+; app_vm_isolation_ready() -> EAX=1 iff the running Linux guest whose
+; virtualization root the app VM borrows is present on the selected backend:
+; Intel (hv_ops_vmx) needs hv_linux_running and hv_linux_vmx_live, AMD (hv_ops_svm)
+; needs hv_linux_running. Anything else, including no virtualization, is 0.
+; Pure read: no arguments, lock, write or callback; clobbers RAX and flags only.
+; It is the single predicate behind both backend gates and INPUT's launch check
+; (ROOT118968). It is a precondition, not admission: avmi_open and the AMD path
+; still refuse transient START/STOP/handoff states after it.
+app_vm_isolation_ready:
+    cmp byte [rel hv_linux_running],1
+    jne .no
+    lea rax,[rel hv_ops_vmx]
+    cmp [rel hv_ops_active],rax
+    je .intel
+    lea rax,[rel hv_ops_svm]
+    cmp [rel hv_ops_active],rax
+    jne .no
+    mov eax,1
+    ret
+.intel:
+    cmp byte [rel hv_linux_vmx_live],1
+    jne .no
+    mov eax,1
+    ret
+.no:
+    xor eax,eax
+    ret
 
 ; Private initial state. No driver devices/RAM/START/AP state is repurposed.
 app_vm_cpu_prepare:
@@ -38,7 +66,7 @@ app_vm_cpu_prepare:
     and edx,(1<<0)|(1<<3)|(1<<7)
     cmp edx,(1<<0)|(1<<3)|(1<<7)
     jne .pop_bad
-    cmp ebx,2
+    cmp ebx,AVM_CPU_ASID
     jbe .pop_bad
     mov edi,2
     jmp .slat
@@ -163,9 +191,11 @@ app_vm_field_write:
 
 app_vm_cpu_stop:
     HV_BOUNDARY_FILL32
-    mov edi,0x30a
+    mov edi,AVM_CPU_FAULT_CODE
     jmp cpu_boundary_fail_stop_reason
 
+; Tools uses the same code with separately declared, literal private storage.
+%ifndef PAOS_TOOLS_CPU_INSTANCE
 %include "core/abi/wdata.inc"
 %macro WDATA_hv_app_vm_cpu 0
 align 16
@@ -183,3 +213,4 @@ align 8
 avm_values: times AVM_CPU_FIELDS_N dq 0
 %endmacro
 WDATA_DEFER WDATA_hv_app_vm_cpu
+%endif

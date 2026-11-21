@@ -1,7 +1,7 @@
 ;; MODULE gui/start_programs
 ;; LAYER 6
-;; EXPORTS start_programs_open_update_restart, start_programs_init, start_programs_open_help, start_programs_tick, start_programs_cmd_formload, start_programs_click, start_programs_key_filter, sp_arm_holds, sp_disarm, sp_arm_card_wid, sp_ptr_up_x, sp_ptr_up_y, sp_ptr_up_seq, sp_ptr_inj_seq, sp_form_widgets_n
-;; IMPORTS gui/settings_updates, gui/settings_update_backend, gui/app_reader, gui/form_loader, gui/widget, gui/window_mgmt, gui/terminal_app, gui/power_exec, gui/settings_prefs, gui/help_view, gui/wifi_local, gui/wm_pointer, dev/input/ps2, boot/gop, svc/command, svc/command_cons, boot/serial
+;; EXPORTS start_programs_open_update_restart, start_programs_init, start_programs_open_help, start_programs_tick, start_programs_cmd_formload, start_programs_click, start_programs_key_filter, sp_arm_holds, sp_disarm, sp_disarm_settings, sp_arm_card_wid, sp_ptr_up_x, sp_ptr_up_y, sp_ptr_up_seq, sp_ptr_inj_seq, sp_form_widgets_n
+;; IMPORTS gui/settings_terminal_network, gui/settings_updates, gui/settings_update_backend, gui/app_reader, gui/form_loader, gui/widget, gui/window_mgmt, gui/terminal_app, gui/power_exec, gui/settings_prefs, gui/help_view, gui/wifi_local, gui/wm_pointer, dev/input/ps2, boot/gop, svc/command, svc/command_cons, boot/serial
 ;; CAPS CAP_GUI
 ;; OWNER saga:msi_start_programs_settings
 ; ============================================================================
@@ -63,7 +63,7 @@ SP_ARM_WIFI_SAVE    equ 5
 SP_ARM_WIFI_CONNECT equ 6
 SP_ARM_WALL         equ 7
 SP_ARM_APP_REMOVE   equ 18              ; Settings > Apps confirm; after eleven wallpaper choices
-SP_ARM_ROWS         equ 24
+SP_ARM_ROWS         equ 25
 
 start_programs_init:
     ; FORMLOAD: extend the row in place (outside the Console's own wrapper);
@@ -656,6 +656,10 @@ start_programs_click:
     je   .cancel
 .settings:
     push rdi
+    call settings_terminal_network_click
+    test eax,eax
+    jnz .settings_out
+    mov edi,[rsp]
     call settings_updates_click
     test eax, eax
     jnz .settings_out
@@ -763,6 +767,7 @@ sp_arm_holds:
 ;; sp_disarm(): every row disarmed (x -1; a widget's x is never negative).
 ;; Touches memory only.
 sp_disarm:
+    mov dword [rel sp_arm_rect+(24 << SP_ARM_SHIFT)],-1
     push rcx
     push rdx
     lea rdx, [rel sp_arm_rect + (SP_ARM_WALL << SP_ARM_SHIFT)]
@@ -788,6 +793,14 @@ sp_disarm:
 %endif
     pop rdx
     pop rcx
+    ret
+
+;; sp_disarm_settings(): T5-14.C4a. Only Settings' Apply and Reset rows
+;; disarmed: a page switch shows them under a cursor that rested there while
+;; they were hidden (arming ignores visibility). Touches memory only.
+sp_disarm_settings:
+    mov  dword [rel sp_arm_rect + (SP_ARM_APPLY << SP_ARM_SHIFT)], -1
+    mov  dword [rel sp_arm_rect + (SP_ARM_RESET << SP_ARM_SHIFT)], -1
     ret
 
 ;; start_programs_pointer_note(EDI x, ESI y, EDX buttons): wm_pointer_event's
@@ -889,6 +902,7 @@ start_programs_pointer_note:
     cmp ebx, UPD_ARM_FIRST+5
     jb .updates_note
 .updates_noted:
+    call settings_terminal_network_pointer_note
     call settings_apps_confirm_id
     mov  edi, eax
     mov  ebx, SP_ARM_APP_REMOVE
@@ -1027,6 +1041,11 @@ start_programs_key_filter:
     xor  eax, eax
     ret
 .other:
+    mov edi,[rsp+8]
+    mov eax,[rsp]
+    call settings_terminal_network_key
+    test eax,eax
+    jnz .other_taken
     mov edi, [rsp+8]
     mov eax, [rsp]
     call wallpaper_prefs_key
@@ -1086,6 +1105,7 @@ start_programs_key_filter:
 ;; pointer/key path that recorded it has returned.
 start_programs_tick:
     push rbx
+    call settings_terminal_network_tick
     call settings_updates_tick
     call settings_update_backend_tick ; one bounded BSP/reentry-guarded native step
     pop rbx

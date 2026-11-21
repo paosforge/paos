@@ -1,6 +1,6 @@
 ;; MODULE hv/app_vm_devices
 ;; LAYER 5
-;; EXPORTS app_vm_ingress_observe, avm_halted, app_vm_devices_init, app_vm_devices_pio, app_vm_devices_poll, avm_console, avm_console_bytes, avm_console_overflow
+;; EXPORTS app_vm_ingress_observe, avm_halted, app_vm_devices_init, app_vm_devices_pio, app_vm_devices_poll, avm_console, avm_console_bytes, avm_console_overflow, avmd_guest_ended
 ;; IMPORTS hv/app_runtime_observer, hv/app_account_transport, hv/app_widget_transport, hv/app_vm_cpu, hv/app_vm_payload, hv/app_vm, hv/guest_transport, hv/chat_transport, hv/app_network, hv/app_clock, hv/updater_io_transport, hv/settings_update_service, core/time
 ;; CAPS
 ;; OWNER saga:hv
@@ -10,6 +10,7 @@
 ; Private legacy PIC/PIT/UART/CMOS only. No PCI/MMIO/NIC/DMA/AP device and no
 ; physical IN/OUT instructions. Dedicated payload PIO exposes only exact bytes
 ; already copied/hashed from the actual signed native app object.
+%ifndef PAOS_TOOLS_DEVICES_INSTANCE
 ; Bundle ingress timing for the launch measurement, trusted out24: bundle bytes,
 ; first guest length read, last byte read (raw microseconds, 0 not reached).
 ; Read only; two port exits per byte make this part of click-to-first-WAIT.
@@ -29,8 +30,10 @@ app_vm_ingress_observe:
 .bad:
     xor eax,eax
     ret
+%endif
 
 app_vm_devices_init:
+%ifndef PAOS_TOOLS_DEVICES_INSTANCE
     sub rsp,8
     call updater_io_transport_retire
 %ifdef APP_RUNTIME_OBSERVER_ABI_V1
@@ -38,6 +41,7 @@ app_vm_devices_init:
 %endif
     call app_network_retire
     add rsp,8
+%endif
     lea rdi,[rel avmd_state_begin]
     xor eax,eax
     mov ecx,(avmd_state_end-avmd_state_begin)/8
@@ -77,12 +81,22 @@ app_vm_devices_poll:
     jc .clock_bad
     mov [rel avmd_pit_due],rax
 .pending:
-    cmp byte [rel avmd_pic_pending],1
-    jne .runnable
-    test byte [rel avmd_pic_mask],1
-    jnz .runnable
-    test byte [rel avmd_pic_isr],1
-    jnz .runnable
+    ; Fully nested master 8259: the highest-priority unmasked request with
+    ; no equal or higher level in service (IRQ0 PIT, IRQ4 COM1).
+    call avmd_pic_irr
+    movzx ecx,byte [rel avmd_pic_mask]
+    not ecx
+    and eax,ecx
+    and eax,0xff
+    jz .runnable
+    bsf ebx,eax
+    movzx edx,byte [rel avmd_pic_isr]
+    mov ecx,ebx
+    mov r8d,2
+    shl r8d,cl
+    dec r8d
+    test edx,r8d
+    jnz .runnable                  ; equal or higher priority in service
     mov edi,0x4016
     call app_vm_field_read
     test eax,0x80000000
@@ -96,15 +110,34 @@ app_vm_devices_poll:
     test eax,3
     jnz .runnable
     movzx esi,byte [rel avmd_pic_base]
+    add esi,ebx
     or esi,0x80000000
     mov edi,0x4016
     call app_vm_field_write
     cmp eax,1
     jne .clock_bad
+    mov ecx,ebx
+    mov eax,1
+    shl eax,cl
+    or [rel avmd_pic_isr],al
+    test ebx,ebx
+    jnz .injected
     mov byte [rel avmd_pic_pending],0
-    or byte [rel avmd_pic_isr],1
+.injected:
     mov byte [rel avm_halted],0
 .runnable:
+    ; A HLT taken with RFLAGS.IF=0 has no wakeup here (no NMI/INIT source):
+    ; Linux reached kernel_halt after the app's PID1 called reboot(POWER_OFF)
+    ; (guest/app_runtime/init.c halt_app; no pm_power_off). Latch it once for
+    ; app_vm_guest_ended; app_vm_devices_init clears it with the whole block.
+    cmp byte [rel avm_halted],0
+    je .ended_read
+    mov edi,0x6820
+    call app_vm_field_read
+    test eax,1<<9
+    jnz .ended_read
+    mov byte [rel avmd_guest_ended],1
+.ended_read:
     xor eax,eax
     cmp byte [rel avm_halted],0
     sete al
@@ -114,6 +147,27 @@ app_vm_devices_poll:
     mov byte [rel avm_dispatch_fault],1
     xor eax,eax
     pop rbx
+    ret
+
+; Master IRR ->EAX: bit 0 the latched PIT tick, bit 4 the COM1 line (THRE
+; interrupt enabled and pending). The slave has no sources.
+avmd_pic_irr:
+    movzx eax,byte [rel avmd_pic_pending]
+    and eax,1
+%ifdef PAOS_TOOLS_DEVICES_INSTANCE
+    cmp dword [rel avmd_vio_isr],0   ; tools console: level line 5 while unacknowledged
+    je .no_console
+    or eax,1<<TVM_CONSOLE_IRQ
+.no_console:
+%endif
+    test byte [rel avmd_uart_ier],2
+    jz .done
+    cmp byte [rel avmd_uart_thre],0
+    je .done
+    test byte [rel avmd_uart_mcr],8  ; OUT2 gates the PC IRQ line
+    jz .done
+    or eax,0x10
+.done:
     ret
 
 ; EDI actual normalized exit qualification, ESI actual guest EAX ->EAX1/0,
@@ -144,6 +198,12 @@ app_vm_devices_pio:
 .size_ok:
     mov r13d,ebx
     shr r13d,16
+%ifdef PAOS_TOOLS_DEVICES_INSTANCE
+    cmp r13d,0x50f0                ; tools hostname stream only
+    je .tools_stream
+    cmp r13d,0x50f4
+    je .tools_stream
+%else
     cmp r13d,0x50e0
     je .updater_service
     cmp r13d,0x50e4
@@ -198,6 +258,7 @@ app_vm_devices_pio:
     je .payload_byte
     cmp r13d,0x5058
     je .payload_len
+%endif
     ; Every legacy private device uses scalar byte I/O.
     test ebx,7
     jnz .pci
@@ -242,6 +303,7 @@ app_vm_devices_pio:
     mov edx,0xff
     jmp .ok
 .exit_refused:
+%ifndef PAOS_TOOLS_DEVICES_INSTANCE
     mov eax,ebx
     shr eax,16
     cmp eax,0x50e8
@@ -250,7 +312,18 @@ app_vm_devices_pio:
     jne .bad
 .retire_io:
     call updater_io_transport_retire
+%endif
     jmp .bad
+%ifdef PAOS_TOOLS_DEVICES_INSTANCE
+.tools_stream:
+    mov edi,ebx
+    mov esi,r12d
+    call tools_vm_stream_pio
+    cmp eax,1
+    jne .bad
+    jmp .ok
+%endif
+%ifndef PAOS_TOOLS_DEVICES_INSTANCE
 .updater_service:
     mov edi,ebx
     mov esi,r12d
@@ -369,6 +442,7 @@ app_vm_devices_pio:
 .payload_len_value:
     mov edx,[rel avm_payload_bytes]
     jmp .ok
+%endif
 .pic_command0:
     xor ecx,ecx
     jmp .pic_command
@@ -379,12 +453,14 @@ app_vm_devices_pio:
     jnz .pic_read
     test r12b,0x10
     jnz .pic_init
+    test r12b,0x08
+    jnz .pic_ocw3
     test r12b,0x20
     jnz .pic_eoi
-    mov eax,r12d
-    and eax,0x18
-    cmp eax,8
-    jne .zero
+    jmp .zero                      ; OCW2 without EOI: fixed priority only
+.pic_ocw3:
+    test r12b,0x02                 ; RR selects the read register
+    jz .zero
     lea rax,[rel avmd_pic_read_isr]
     mov edx,r12d
     and edx,1
@@ -398,7 +474,18 @@ app_vm_devices_pio:
     jmp .zero
 .pic_eoi:
     lea rax,[rel avmd_pic_isr]
-    mov byte [rax+rcx],0
+    movzx edx,byte [rax+rcx]
+    test r12b,0x40
+    jnz .pic_specific_eoi
+    lea r8d,[rdx-1]                ; non-specific: the highest level in service
+    and edx,r8d
+    mov [rax+rcx],dl
+    jmp .zero
+.pic_specific_eoi:
+    mov r8d,r12d
+    and r8d,7                      ; specific EOI names its level
+    btr edx,r8d
+    mov [rax+rcx],dl
     jmp .zero
 .pic_read:
     lea rax,[rel avmd_pic_read_isr]
@@ -411,7 +498,8 @@ app_vm_devices_pio:
     xor edx,edx
     test ecx,ecx
     jnz .ok
-    movzx edx,byte [rel avmd_pic_pending]
+    call avmd_pic_irr
+    mov edx,eax
     jmp .ok
 .pic_data0:
     xor ecx,ecx
@@ -598,15 +686,27 @@ app_vm_devices_pio:
     movzx edx,byte [rcx+rax]
     jmp .ok
 .uart:
+    ; 16450 at COM1 (no FIFO, so IIR[7:6]=0). Transmit is immediate, so the
+    ; THR is always empty; there is no receive path, line error or modem
+    ; delta, so THRE is the only interrupt source (IRQ4 when OUT2 is set).
     sub r13d,0x3f8
     test ebx,8
     jnz .uart_read
+    cmp r13d,7
+    je .uart_scr
+    cmp r13d,4
+    je .uart_mcr
     cmp r13d,3
     je .uart_lcr
+    cmp r13d,1
+    je .uart_ier
     test r13d,r13d
-    jnz .zero
+    jnz .zero                      ; FCR absent; LSR/MSR read-only
     test byte [rel avmd_uart_lcr],0x80
-    jnz .zero                      ; divisor, not output
+    jnz .uart_dll
+    mov byte [rel avmd_uart_thre],1  ; the THR empties at once
+    test byte [rel avmd_uart_mcr],0x10
+    jnz .zero                      ; loopback: nothing leaves the UART
     mov eax,[rel avm_console_bytes]
     cmp eax,8192
     jae .uart_overflow
@@ -617,23 +717,97 @@ app_vm_devices_pio:
 .uart_overflow:
     mov byte [rel avm_console_overflow],1
     jmp .zero
+.uart_dll:
+    mov [rel avmd_uart_dll],r12b
+    jmp .zero
+.uart_ier:
+    test byte [rel avmd_uart_lcr],0x80
+    jnz .uart_dlm
+    movzx eax,byte [rel avmd_uart_ier]
+    and r12d,0x0f
+    mov [rel avmd_uart_ier],r12b
+    xor eax,r12d
+    test eax,2                     ; THRI changed
+    jz .zero
+    mov byte [rel avmd_uart_thre],0
+    test r12d,2
+    jz .zero
+    or byte [rel avmd_uart_thre],1   ; THRI 0->1 with the THR empty
+    jmp .zero
+.uart_dlm:
+    mov [rel avmd_uart_dlm],r12b
+    jmp .zero
+.uart_mcr:
+    and r12d,0x1f
+    mov [rel avmd_uart_mcr],r12b
+    jmp .zero
+.uart_scr:
+    mov [rel avmd_uart_scr],r12b
+    jmp .zero
 .uart_lcr:
     mov [rel avmd_uart_lcr],r12b
     jmp .zero
 .uart_read:
+    cmp r13d,7
+    je .uart_read_scr
+    cmp r13d,6
+    je .uart_msr
     cmp r13d,5
     je .uart_ready
-    cmp r13d,2
-    je .uart_noirq
+    cmp r13d,4
+    je .uart_read_mcr
     cmp r13d,3
-    jne .zero
-    movzx edx,byte [rel avmd_uart_lcr]
+    je .uart_read_lcr
+    cmp r13d,2
+    je .uart_iir
+    test byte [rel avmd_uart_lcr],0x80
+    jnz .uart_read_latch
+    cmp r13d,1
+    jne .zero                      ; RBR: no receive path
+    movzx edx,byte [rel avmd_uart_ier]
+    jmp .ok
+.uart_read_latch:
+    lea rax,[rel avmd_uart_dll]
+    movzx edx,byte [rax+r13]       ; DLL at +0, DLM at +1
+    jmp .ok
+.uart_iir:
+    mov edx,1
+    test byte [rel avmd_uart_ier],2
+    jz .ok
+    cmp byte [rel avmd_uart_thre],0
+    je .ok
+    mov byte [rel avmd_uart_thre],0  ; reading IIR=THRE clears it
+    mov edx,2
     jmp .ok
 .uart_ready:
     mov edx,0x60
     jmp .ok
-.uart_noirq:
-    mov edx,1
+.uart_msr:
+    ; Loopback feeds DTR/RTS/OUT1/OUT2 back as DSR/CTS/RI/DCD; otherwise
+    ; the local console is connected (DCD|DSR|CTS). No delta bits.
+    mov edx,0xb0
+    movzx eax,byte [rel avmd_uart_mcr]
+    test eax,0x10
+    jz .ok
+    mov ecx,eax
+    and ecx,2
+    shl ecx,3
+    mov edx,eax
+    and edx,1
+    shl edx,5
+    or edx,ecx
+    and eax,0x0c
+    shl eax,4
+    or edx,eax
+    jmp .ok
+.uart_read_mcr:
+    movzx edx,byte [rel avmd_uart_mcr]
+    jmp .ok
+.uart_read_lcr:
+    movzx edx,byte [rel avmd_uart_lcr]
+    jmp .ok
+.uart_read_scr:
+    movzx edx,byte [rel avmd_uart_scr]
     jmp .ok
 .a20:
     mov edx,2
@@ -699,6 +873,8 @@ avmd_pit_counter:
 avmd_cmos_image:
     db 0,0,0,0,0,0,5,0x30,0x10,0x26,0x26,2,0,0x80
     times 128-14 db 0
+; Tools binds this code to its own literal storage (hv/tools_vm_devices).
+%ifndef PAOS_TOOLS_DEVICES_INSTANCE
 %include "core/abi/wdata.inc"
 %macro WDATA_hv_app_vm_devices 0
 align 8
@@ -727,10 +903,17 @@ avmd_pic_isr: times 2 db 0
 avmd_pic_read_isr: times 2 db 0
 avmd_pic_pending: db 0
 avmd_uart_lcr: db 0
+avmd_uart_ier: db 0
+avmd_uart_mcr: db 0
+avmd_uart_scr: db 0
+avmd_uart_thre: db 0
+avmd_uart_dll: db 0
+avmd_uart_dlm: db 0
 avmd_cmos: db 0
 avm_console_bytes: dd 0
 avm_console_overflow: db 0
 avm_console: times 8192 db 0
+avmd_guest_ended: db 0                 ; in the align-8 tail: block size unchanged
 align 8
 avmd_state_end:
 %endmacro
@@ -738,3 +921,4 @@ WDATA_DEFER WDATA_hv_app_vm_devices
 
 ; Device reset cannot clear a retained updater IO lifetime or uncertainty.
 %include "hv/updater_io_transport.asm"
+%endif

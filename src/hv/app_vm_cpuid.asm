@@ -96,6 +96,8 @@ app_vm_cpuid_query:
 .out:
     ret
 
+; Tools uses the same code with separately declared, literal private storage.
+%ifndef PAOS_TOOLS_CPU_INSTANCE
 %include "core/abi/wdata.inc"
 %macro WDATA_hv_app_vm_cpuid 0
 align 16
@@ -104,3 +106,4 @@ avm_raw_cpuid: times VCP_BYTES db 0
 avm_xstate: times VAX_SIZE db 0
 %endmacro
 WDATA_DEFER WDATA_hv_app_vm_cpuid
+%endif

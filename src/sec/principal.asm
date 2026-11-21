@@ -1,8 +1,8 @@
 ;; MODULE sec/principal
 %include "core/abi/build_profile.inc"
 ;; LAYER 5
-;; EXPORTS principal_try_local_begin, principal_first_owner_available, principal_first_owner_stage, principal_selftest, principal_authorization_selftest, principal_declare, principal_switch, principal_current, principal_execution_snapshot, principal_restore_execution, principal_restore_active, principal_capabilities, principal_derive, principal_credential, principal_system_auth_credential, principal_credentials_init, principal_enter_system, principal_leave_system, principal_clear_bound, principal_boot_fixture_begin, principal_boot_fixture_end, principal_boot_fixture_close, authenticate_bind, cmd_verb_prinwrite, cmd_verb_prinread, cmd_verb_prinswitch, cmd_verb_prinkdf, principal_local_password, principal_local_password_recheck, principal_push_handle, principal_wipe_owner_boot_key, principal_system_status_append
-;; IMPORTS core/smp, sec/wifi_profile, boot/boot_v2_handoff, core/capability, core/lock, core/lib/ed25519, svc/ssh_auth, core/lib/auth_derive, core/lib/pbkdf2_sha256, core/lib/hkdf_sha256, core/lib/aes256_gcm, core/csprng, core/time, core/lib/fmt, core/lib/mem, data/kvstore, fs/safe_write, sec/session, svc/command, svc/command_auth, svc/command_aihook, svc/command_udp, svc/push_auth, boot/serial, fs/storage_access, boot/nvram_access, config/keep_config, core/reset_wipe, sec/system_secret, sec/replay_floor, sec/owner_store, sec/wifi_store
+;; EXPORTS prin_stage_disclosure, prin_stage_not_applied, principal_owner_change_ready, principal_try_local_begin, principal_first_owner_available, principal_first_owner_stage, principal_selftest, principal_authorization_selftest, principal_declare, principal_switch, principal_current, principal_execution_snapshot, principal_restore_execution, principal_restore_active, principal_capabilities, principal_derive, principal_credential, principal_system_auth_credential, principal_credentials_init, principal_enter_system, principal_leave_system, principal_clear_bound, principal_boot_fixture_begin, principal_boot_fixture_end, principal_boot_fixture_close, authenticate_bind, cmd_verb_prinwrite, cmd_verb_prinread, cmd_verb_prinswitch, cmd_verb_prinkdf, principal_local_password, principal_local_password_recheck, principal_push_handle, principal_wipe_owner_boot_key, principal_system_status_append
+;; IMPORTS core/smp, sec/wifi_profile, boot/boot_v2_handoff, core/capability, core/lock, core/lib/ed25519, svc/ssh_auth, core/lib/auth_derive, core/lib/pbkdf2_sha256, core/lib/hkdf_sha256, core/lib/aes256_gcm, core/csprng, core/time, core/lib/fmt, core/lib/mem, data/kvstore, fs/safe_write, sec/session, svc/command, svc/command_auth, svc/command_aihook, svc/command_udp, svc/push_auth, boot/serial, fs/storage_access, boot/nvram_access, config/keep_config, core/reset_wipe, sec/system_secret, sec/replay_floor, sec/owner_store, sec/wifi_store, sec/keyprov
 ;; CAPS
 ;; OWNER saga:sec
 ;; LOCK: prin_state_lock PROTECTS principal_cap_table, authenticate_bind_table
@@ -126,6 +126,7 @@ PRIN_PASSWORD_VERIFIER_LEN equ 32
 ; S1b-2c: who holds the local password this boot (prin_owner_authority_apply)
 PRIN_PWA_RT          equ 0              ; no owner store decision: the RT verifier (UNOWNED residual)
 PRIN_PWA_STORE       equ 1              ; owner store LOADED: the BS record decides
+PRIN_PWA_STAGED      equ 3              ; verified pending owner; RAM only this boot
 PRIN_PWA_LOCKED      equ 2              ; owner store CORRUPT/FAILED: no local password
 PRIN_ENROLL_STORE_OWNED equ -2          ; enroll refused: the owner store holds the password
 PRIN_OWNER_PW_LEN    equ 52             ; = OWS_PW_LEN: iterations, salt, verifier
@@ -953,10 +954,24 @@ principal_boot_fixture_close:
     mov  byte [rel prin_boot_fixture_allowed], 0
     jmp  principal_boot_fixture_end
 
+; Authority-adding ceremonies wait for the sealed owner on a normal start.
+; This is not a session/consent gate: ordinary owner actions stay available.
+principal_owner_change_ready:
+    xor eax, eax
+    cmp byte [rel prin_pw_authority], PRIN_PWA_STAGED
+    sete al
+    xor eax, 1
+    ret
+
 ; Load the dedicated credential/hammer record. EAX=0 valid, 1 absent/unmapped
 ; hypervisor fixture, -1 malformed/unreadable. A malformed physical record is
 ; never replaced silently.
 principal_record_load:
+    cmp byte [rel prin_pw_authority], PRIN_PWA_STAGED
+    jne .load
+    xor eax, eax                         ; never reload the previous password over a live stage
+    ret
+.load:
     push rbx
     push r12
     push r13
@@ -1195,6 +1210,10 @@ principal_record_load:
 ;   §9.9a (v)) still reads the RT fields it read before. Their scrub is the
 ;   M3 commit's, under a migration-aware gate (S1b-2c-2).
 prin_owner_authority_apply:
+    cmp byte [rel prin_pw_authority], PRIN_PWA_STAGED
+    jne .apply
+    ret                                  ; retain the original RT snapshot too
+.apply:
     push rbx
     mov  ebx, edi
     lea  rdi, [rel prin_rt_pw]
@@ -1330,13 +1349,21 @@ principal_record_persist:
     ; Keep v1 byte format until reset actually needs the data-key wrapper.
     mov word [rel prin_record + PRIN_REC_VERSION], 1
     mov word [rel prin_record + PRIN_REC_SIZE], PRIN_V1_SIZE
-    cmp byte [rel prin_data_wrap_ready], 1
+    lea rsi, [rel prin_data_wrap]
+    mov al, [rel prin_data_wrap_ready]
+    cmp byte [rel prin_pw_authority], PRIN_PWA_STAGED
+    jne .persist_wrap
+    ; The new RAM wrap belongs to the pending owner. Persist the previous
+    ; wrap until pre-EBS commits, including across further changes this boot.
+    lea rsi, [rel prin_staged_previous_wrap]
+    mov al, [rel prin_staged_previous_wrap_ready]
+.persist_wrap:
+    cmp al, 1
     jne .wrap_saved
     mov word [rel prin_record + PRIN_REC_VERSION], PRIN_RECORD_VERSION
     mov word [rel prin_record + PRIN_REC_SIZE], PRIN_RECORD_SIZE
     or dword [rel prin_record + PRIN_REC_FLAGS], PRIN_REC_DATA_WRAP
     lea rdi, [rel prin_record + PRIN_REC_WRAP]
-    lea rsi, [rel prin_data_wrap]
     mov edx, PRIN_WRAP_SIZE
     call memcpy
 .wrap_saved:
@@ -2101,7 +2128,8 @@ principal_first_owner_available:
 ; Trusted local lock-surface entry only: RDI/RSI=private widget buffer/length,
 ; EDX=whole-buffer HUMAN proof, ECX=activation HUMAN proof (each exactly 1).
 ; These are native provenance results, never request principals or wire fields.
-; No live principal/session/credential is created. The caller always wipes input.
+; Success returns a fresh DATA credential in RDX for this same-call bind only.
+; The caller always wipes input; this entry never binds or unlocks a session.
 principal_first_owner_stage:
     cmp edx, 1
     jne .refused
@@ -2137,6 +2165,7 @@ principal_stage_password_common:
     mov [rsp + 24], rcx
     mov [rsp + 32], r8
     mov [rsp + 40], r9
+    mov qword [rsp + 48], 0              ; one-call credential result, never an ambient grant
     call prin_credential_lock_acquire
     call prin_stage_wipe
     mov ebx, -2
@@ -2154,6 +2183,13 @@ principal_stage_password_common:
     jne .out
     cmp qword [r8 + REQ_PRINCIPAL], CMD_PRINCIPAL_OWNER
     jne .out
+    cmp qword [rel keyprov_active_taint], 0
+    jne .out
+    call session_shell_local_authority
+    cmp rax, PRIN_OWNER
+    jne .out
+    cmp byte [rel prin_password_enrolled], 1
+    jne .out                             ; first setup uses the HUMAN form only
 .ready:
     mov ebx, -3
     cmp byte [rel ows_wr_ready], 1
@@ -2269,6 +2305,17 @@ principal_stage_password_common:
     call prin_stage_derive
     test eax, eax
     jnz .out
+    cmp byte [rel prin_stage_has_data], 1
+    je .data_ready
+    ; First setup owns a fresh DATA key, recoverable from the same standby
+    ; wrap as a password change. Failed entropy writes neither wrap nor stage.
+    lea rdi, [rel prin_stage_data_key]
+    mov esi, 32
+    call csprng_generate
+    test eax, eax
+    jnz .out
+    mov byte [rel prin_stage_has_data], 1
+.data_ready:
     ; No credential lock acquisition/callback: latch before standby/stage effects.
     call session_shell_local_wipe ; synchronous before authority/store/workspace callbacks
     call wifi_profile_cancel
@@ -2329,6 +2376,11 @@ principal_stage_password_common:
     test eax, eax
     jnz .out
 .commit:
+    ; Preserve hammer/replay metadata before the final durable stage. No
+    ; fallible persistence follows the publication of a new RAM credential.
+    call principal_record_persist
+    test eax, eax
+    jnz .out
     call owner_stage_commit
     test eax, eax
     jnz .out
@@ -2338,21 +2390,43 @@ principal_stage_password_common:
     call prin_stage_name
     call owner_writer_delete            ; best-effort OLD wrap retirement only
 .hammer:
-    mov rax, [rel prin_password_failures]
-    mov [rsp + 40], rax
-    mov rax, [rel prin_password_backoff_until]
+    ; Only the verified durable stage permits this publication. Keep the old
+    ; committed wrapper for RT persistence if another OS deletes the stage.
+    cmp byte [rel prin_pw_authority], PRIN_PWA_STAGED
+    je .publish
+    mov al, [rel prin_data_wrap_ready]
+    mov [rel prin_staged_previous_wrap_ready], al
+    lea rdi, [rel prin_staged_previous_wrap]
+    lea rsi, [rel prin_data_wrap]
+    mov edx, PRIN_WRAP_SIZE
+    call memcpy
+.publish:
+    mov eax, [rel prin_stage_password]
+    mov [rel prin_password_iterations], eax
+    lea rdi, [rel prin_password_salt]
+    lea rsi, [rel prin_stage_password + 4]
+    mov edx, 16
+    call memcpy
+    lea rdi, [rel prin_password_verifier]
+    lea rsi, [rel prin_stage_password + 20]
+    mov edx, 32
+    call memcpy
+    lea rdi, [rel prin_data_wrap]
+    lea rsi, [rel prin_stage_candidate + 56]
+    mov edx, PRIN_WRAP_SIZE
+    call memcpy
+    lea rdi, [rel prin_owner_session_key]
+    lea rsi, [rel prin_stage_data_key]
+    mov edx, 32
+    call memcpy
+    mov byte [rel prin_data_wrap_ready], 1
+    mov byte [rel prin_password_enrolled], 1
+    mov byte [rel prin_pw_authority], PRIN_PWA_STAGED
+    mov byte [rel prin_owner_session_ready], 1
+    mov qword [rel prin_active_pid], PRIN_OWNER
+    call prin_owner_boot_capture
+    lea rax, [rel prin_owner_session_key]
     mov [rsp + 48], rax
-    mov qword [rel prin_password_failures], 0
-    mov qword [rel prin_password_backoff_until], 0
-    call principal_record_persist
-    test eax, eax
-    jz .success
-    mov rax, [rsp + 40]
-    mov [rel prin_password_failures], rax
-    mov rax, [rsp + 48]
-    mov [rel prin_password_backoff_until], rax
-    mov ebx, -1
-    jmp .out
 .success:
     xor ebx, ebx
     jmp .out
@@ -2374,6 +2448,7 @@ principal_stage_password_common:
     call prin_stage_wipe
     call prin_credential_lock_release
     mov eax, ebx
+    mov rdx, [rsp + 48]                  ; valid only when EAX=0 in this call
     lea rsp, [rbp - 40]
     pop r15
     pop r14
@@ -2619,15 +2694,22 @@ principal_wrapnext_promote:
     sub rsp, 8
     call prin_stage_wipe
     xor ebx, ebx
+    mov byte [rel prin_stage_not_applied], 0
+    cmp byte [rel ows_state], PRIN_OWS_UNOWNED
+    je .read_pair
+    cmp byte [rel ows_state], PRIN_OWS_LOADED
+    jne .out
+.read_pair:
+    call prin_stage_read_pair
+    test eax, eax
+    jnz .read_failed
+    call prin_stage_notice              ; projection only; never repairs a stage
     cmp byte [rel ows_state], PRIN_OWS_LOADED
     jne .out
     cmp byte [rel ows_zbound], 1
     jne .out
     cmp byte [rel prin_pw_authority], PRIN_PWA_STORE
     jne .out
-    call prin_stage_read_pair
-    test eax, eax
-    jnz .fail
     lea rdi, [rel ows_committed_hash]
     mov rsi, [rel ows_generation]
     call prin_stage_match_pair
@@ -2652,6 +2734,15 @@ principal_wrapnext_promote:
     ; Failure to delete leaves an idempotent exact pair; loaded/persisted
     ; DATA_WRAP is already verified. Do not invent failure of promotion.
     jmp .out
+.read_failed:
+    ; An optional notice cannot disable a usable UNOWNED/legacy session.
+    ; Established sealed authority still fails closed on promotion I/O errors.
+    cmp byte [rel ows_state], PRIN_OWS_LOADED
+    jne .out
+    cmp byte [rel ows_zbound], 1
+    jne .out
+    cmp byte [rel prin_pw_authority], PRIN_PWA_STORE
+    jne .out
 .fail:
     mov ebx, -1
 .out:
@@ -2661,6 +2752,47 @@ principal_wrapnext_promote:
     add rsp, 8
     pop r12
     pop rbx
+    ret
+
+; Notice is deliberately weaker than authority. Corrupt/unreadable pairs
+; leave it clear. Old generations are not failed changes. No date is stored.
+prin_stage_notice:
+    push r12
+    mov byte [rel prin_stage_not_applied], 0
+    cmp byte [rel ows_state], PRIN_OWS_UNOWNED
+    je .scan
+    cmp byte [rel ows_state], PRIN_OWS_LOADED
+    jne .out
+.scan:
+    xor r12d, r12d
+.next:
+    movzx eax, byte [rel prin_stage_pair_mask]
+    bt eax, r12d
+    jnc .advance
+    mov eax, r12d
+    shl eax, 7
+    lea rdi, [rel prin_stage_pair]
+    add rdi, rax
+    mov rax, [rdi + 16]
+    cmp rax, [rel ows_generation]
+    ja .notice
+    jb .advance
+    add rdi, 24
+    lea rsi, [rel ows_committed_hash]
+    mov edx, 32
+    call principal_ct_equal
+    test eax, eax
+    jz .notice
+.advance:
+    inc r12d
+    cmp r12d, 2
+    jb .next
+.out:
+    pop r12
+    ret
+.notice:
+    mov byte [rel prin_stage_not_applied], 1
+    pop r12
     ret
 
 prin_stage_wipe:
@@ -2695,7 +2827,8 @@ align 2, db 0
 prin_wrap_name0: dw 'P','a','O','S','P','r','i','n','c','i','p','a','l','W','r','a','p','N','e','x','t','0',0
 prin_wrap_name1: dw 'P','a','O','S','P','r','i','n','c','i','p','a','l','W','r','a','p','N','e','x','t','1',0
 prin_stage_staged: db "AUTHENROLL STAGED gen=",0
-prin_stage_restart: db " commits on restart",0
+prin_stage_restart: db " active now; saved at next PaOS start",13,10,0
+prin_stage_disclosure: db "Until PaOS next starts, other systems on this PC can see a protected copy of the new password check; use a strong password.",0
 prin_stage_refused: db "AUTHENROLL REFUSED stage or password check failed",0
 prin_stage_local_only: db "AUTHENROLL REFUSED password changes are local only until the confirm slice",0
 prin_stage_not_ready: db "AUTHENROLL REFUSED owner changes need an installed boot or owner-store recovery",0
@@ -2948,6 +3081,8 @@ cmd_verb_authenroll:
     inc rdi
     call prin_out_dec
     lea rdi, [rel prin_stage_restart]
+    call prin_out_str
+    lea rdi, [rel prin_stage_disclosure]
     call prin_out_str
     jmp .reply
 .fail:
@@ -3917,6 +4052,9 @@ prin_password_enrolled:   db 0
 prin_rotation_requested:  db 0
 prin_data_wrap_ready:     db 0
 prin_data_wrap: times PRIN_WRAP_SIZE db 0
+prin_staged_previous_wrap_ready: db 0
+prin_staged_previous_wrap: times PRIN_WRAP_SIZE db 0
+prin_stage_not_applied: db 0
 prin_rotation_key: times 32 db 0
 prin_wrap_req: times AEAD_REQ_SZ db 0
 prin_owner_session_ready: db 0

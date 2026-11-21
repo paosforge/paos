@@ -5,7 +5,7 @@
 %include "hv/boot_guest_lab_profile.inc"
 
 ;; LAYER 5
-;; EXPORTS hv_linux_kernel_size, hv_linux_initrd_size, hv_linux_initrd_gpa, hv_guest_panic_request, hv_panic_armed, hv_panic_injected, hv_panic_text, hv_terminal_status, hv_terminal_attach, hv_terminal_read, hv_terminal_write, hv_terminal_resize, hv_terminal_detach, hv_linux_exit_hex, hv_linux_exits, hv_linux_host_slices, hv_linux_mb_token, hv_linux_mb_gen, hv_vcon_pmr_bind, hv_vcon_pmr_stop, hv_vcon_pmr_unbind, hv_vcon_pmr_retry, hv_media_guest_select, hv_media_guest_launch, hv_media_window_release, hv_linux_boot_start, hv_linux_boot_poll, hv_linux_load_yield, hv_vmx_detect, hv_guest_linux_start, hv_linux_region, hv_linux_region_capacity, hv_linux_region_resident, hv_linux_gpr, hv_linux_exit_dispatch, hv_linux_host_slice, hv_linux_save_host_msrs, hv_linux_restore_host, hv_linux_restore_host_quiet, hv_linux_host_xsave, hv_linux_xcr0_to_host, hv_linux_xcr0_to_guest, hv_linux_vector_scrub, hv_linux_cr_gpr_map, hv_linux_arm_deadline, hv_linux_wrmsr_rax, hv_launch_mode, hv_launches, hv_launch_rflags, hv_launch_cr0, hv_launch_cr4, hv_launch_hcr0, hv_launch_hcr4, hv_first_ud_bitmap_value, hv_first_ud_latch_arm, hv_vmx_enable, hv_vmx_setup, hv_vmx_map, hv_vmx_launch, hv_vmx_exit_dispatch, hv_vmx_selftest, hv_vmx_can_inject_extint, hv_vmx_inject_extint, hv_vmx_intr_window, hv_vmx_slat_flush, hv_vmx_slat_bits, hv_vmx_guest_cr3, hv_vmx_guest_read, hv_w, hv_register_verbs, hv_status_line, hv_out_ready, hv_out_buf, hv_out_reset, hv_out_str, hv_out_dec, hv_tok_is, hv_skip_spaces, hv_vcon_pmr_bound, hv_vcon_pmr_pending, hv_vcon_pmr_fault, hv_vmx_present, hv_vmxon_ok, hv_ept_built, hv_linux_kboot, hv_guest_launched, hv_guest_booted, hv_guest_launched_ms, hv_vcon_ready, hv_linux_running, hv_linux_vmx_live, hv_linux_eptp, hv_linux_run_req, hv_linux_stop_req, hv_linux_task_started, hv_linux_start_active, hv_linux_start_gen, hv_linux_start_consumed, hv_linux_run_start_tsc, hv_linux_panicked, hv_guest_linux_request_start, hv_guest_linux_task, hv_linux_gpa2hva, hv_linux_gva2hva, hv_vcon_rx_line, hv_vcon_q_ready, hv_vcon_capture_len, hv_vcon_capture_overflow, hv_vcon_capture, hv_vcon_proof_roll_begin, hv_vcon_proof_roll_finish, hv_vcon_proof_roll_abort, hv_vcon_proof_roll_state_reset, hv_vcon_proof_roll_fixture_selftest, hv_vcon_proof_roll_fixture_ok, hv_linux_load_err, hv_launch_refused, hv_launch_vmcsfail, hv_launch_vmxonfail, hv_instr_err, hv_vmwrite_fails, hv_exit_reason, hv_guestcpu_run_tsc_accum, hv_guestcpu_last_progress_tsc, hv_guestcpu_interrupts, hv_guestcpu_halt_wakes, hv_guestcpu_faults, hv_linux_ept_classify, hv_linux_ept_note_decode, hv_ept_exit_gpa, hv_ept_exit_qual, hv_ept_exit_rip, hv_ept_exit_gla, hv_ept_exit_insn, hv_ept_exit_gen, hv_ept_exit_ilen, hv_ept_exit_insn_len, hv_ept_exit_decode_len, hv_ept_exit_access, hv_ept_exit_decode, hv_ept_exit_class, hv_ept_exit_action, hv_ept_exit_bar_match, hv_first_ud_fixture_selftest, hv_first_ud_fixture_ok, hv_first_ud_fixture_stage, hv_first_ud_valid, hv_first_ud_info, hv_first_ud_error, hv_first_ud_idt_info, hv_first_ud_idt_error, hv_first_ud_rip, hv_first_ud_rsp, hv_first_ud_rflags, hv_first_ud_cr2, hv_first_ud_cr3, hv_first_ud_cr4, hv_first_ud_cs, hv_first_ud_gen, hv_first_ud_ordinal, hv_first_ud_no_reinject, hv_first_ud_exit_reason, hv_first_ud_walker_valid, hv_first_ud_page_size, hv_first_ud_gpa, hv_first_ud_offset, hv_first_ud_pml4e, hv_first_ud_pdpte, hv_first_ud_pde, hv_first_ud_pte, hv_first_ud_insn_len, hv_first_ud_console_len, hv_first_ud_console_overflow, hv_first_ud_bitmap_requested, hv_first_ud_bitmap_readback, hv_first_ud_first_r0_info, hv_first_ud_first_r0_gen, hv_first_ud_insn, hv_first_ud_gpr, hv_first_ud_console
+;; EXPORTS hv_linux_kernel_size, hv_linux_initrd_size, hv_linux_initrd_gpa, hv_guest_panic_request, hv_panic_armed, hv_panic_injected, hv_panic_text, hv_terminal_status, hv_terminal_poll, hv_terminal_attach, hv_terminal_read, hv_terminal_write, hv_terminal_resize, hv_terminal_detach, hv_linux_exit_hex, hv_linux_exits, hv_linux_host_slices, hv_linux_mb_token, hv_linux_mb_gen, hv_vcon_pmr_bind, hv_vcon_pmr_stop, hv_vcon_pmr_unbind, hv_vcon_pmr_retry, hv_media_guest_select, hv_media_guest_launch, hv_media_window_release, hv_linux_boot_start, hv_linux_boot_poll, hv_linux_load_yield, hv_vmx_detect, hv_guest_linux_start, hv_linux_region, hv_linux_region_capacity, hv_linux_region_resident, hv_linux_gpr, hv_linux_exit_dispatch, hv_linux_host_slice, hv_linux_save_host_msrs, hv_linux_restore_host, hv_linux_restore_host_quiet, hv_linux_host_xsave, hv_linux_xcr0_to_host, hv_linux_xcr0_to_guest, hv_linux_vector_scrub, hv_linux_cr_gpr_map, hv_linux_arm_deadline, hv_linux_wrmsr_rax, hv_launch_mode, hv_launches, hv_launch_rflags, hv_launch_cr0, hv_launch_cr4, hv_launch_hcr0, hv_launch_hcr4, hv_first_ud_bitmap_value, hv_first_ud_latch_arm, hv_vmx_enable, hv_vmx_setup, hv_vmx_map, hv_vmx_launch, hv_vmx_exit_dispatch, hv_vmx_selftest, hv_vmx_can_inject_extint, hv_vmx_inject_extint, hv_vmx_intr_window, hv_vmx_slat_flush, hv_vmx_slat_bits, hv_vmx_guest_cr3, hv_vmx_guest_read, hv_w, hv_register_verbs, hv_status_line, hv_out_ready, hv_out_buf, hv_out_reset, hv_out_str, hv_out_dec, hv_tok_is, hv_skip_spaces, hv_vcon_pmr_bound, hv_vcon_pmr_pending, hv_vcon_pmr_fault, hv_vmx_present, hv_vmxon_ok, hv_ept_built, hv_linux_kboot, hv_guest_launched, hv_guest_booted, hv_guest_launched_ms, hv_vcon_ready, hv_linux_running, hv_linux_vmx_live, hv_linux_eptp, hv_linux_run_req, hv_linux_stop_req, hv_linux_task_started, hv_linux_start_active, hv_linux_start_gen, hv_linux_start_consumed, hv_linux_run_start_tsc, hv_linux_panicked, hv_guest_linux_request_start, hv_guest_linux_task, hv_linux_gpa2hva, hv_linux_gva2hva, hv_vcon_rx_line, hv_vcon_q_ready, hv_vcon_capture_len, hv_vcon_capture_overflow, hv_vcon_capture, hv_vcon_proof_roll_begin, hv_vcon_proof_roll_finish, hv_vcon_proof_roll_abort, hv_vcon_proof_roll_state_reset, hv_vcon_proof_roll_fixture_selftest, hv_vcon_proof_roll_fixture_ok, hv_linux_load_err, hv_launch_refused, hv_launch_vmcsfail, hv_launch_vmxonfail, hv_instr_err, hv_vmwrite_fails, hv_exit_reason, hv_guestcpu_run_tsc_accum, hv_guestcpu_last_progress_tsc, hv_guestcpu_interrupts, hv_guestcpu_halt_wakes, hv_guestcpu_faults, hv_linux_ept_classify, hv_linux_ept_note_decode, hv_ept_exit_gpa, hv_ept_exit_qual, hv_ept_exit_rip, hv_ept_exit_gla, hv_ept_exit_insn, hv_ept_exit_gen, hv_ept_exit_ilen, hv_ept_exit_insn_len, hv_ept_exit_decode_len, hv_ept_exit_access, hv_ept_exit_decode, hv_ept_exit_class, hv_ept_exit_action, hv_ept_exit_bar_match, hv_first_ud_fixture_selftest, hv_first_ud_fixture_ok, hv_first_ud_fixture_stage, hv_first_ud_valid, hv_first_ud_info, hv_first_ud_error, hv_first_ud_idt_info, hv_first_ud_idt_error, hv_first_ud_rip, hv_first_ud_rsp, hv_first_ud_rflags, hv_first_ud_cr2, hv_first_ud_cr3, hv_first_ud_cr4, hv_first_ud_cs, hv_first_ud_gen, hv_first_ud_ordinal, hv_first_ud_no_reinject, hv_first_ud_exit_reason, hv_first_ud_walker_valid, hv_first_ud_page_size, hv_first_ud_gpa, hv_first_ud_offset, hv_first_ud_pml4e, hv_first_ud_pdpte, hv_first_ud_pde, hv_first_ud_pte, hv_first_ud_insn_len, hv_first_ud_console_len, hv_first_ud_console_overflow, hv_first_ud_bitmap_requested, hv_first_ud_bitmap_readback, hv_first_ud_first_r0_info, hv_first_ud_first_r0_gen, hv_first_ud_insn, hv_first_ud_gpr, hv_first_ud_console
 ;; IMPORTS hv/driver_domain_restart, hv/interpreter_execution, hv/context_execution, hv/boundary_execution, hv/guest_transport, hv/vcpu_svm_dispatch, svc/command_auth, hv/vcpu_status, hv/vcpu_observe, hv/vcpu_start_admit, hv/vcpu_start_close, hv/vcpu_write_guard, hv/vcpu_bsp_context, hv/vcpu_bsp_state, hv/vcpu_bsp, hv/vcpu_ap, hv/vcpu_ap_run, hv/boundary, hv/warm_lifecycle, media/pmr1_host_private, boot/boot_v2_handoff, boot/boot_esp_guid, boot/header, hv/guest_power, boot/serial, boot/gdt, core/dma, core/memmap, core/time, core/sched, svc/command, svc/command_udp, fs/vfs, svc/command_guestfile, hv/vtd, hv/guest_surface, hv/cdp_bridge, hv/domain_channel, hv/hv_ops, hv/guestdisplay, hv/svm, hv/vm_profile, hv/guestentropy, hv/guestrestore, hv/guestsnap, hv/pad_channel, hv/pci_assign, core/memory_budget, hv/input_domain_command, hv/driver_domain, hv/wifi_channel, hv/guestwifi, hv/nic_observation, hv/capability_observation
 ;; CAPS
 ;; OWNER saga:hv
@@ -175,6 +175,7 @@ HV_LINUX_INITRD_GPA  equ 0x3000000
 HV_LINUX_IO_CHUNK    equ 0x10000
 %assign HV_LINUX_RUN_MS 180000                ; ESSENCE E8 dilation-aware ceiling
 HV_LINUX_BOOT_GRACE_MS equ 2000               ; Classic: flat-out timer calibration
+HV_LINUX_STREAM_STOPPED equ 1               ; hv_linux_stream: this START's STOP arrived (ROOT 121790 b2)
 HV_LINUX_LOAD_QUANTUM_MS equ 100             ; a loading START gives the host a turn at least this often
 HV_VMX_GUEST_FLOOR_SHIFT equ 2               ; SEC109922 G1: Q_min = 1 ms >> 2, 250 us of guest time per entry
 HV_LINUX_CLEAR_SLICE equ 0x200000            ; guest-RAM bytes zeroed between START load turns
@@ -1646,6 +1647,7 @@ hv_guest_linux_start:
     mov  [rel hv_vmwrite_fails], eax
     call hv_linux_exit_reset
     call hv_linux_async_reset
+    call hv_s7f_reset                        ; T1-5 S7 (VM 118485)
     call hv_linux_ept_detail_reset
     call hv_first_ud_reset
     ; A diagnostic generation needs the bytes immediately preceding #UD.
@@ -2178,6 +2180,45 @@ hv_linux_load_yield:
 .out:
     ret
 
+; hv_gfile_note(EDI = 0 boot-ESP pair scan / 1 SOURCE.BIN scan): copy that scan's outcome and faulting device
+; name into vmx's own STAT bytes right after the scan ran, so GUESTVM STAT/OBSERVE never call out (values only).
+hv_gfile_note:
+    push rbx
+    mov  ebx, edi
+    call vfs_guest_pair_state
+    lea  rcx, [rel hv_gfile_why]
+    mov  [rcx + rbx], al
+    lea  rdi, [rel hv_gfile_dev]
+    shl  ebx, 4                            ; * HV_GFILE_DEV
+    add  rdi, rbx
+    mov  rax, [rdx]
+    mov  [rdi], rax
+    mov  rax, [rdx + 8]
+    mov  [rdi + 8], rax
+    mov  byte [rdi + HV_GFILE_DEV - 1], 0
+    pop  rbx
+    ret
+
+; GUESTVM STAT keys for the pair's source (root 119659, SEC 119661/119673): which branch this START chose and
+; why it refused. Values only, no pointers or LBAs; the scans' outcomes are noted from vfs_guest_pair_state when each runs.
+HV_GFILE_NONE     equ 0                    ; gfile_src: not chosen (refused before a branch, or no START yet)
+HV_GFILE_ESP      equ 1                    ; the boot-ESP pair
+HV_GFILE_HINT     equ 2                    ; the SOURCE.BIN partition's pair
+HV_GFILE_ROOT     equ 3                    ; the legacy root volume
+HV_GFILE_OK       equ 0                    ; gfile_refuse: none
+HV_GFILE_SIZE     equ 1                    ; a present file's size differs from its pin
+HV_GFILE_HINT_BAD equ 2                    ; SOURCE.BIN unreadable/malformed, or its partition refused or incomplete
+HV_GFILE_HASH     equ 3                    ; streamed bytes differ from the whole-file pin (load_err 10)
+; Root 119709 / TARGET2 119710: why a pinned START left for the root, named only if the root lacks the pair too
+; (load_err 3 as before): the pair is on no boot ESP or SOURCE.BIN partition (absent), or the boot-ESP scan
+; refused (ambiguous: its GUID named twice; fault: no clean medium holds it and a medium faulted).
+HV_GFILE_ABSENT   equ 4
+HV_GFILE_AMBIG    equ 5
+HV_GFILE_FAULT    equ 6
+HV_GFILE_SCAN_AMBIG equ 4                  ; = fat32_disk FD_PAIR_AMBIGUOUS (vfs_guest_pair_state)
+HV_GFILE_SCAN_FAULT equ 5                  ; = fat32_disk FD_PAIR_FAULT
+HV_GFILE_DEV      equ 16                   ; = fat32_disk FD_PAIR_NAME: a kept device name, at most 15 bytes + NUL
+
 ; Installation delivery: select both files once, before the first byte is read.
 ; The directory key is the lowercase full file SHA from the Manager handoff,
 ; not the per-boot journal generation or the unrelated PREL1 generation.
@@ -2188,6 +2229,14 @@ hv_linux_load_yield:
 hv_guest_files_begin:
     push rbx
     mov  byte [rel hv_guest_files_nested], 0
+    mov  byte [rel hv_gfile_src], HV_GFILE_NONE    ; STAT: this START's branch, set when chosen
+    mov  byte [rel hv_gfile_refuse], HV_GFILE_OK
+    mov  byte [rel hv_gfile_fallback], HV_GFILE_OK ; set only when a pinned pair is looked for and not found
+    mov  word [rel hv_gfile_why], 0                ; STAT: no scan ran this START (yet)
+    mov  byte [rel hv_gfile_dev], 0
+    mov  byte [rel hv_gfile_dev + HV_GFILE_DEV], 0
+    mov  eax, [rel hv_linux_load_gen]
+    mov  [rel hv_gfile_gen], eax           ; STAT shows these bytes only while their START is the latest
     mov  eax, [rel vfs_disk_handle]
     mov  [rel hv_guest_files_handle], eax
     mov  rax, [rel hv_linux_kernel_name_ptr]
@@ -2220,28 +2269,54 @@ hv_guest_files_begin:
     js   .bad
     mov  [rel hv_guest_files_ilen], eax
     lea  rdi, [rel boot_esp_part_guid]
-    call vfs_open_boot_esp
-    cmp  rax, -1
-    je   .root
-    mov  ebx, eax
+    call vfs_open_guest_esp                ; root 119659: the pair's own boot-ESP locate, not b1's shared one
+    mov  rbx, rax
+    xor  edi, edi
+    call hv_gfile_note                     ; STAT: this START's boot-ESP pair scan
+    cmp  rbx, -1
+    je   .esp_refused
     call hv_guest_files_pair
     test eax, eax
-    jz   .publish
-    js   .bad                              ; a present conflicting size is never a fallback
+    jz   .publish_esp
+    js   .bad_size                         ; a present conflicting size is never a fallback
     call hv_guest_files_source             ; missing boot pair: explicit alternate location hint
     test eax, eax
-    js   .bad
-    jnz  .root                             ; only proven selector absence preserves legacy root
+    js   .bad_hint
+    jnz  .absent                           ; only proven selector absence preserves legacy root
+    mov  byte [rel hv_gfile_src], HV_GFILE_HINT
+    jmp  .publish
+.publish_esp:
+    mov  byte [rel hv_gfile_src], HV_GFILE_ESP
 .publish:
     mov  [rel hv_guest_files_handle], ebx
     mov  byte [rel hv_guest_files_nested], 1 ; publish only after the complete pair matches
     xor  eax, eax
     jmp  .out
+.esp_refused:
+    movzx eax, byte [rel hv_gfile_why]     ; the boot-ESP pair scan's outcome, as noted
+    mov  byte [rel hv_gfile_fallback], HV_GFILE_AMBIG
+    cmp  eax, HV_GFILE_SCAN_AMBIG
+    je   .root
+    mov  byte [rel hv_gfile_fallback], HV_GFILE_FAULT
+    cmp  eax, HV_GFILE_SCAN_FAULT
+    je   .root
+.absent:
+    mov  byte [rel hv_gfile_fallback], HV_GFILE_ABSENT
 .root:
     cmp  dword [rel hv_guest_files_handle], -1
-    je   .bad
+    je   .no_root
+    mov  byte [rel hv_gfile_src], HV_GFILE_ROOT
     xor  eax, eax
     jmp  .out
+.no_root:
+    mov  al, [rel hv_gfile_fallback]       ; no root volume either: the pinned pair's reason, if one was sought
+    mov  [rel hv_gfile_refuse], al
+    jmp  .bad
+.bad_size:
+    mov  byte [rel hv_gfile_refuse], HV_GFILE_SIZE
+    jmp  .bad
+.bad_hint:
+    mov  byte [rel hv_gfile_refuse], HV_GFILE_HINT_BAD
 .bad:
     mov  eax, -1
 .out:
@@ -2325,6 +2400,10 @@ hv_guest_files_source:
     jz   .bad
     lea  rdi, [rel hv_guest_files_hint + 48]
     call vfs_open_guest_source
+    mov  [rsp], rax
+    mov  edi, 1
+    call hv_gfile_note                     ; STAT: this START's SOURCE.BIN scan
+    mov  rax, [rsp]
     test rax, rax
     js   .bad
     mov  ebx, eax
@@ -2486,6 +2565,11 @@ hv_linux_stream:
 .loop:
     test r15, r15
     jz   .ok
+    ; ROOT 121790 (b2): the loader cleared hv_linux_stop_req at START, so a set
+    ; byte is this START's STOP (GUESTVM STOP, a domain fault-stop, a return).
+    ; Stop at the chunk boundary; the caller unwinds through .fail and .done.
+    cmp  byte [rel hv_linux_stop_req], 0
+    jne  .stopped
     mov  rbx, r15
     cmp  rbx, HV_LINUX_IO_CHUNK
     jbe  .chunk
@@ -2506,6 +2590,9 @@ hv_linux_stream:
     jmp  .loop
 .ok:
     xor  eax, eax
+    jmp  .out
+.stopped:
+    mov  eax, HV_LINUX_STREAM_STOPPED
     jmp  .out
 .fail:
     mov  rax, -1
@@ -2616,7 +2703,7 @@ hv_linux_prepare:
     lea  rdx, [rel hv_linux_stat]
     call hv_guest_file_stat
     test rax, rax
-    jnz  .bz_bad
+    jnz  .bz_missing
     mov  r12, [rel hv_linux_stat]            ; fs_stat.size is ABI offset zero
     cmp  r12, 0x271
     jb   .bz_bad
@@ -2631,6 +2718,8 @@ hv_linux_prepare:
     lea  rcx, [r14 + HV_LINUX_HDR_GPA]
     mov  r8d, 0x271
     call hv_linux_stream
+    cmp  rax, HV_LINUX_STREAM_STOPPED
+    je   .load_stopped
     test rax, rax
     jnz  .bz_bad
     lea  rbx, [r14 + HV_LINUX_HDR_GPA]
@@ -2655,6 +2744,8 @@ hv_linux_prepare:
     lea  rcx, [r14 + HV_LINUX_HDR_GPA]
     mov  r8, r13
     call hv_linux_stream
+    cmp  rax, HV_LINUX_STREAM_STOPPED
+    je   .load_stopped
     test rax, rax
     jnz  .kernel_io
 .setup_done:
@@ -2668,6 +2759,8 @@ hv_linux_prepare:
     lea  rcx, [r14 + HV_LINUX_KERN_GPA]
     mov  r8, r12
     call hv_linux_stream
+    cmp  rax, HV_LINUX_STREAM_STOPPED
+    je   .load_stopped
     test rax, rax
     jnz  .kernel_io
     mov  rdi, [rel vm_profile_kdep]
@@ -2842,6 +2935,8 @@ hv_linux_prepare:
     add  rcx, [rel hv_linux_initrd_gpa]
     mov  r8, r12
     call hv_linux_stream
+    cmp  rax, HV_LINUX_STREAM_STOPPED
+    je   .load_stopped
     test rax, rax
     jnz  .initrd_bad
     mov  rdi, [rel vm_profile_idep]
@@ -3036,6 +3131,11 @@ hv_linux_prepare:
 .display_bad:
     mov  byte [rel hv_linux_load_err], 2
     jmp  .fail
+.bz_missing:
+    cmp  byte [rel hv_gfile_src], HV_GFILE_ROOT
+    jne  .bz_bad
+    mov  al, [rel hv_gfile_fallback]       ; root 119709: a pinned pair sought and not on the root either
+    mov  [rel hv_gfile_refuse], al         ; (0 for a legacy root START: no reason named)
 .bz_bad:
     mov  byte [rel hv_linux_load_err], 3
     jmp  .fail
@@ -3047,6 +3147,7 @@ hv_linux_prepare:
     jmp  .fail
 .pin_bad:
     mov  byte [rel hv_linux_load_err], 10    ; RCQ-18: bytes differ from the profile pin
+    mov  byte [rel hv_gfile_refuse], HV_GFILE_HASH ; STAT: a refusal, never a root fallback
     jmp  .fail
 .fit_bad:
     mov  byte [rel hv_linux_load_err], 11    ; RCQ-18: artifacts do not fit the profile RAM
@@ -3059,6 +3160,9 @@ hv_linux_prepare:
     jmp  .fail
 .pad_bad:
     mov  byte [rel hv_linux_load_err], 14    ; RCQ-36: private PAD1 channel bind refused
+    jmp  .fail
+.load_stopped:
+    mov  byte [rel hv_linux_load_err], 18    ; ROOT 121790 b2: this START's STOP arrived while streaming
     jmp  .fail
 .assign_bad:
     mov  byte [rel hv_linux_load_err], 15    ; RCQ-36 V2 c2: host function assignment refused
@@ -6954,6 +7058,14 @@ hv_vcon_serve_tx:
 %endif
 %endif
 
+    ; One whole chain fits the current Terminal ring or remains on avail.
+    ; Malformed heads were handled above. No byte/consumer/used effect on
+    ; pressure; the next stopped-vCPU poll revalidates the head from scratch.
+    mov  ecx, [rsp + HV_VCON_RX_WORK.capacity]
+    call hv_terminal_tx_room
+    test eax, eax
+    jz   .flush                            ; whole head stays guest-owned under pressure
+
     ; No failure/yield/guest metadata reads after this point. Exact private
     ; snapshot completes before ANY capture or typed consumer is invoked.
     lea  rdi, [rel hv_vcon_txbuf]
@@ -8243,6 +8355,7 @@ hv_linux_exit_dispatch:
     inc  dword [rel hv_linux_exits]
     call hv_linux_exit_observe
     call hv_linux_async_observe
+    call hv_s7f_observe                      ; T1-5 S7 (VM 118485): passive, keeps every register
     cmp  byte [rel hv_panic_injected], 1
     jne  .decode
     cmp  byte [rel hv_panic_text], 1
@@ -10042,7 +10155,110 @@ hv_render_stat:
     call hv_out_str
 .no_svm_floor:
     call guestdisplay_render_stage_stat      ; passive tail; never displaces existing status fields
+    call hv_render_gfile                     ; root 119659: guest-pair file source, tail, only facts
+    call hv_render_s7f                       ; T1-5 S7 (VM 118485): only once latched; last, so a clip cuts only it
     ret
+
+; hv_render_gfile (root 119659 / SEC 119661 (4) + 119673): the guest pair's file source, in the STAT tail
+;   after every existing field (a clip cuts only this and the S7 record), each key only when it holds a fact:
+;   " gfile_src=<boot_esp|hint|root>"   the branch this START chose (none chosen: no key)
+;   " gfile_esp=<scan>" / " gfile_hint=<scan>"   a scan that ran, scan = FD_PAIR_* as
+;       ok|tolerated|none|ambiguous|fault; tolerated = a medium that did not read or parse was skipped
+;   " gfile_esp_dev=<name>" / " gfile_hint_dev=<name>"   the medium that faulted (device name text, never
+;       an address; fat32_disk's "-" = none faulted: no key)
+;   " gfile_refuse=<size|hint|hash|absent|ambiguous|fault>"   the named refusal (none: no key); absent /
+;       ambiguous / fault only when a pinned START found its pair on no ESP/hint and not on the root either
+;       (root 119709). Out-of-range bytes print "?".
+; Read-only; clobbers caller-saved.
+hv_render_gfile:
+    push rbx
+    push r12
+    sub  rsp, 8
+    mov  eax, [rel hv_gfile_gen]
+    cmp  eax, [rel hv_linux_load_gen]
+    jne  .out                                ; a newer START has not chosen its pair yet: no earlier START's facts
+    cmp  byte [rel hv_gfile_src], HV_GFILE_NONE
+    je   .scans
+    lea  rdi, [rel str_hv_gfile_src]
+    call hv_out_str
+    lea  rdi, [rel str_hv_gfile_src_tokens]
+    movzx eax, byte [rel hv_gfile_src]
+    mov  ecx, 4
+    call hv_out_nth
+.scans:
+    xor  ebx, ebx                            ; 0 = the boot-ESP pair scan, 1 = the SOURCE.BIN scan
+.scan:
+    lea  rcx, [rel hv_gfile_why]
+    movzx eax, byte [rcx + rbx]
+    test eax, eax
+    jz   .next_scan                          ; FD_PAIR_NOT_RUN: this scan did not run this START
+    mov  [rsp], eax
+    lea  r12, [rel hv_gfile_dev]
+    mov  ecx, ebx
+    shl  ecx, 4                              ; * HV_GFILE_DEV
+    add  r12, rcx
+    lea  rdi, [rel str_hv_gfile_esp]
+    test ebx, ebx
+    jz   .key
+    lea  rdi, [rel str_hv_gfile_hint]
+.key:
+    call hv_out_str
+    lea  rdi, [rel str_hv_gfile_scan_tokens]
+    mov  eax, [rsp]
+    mov  ecx, 6
+    call hv_out_nth
+    movzx eax, word [r12]
+    test al, al
+    jz   .next_scan                          ; no name recorded
+    cmp  eax, '-'
+    je   .next_scan                          ; "-": no medium faulted
+    lea  rdi, [rel str_hv_gfile_esp_dev]
+    test ebx, ebx
+    jz   .dev_key
+    lea  rdi, [rel str_hv_gfile_hint_dev]
+.dev_key:
+    call hv_out_str
+    mov  rdi, r12
+    call hv_out_str
+.next_scan:
+    inc  ebx
+    cmp  ebx, 2
+    jb   .scan
+    cmp  byte [rel hv_gfile_refuse], HV_GFILE_OK
+    je   .out
+    lea  rdi, [rel str_hv_gfile_refuse]
+    call hv_out_str
+    lea  rdi, [rel str_hv_gfile_refuse_tokens]
+    movzx eax, byte [rel hv_gfile_refuse]
+    mov  ecx, 7
+    call hv_out_nth
+.out:
+    add  rsp, 8
+    pop  r12
+    pop  rbx
+    ret
+
+; hv_out_nth(RDI = NUL-separated tokens, EAX = index, ECX = token count): append token EAX; "?" past the end.
+hv_out_nth:
+    cmp  eax, ecx
+    jae  .unknown
+.skip:
+    test eax, eax
+    jz   .emit
+.walk:
+    cmp  byte [rdi], 0
+    je   .next
+    inc  rdi
+    jmp  .walk
+.next:
+    inc  rdi
+    dec  eax
+    jmp  .skip
+.emit:
+    jmp  hv_out_str
+.unknown:
+    lea  rdi, [rel str_hv_gfile_unknown]
+    jmp  hv_out_str
 
 ; T2-4 D8 (VM 107717): Intel S7 two-vCPU live STAT only (hv_ops_active ==
 ; hv_ops_vmx and vca_ready == 1), after host=alive. The AMD-only floor slot
@@ -10101,6 +10317,242 @@ hv_slice_tsc_ms:
     jbe  .out
     mov  rax, rcx
 .out:
+    ret
+
+; T1-5 S7 (VM 118485) passive vCPU0 freeze record. Diagnostic only: VMREAD and own
+; state, no VMCS write, injection, scheduling or exit-handling change. Saved Dell
+; 322 EXITSTAT showed vCPU0 retiring no instruction after its last PIO exit; this
+; names its VMCS state and the sync exits just before the stall.
+HV_S7F_STALL equ 64                      ; async exits at one RIP, with no sync exit between
+HV_S7F_G_EFER equ 0x2806
+HV_S7F_VMCS equ 14                       ; hv_s7f_fields entries
+HV_S7F_VMCS_V equ 7                      ; the first seven render as s7fv, the rest as s7fc
+
+; START: zero the record (both the gate and the latch are per START).
+hv_s7f_reset:
+    pushfq
+    push rax
+    push rcx
+    push rdi
+    lea  rdi, [rel hv_s7f_record]
+    xor  eax, eax
+    mov  ecx, (hv_s7f_record_end - hv_s7f_record) / 8
+    cld
+    rep  stosq
+    pop  rdi
+    pop  rcx
+    pop  rax
+    popfq
+    ret
+
+; Every decoded exit, after the evidence samplers, with its VMCS current. Gate: the
+; Intel two-vCPU path (hv_ops_vmx, vca_ready == 1), before the latch. The reason is
+; hv_exit_reason; every register and flag is kept.
+;   sync   one ring slot (reason, RIP, qualification); the stall run restarts.
+;   async  (1/7/52) the run counts exits at one unchanged RIP; at HV_S7F_STALL the
+;          HV_S7F_VMCS fields are read once and the record is final (latched 1).
+; The AMD two-vCPU path fills the same record from vCPU0's VMCB: vsm_s7f_observe.
+hv_s7f_observe:
+    pushfq
+    push rax
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r11
+    push rbx
+    lea  rcx, [rel hv_ops_vmx]
+    cmp  [rel hv_ops_active], rcx
+    jne  .done
+    cmp  qword [rel vca_ready], 1
+    jne  .done
+    cmp  byte [rel hv_s7f_latched], 0
+    jne  .done
+    mov  ebx, [rel hv_exit_reason]
+    cmp  ebx, 1
+    je   .async
+    cmp  ebx, 7
+    je   .async
+    cmp  ebx, 52
+    je   .async
+    mov  rax, [rel hv_s7f_sync]
+    inc  qword [rel hv_s7f_sync]
+    and  eax, 3
+    imul eax, eax, 24
+    lea  rsi, [rel hv_s7f_ring]
+    add  rsi, rax
+    mov  [rsi], rbx
+    xor  eax, eax
+    mov  edi, VMXF_G_RIP
+    call hv_guest_read
+    mov  [rsi + 8], rax
+    xor  eax, eax
+    mov  edi, VMXF_EXIT_QUAL
+    call hv_guest_read
+    mov  [rsi + 16], rax
+    mov  qword [rel hv_s7f_run], 0
+    jmp  .done
+.async:
+    inc  qword [rel hv_s7f_async]
+    xor  eax, eax
+    mov  edi, VMXF_G_RIP
+    call hv_guest_read
+    cmp  qword [rel hv_s7f_run], 0
+    je   .baseline
+    cmp  rax, [rel hv_s7f_rip]
+    jne  .baseline
+    inc  qword [rel hv_s7f_run]
+    cmp  qword [rel hv_s7f_run], HV_S7F_STALL
+    jb   .done
+    xor  ebx, ebx
+.field:
+    lea  rax, [rel hv_s7f_fields]
+    movzx edi, word [rax + rbx * 2]
+    xor  eax, eax                        ; a refused VMREAD leaves RAX: record 0
+    call hv_guest_read
+    lea  rcx, [rel hv_s7f_vmcs]
+    mov  [rcx + rbx * 8], rax
+    inc  ebx
+    cmp  ebx, HV_S7F_VMCS
+    jb   .field
+    mov  byte [rel hv_s7f_latched], 1
+    jmp  .done
+.baseline:
+    mov  [rel hv_s7f_rip], rax
+    mov  qword [rel hv_s7f_run], 1
+.done:
+    pop  rbx
+    pop  r11
+    pop  rdi
+    pop  rsi
+    pop  rdx
+    pop  rcx
+    pop  rax
+    popfq
+    ret
+
+; GUESTVM STAT, only once latched (so also after STOP until the next START):
+;   s7f=async,sync,run,rip  then latched 1 (VMX) s7fv=<7> s7fc=<7> VMCS fields,
+;   or latched 2 (SVM, vsm_s7f_observe) s7fbv=<7> s7fbc=<7> vCPU0 VMCB fields;
+;   s7fr=reason:rip:qual x4, oldest first (a slot never written reads 0:0:0)
+; Lowercase hex without leading zeros. Clobbers RAX,RCX,RDX,RSI,RDI.
+hv_render_s7f:
+    movzx eax, byte [rel hv_s7f_latched]
+    dec  eax
+    cmp  eax, 1                          ; 0 = VMX (latched 1), 1 = SVM (latched 2)
+    ja   .out
+    push rbx
+    push r12
+    push r13
+    mov  r13d, eax
+    lea  rdi, [rel str_hv_stat_s7f]
+    lea  rsi, [rel hv_s7f_async]
+    mov  edx, 4
+    call hv_s7f_list
+    lea  rdi, [rel str_hv_stat_s7fv]
+    test r13d, r13d
+    jz   .vlabel
+    lea  rdi, [rel str_hv_stat_s7fbv]
+.vlabel:
+    lea  rsi, [rel hv_s7f_vmcs]
+    mov  edx, HV_S7F_VMCS_V
+    call hv_s7f_list
+    lea  rdi, [rel str_hv_stat_s7fc]
+    test r13d, r13d
+    jz   .clabel
+    lea  rdi, [rel str_hv_stat_s7fbc]
+.clabel:
+    lea  rsi, [rel hv_s7f_vmcs + HV_S7F_VMCS_V * 8]
+    mov  edx, HV_S7F_VMCS - HV_S7F_VMCS_V
+    call hv_s7f_list
+    lea  rdi, [rel str_hv_stat_s7fr]
+    call hv_out_str
+    xor  r12d, r12d
+.slot:
+    test r12d, r12d
+    jz   .first
+    mov  al, ','
+    call hv_out_putc
+.first:
+    mov  rax, [rel hv_s7f_sync]
+    add  eax, r12d
+    and  eax, 3                          ; slot (n + i) & 3: oldest first
+    imul ebx, eax, 24
+    lea  rcx, [rel hv_s7f_ring]
+    add  rbx, rcx
+    mov  rax, [rbx]
+    call hv_s7f_hex
+    mov  al, ':'
+    call hv_out_putc
+    mov  rax, [rbx + 8]
+    call hv_s7f_hex
+    mov  al, ':'
+    call hv_out_putc
+    mov  rax, [rbx + 16]
+    call hv_s7f_hex
+    inc  r12d
+    cmp  r12d, 4
+    jb   .slot
+    pop  r13
+    pop  r12
+    pop  rbx
+.out:
+    ret
+
+; hv_s7f_list(RDI = label, RSI = qwords, EDX = count >= 1): label, then comma-separated hex.
+hv_s7f_list:
+    push rbx
+    push r12
+    push r13
+    mov  rbx, rsi
+    mov  r12d, edx
+    xor  r13d, r13d
+    call hv_out_str
+.item:
+    test r13d, r13d
+    jz   .value
+    mov  al, ','
+    call hv_out_putc
+.value:
+    mov  rax, [rbx + r13 * 8]
+    call hv_s7f_hex
+    inc  r13d
+    cmp  r13d, r12d
+    jb   .item
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+
+; hv_s7f_hex(RAX): lowercase hex without leading zeros ("0" for zero). Clobbers RAX,RCX,RDX,RSI.
+hv_s7f_hex:
+    push rbx
+    mov  rbx, rax
+    mov  edx, 1
+    bsr  rcx, rax
+    jz   .rotate                         ; zero: one digit
+    shr  ecx, 2
+    lea  edx, [rcx + 1]
+.rotate:
+    mov  ecx, 16
+    sub  ecx, edx
+    shl  ecx, 2
+    shl  rbx, cl                         ; first digit in the top nibble (CL <= 60)
+.digit:
+    rol  rbx, 4
+    mov  eax, ebx
+    and  eax, 15
+    cmp  al, 10
+    jb   .number
+    add  al, 'a' - 10
+    jmp  .put
+.number:
+    add  al, '0'
+.put:
+    call hv_out_putc
+    dec  edx
+    jnz  .digit
+    pop  rbx
     ret
 
 ; hv_out_dec(EAX = unsigned value) — append its decimal text via the out cursor.
@@ -10797,7 +11249,37 @@ str_hv_stat_slice_timer: db " slice_timer_exits=", 0
 str_hv_stat_slice_nonroot: db " slice_nonroot_ms=", 0
 str_hv_stat_slice_yield: db " slice_yield_ms=", 0
 str_hv_stat_slice_gap: db " slice_max_gap_ms=", 0
+; T1-5 S7 vCPU0 freeze record (VM 118485): read-only, same placement rule.
+str_hv_stat_s7f: db " s7f=", 0
+str_hv_stat_s7fv: db " s7fv=", 0
+str_hv_stat_s7fc: db " s7fc=", 0
+str_hv_stat_s7fr: db " s7fr=", 0
+; AMD (latched 2): the vCPU0 VMCB fields of vsm_s7f_fields, under their own keys.
+str_hv_stat_s7fbv: db " s7fbv=", 0
+str_hv_stat_s7fbc: db " s7fbc=", 0
+; The latched VMCS fields, in hv_s7f_vmcs order: s7fv = activity, interruptibility,
+; pending debug, entry and IDT-vectoring info, this exit's interrupt info, RFLAGS;
+; s7fc = CR0, CR3, CR4, EFER, pin, processor and secondary controls.
+hv_s7f_fields:
+    dw VMXF_G_ACTIVITY, VMXF_G_INTERRUPT, VMXF_G_PEND_DBG, VMXF_ENTRY_INTR
+    dw VMXF_IDT_VEC_INFO, VMXF_EXIT_INTR_INFO, VMXF_G_RFLAGS
+    dw VMXF_G_CR0, VMXF_G_CR3, VMXF_G_CR4, HV_S7F_G_EFER
+    dw VMXF_PIN_CTLS, VMXF_PROC_CTLS, VMXF_PROC_CTLS2
+%if $ - hv_s7f_fields != HV_S7F_VMCS * 2
+    %error "hv_s7f_fields must list exactly HV_S7F_VMCS fields"
+%endif
 
+; GUESTVM STAT pair-source keys (root 119659): read-only text, outside the pinned WDATA blocks.
+str_hv_gfile_src: db " gfile_src=", 0
+str_hv_gfile_esp: db " gfile_esp=", 0
+str_hv_gfile_hint: db " gfile_hint=", 0
+str_hv_gfile_esp_dev: db " gfile_esp_dev=", 0
+str_hv_gfile_hint_dev: db " gfile_hint_dev=", 0
+str_hv_gfile_refuse: db " gfile_refuse=", 0
+str_hv_gfile_unknown: db "?", 0
+str_hv_gfile_src_tokens: db "none", 0, "boot_esp", 0, "hint", 0, "root", 0
+str_hv_gfile_scan_tokens: db "-", 0, "ok", 0, "tolerated", 0, "none", 0, "ambiguous", 0, "fault", 0
+str_hv_gfile_refuse_tokens: db "-", 0, "size", 0, "hint", 0, "hash", 0, "absent", 0, "ambiguous", 0, "fault", 0
 %include "core/abi/wdata.inc" ; WDATA_DEFER; standalone assemblies expand blocks in place
 ; Writable state: deferred to the page-isolated WDATA region (core/abi/wdata.inc).
 %macro WDATA_hv_vmx_0 0
@@ -11364,6 +11846,20 @@ hv_linux_async_entry: resq 1
 hv_linux_async_end:
 %endmacro
 WDATA_BSS_DEFER WDATA_BSS_hv_vmx_async_evidence
+; T1-5 S7 freeze record (VM 118485). Own block: every earlier offset stays fixed.
+%macro WDATA_BSS_hv_vmx_s7_freeze 0
+alignb 8
+hv_s7f_record:
+hv_s7f_async: resq 1                     ; async exits seen on the gated path
+hv_s7f_sync: resq 1                      ; sync exits seen on the gated path; ring slot = n & 3
+hv_s7f_run: resq 1                       ; consecutive async exits at hv_s7f_rip, no sync exit between
+hv_s7f_rip: resq 1
+hv_s7f_ring: resq 4 * 3                  ; reason, RIP, qualification of the last four sync exits
+hv_s7f_vmcs: resq HV_S7F_VMCS
+hv_s7f_latched: resq 1                   ; byte 0: final for this START, 1 = VMX observer, 2 = SVM
+hv_s7f_record_end:
+%endmacro
+WDATA_BSS_DEFER WDATA_BSS_hv_vmx_s7_freeze
 ; Own block: the existing VMX/PMR receipt and cache-line offsets stay fixed.
 %macro WDATA_BSS_hv_guest_files 0
 alignb 8
@@ -11381,6 +11877,16 @@ hv_guest_files_spath: resb 96
 hv_guest_files_hint: resb 64
 %endmacro
 WDATA_BSS_DEFER WDATA_BSS_hv_guest_files
+; Its own block (root 119659): the pair's STAT source branch and refusal, HV_GFILE_*.
+%macro WDATA_BSS_hv_guest_files_source 0
+hv_gfile_src: resb 1
+hv_gfile_refuse: resb 1
+hv_gfile_fallback: resb 1
+hv_gfile_why: resb 2                       ; this START's scan outcomes (FD_PAIR_*): [0] boot-ESP pair, [1] SOURCE.BIN
+hv_gfile_dev: resb 32                      ; 2 * HV_GFILE_DEV: their faulting device names, as text ("-" = none)
+hv_gfile_gen: resd 1                       ; hv_linux_load_gen of the START that wrote these bytes
+%endmacro
+WDATA_BSS_DEFER WDATA_BSS_hv_guest_files_source
 %ifdef RCQ37_MEDIA_PROFILE
 %if RCQ37_MEDIA_PROFILE
 %macro WDATA_BSS_hv_vmx_pmr 0

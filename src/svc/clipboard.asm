@@ -1,7 +1,7 @@
 ;; MODULE svc/clipboard
 ;; LAYER 5
-;; EXPORTS clipboard_commit_entry, clipboard_init, clipboard_bind_textfield, clipboard_audit_line, clipboard_out_buf, clipboard_out_ready
-;; IMPORTS boot/serial, core/lock, core/lib/fmt, core/lib/str, svc/command, svc/command_auth
+;; EXPORTS clipboard_commit_entry, clipboard_text_publish_human, clipboard_text_snapshot_human, clipboard_init, clipboard_bind_textfield, clipboard_audit_line, clipboard_out_buf, clipboard_out_ready
+;; IMPORTS boot/serial, core/lock, core/lib/fmt, core/lib/str, core/unicode_edit, sec/session, sec/keyprov, svc/command, svc/command_auth
 ;; CAPS clipboard.read(slot20), clipboard.write(signed)
 ;; OWNER saga:clipboard_service
 ;; LOCK: clipboard_lock PROTECTS clipboard_entry
@@ -28,6 +28,9 @@ CLIP_KIND_INLINE     equ 1
 CLIP_KIND_HANDLE14   equ 2
 CLIP_MEDIA_MAX       equ 63
 CLIP_INLINE_MAX      equ 768
+CLIP_TEXT_MAX        equ 8192           ; native storage; wire envelope stays 768
+CLIP_ORIGIN_COMMAND  equ 0
+CLIP_ORIGIN_NATIVE   equ 1
 CLIP_PROVENANCE_MAX  equ 127
 CLIP_ARG_MAX         equ 1024
 CLIP_PARSE_PAD       equ 16             ; lookahead guard for token recognizers
@@ -42,20 +45,22 @@ CLIP_TEXTFIELD_VALUE_MAX equ 39
 CLIP_E_KIND          equ 0              ; db CLIP_KIND_*
 CLIP_E_PRESENT       equ 1              ; db
 CLIP_E_FLAGS         equ 2              ; dw reserved
+CLIP_E_ORIGIN        equ CLIP_E_FLAGS   ; trusted service byte, never provenance text
 CLIP_E_INLINE_LEN    equ 4              ; dd
 CLIP_E_PROV_LEN      equ 8              ; dd
 CLIP_E_HISTORY       equ 12             ; dd, CLIP_HISTORY_NONE in v1
 CLIP_E_GENERATION    equ 16             ; dq
 CLIP_E_HANDLE14      equ 24             ; dq
 CLIP_E_MEDIA         equ 32             ; 64-byte cstr
-CLIP_E_INLINE        equ 96             ; 769-byte cstr
-CLIP_E_PROVENANCE    equ 865            ; 128-byte cstr
-CLIP_E_SIZE          equ 993
+CLIP_E_INLINE        equ 96             ; CLIP_TEXT_MAX + 1 bytes
+CLIP_E_PROVENANCE    equ (CLIP_E_INLINE + CLIP_TEXT_MAX + 1)
+CLIP_E_PUBLISHER     equ (CLIP_E_PROVENANCE + CLIP_PROVENANCE_MAX + 1) ; dq local principal
+CLIP_E_SIZE          equ (CLIP_E_PUBLISHER + 8)
 
-%if CLIP_E_INLINE + CLIP_INLINE_MAX + 1 != CLIP_E_PROVENANCE
+%if CLIP_E_INLINE + CLIP_TEXT_MAX + 1 != CLIP_E_PROVENANCE
     %error "clipboard inline envelope drift"
 %endif
-%if CLIP_E_PROVENANCE + CLIP_PROVENANCE_MAX + 1 != CLIP_E_SIZE
+%if CLIP_E_PROVENANCE + CLIP_PROVENANCE_MAX + 1 != CLIP_E_PUBLISHER
     %error "clipboard provenance envelope drift"
 %endif
 
@@ -412,6 +417,196 @@ clipboard_clear_entry:
     call clipboard_lock_release
     ret
 
+; GUI-only entry points: call only from the focused Terminal/widget shortcut.
+; A routed physical key and physical held modifiers are independent custody
+; checks. The local session leaf refuses remote frames (including sync), lock,
+; injected input and stale session authority. Neither helper is a verb/export
+; to apps/guests; callers own stable, disjoint native buffers and never yield.
+clipboard_text_gesture_allowed:
+    call session_shell_local_authority
+    test rax, rax
+    jz   .out
+    call keyprov_key_is_human
+    test eax, eax
+    jz   .out
+    jmp  input_modifiers_are_human
+.out:
+    ret
+
+; RSI=bytes, ECX=len -> EAX=1 valid complete UTF-8 without NUL, else 0.
+; No read outside the explicit span. Empty text is a valid clipboard value.
+clipboard_text_valid:
+    cmp  ecx, CLIP_TEXT_MAX
+    ja   .bad
+    test ecx, ecx
+    jz   .yes
+    test rsi, rsi
+    jz   .bad
+    xor  eax, eax
+.scan:
+    cmp  byte [rsi + rax], 0
+    je   .bad
+    inc  eax
+    cmp  eax, ecx
+    jb   .scan
+    mov  rdi, rsi
+    mov  esi, ecx
+    jmp  ue_utf8_validate
+.yes:
+    mov  eax, 1
+    ret
+.bad:
+    xor  eax, eax
+    ret
+
+; RSI=owned UTF-8, ECX=0..8192 -> EAX=0 or -1. Refusal preserves entry.
+; Only this commit sets NATIVE; all legacy commits zero the header to COMMAND.
+clipboard_text_publish_human:
+    push r12
+    push r13
+    push r14
+    mov  r12, rsi
+    mov  r13d, ecx
+    call clipboard_text_gesture_allowed
+    test eax, eax
+    jz   .bad
+    mov  rsi, r12
+    mov  ecx, r13d
+    call clipboard_text_valid
+    test eax, eax
+    jz   .bad
+    call clipboard_lock_acquire
+    call session_shell_local_authority
+    test rax, rax
+    jz   .unlock_bad
+    mov  r14, rax                      ; bind to the actual publisher, not input text
+    cmp  qword [rel clipboard_generation], -1
+    je   .unlock_bad
+    lea  rdi, [rel clipboard_entry]
+    xor  eax, eax
+    mov  ecx, CLIP_E_SIZE
+    cld
+    rep  stosb
+    mov  byte [rel clipboard_entry + CLIP_E_KIND], CLIP_KIND_INLINE
+    mov  byte [rel clipboard_entry + CLIP_E_PRESENT], 1
+    mov  byte [rel clipboard_entry + CLIP_E_ORIGIN], CLIP_ORIGIN_NATIVE
+    mov  [rel clipboard_entry + CLIP_E_PUBLISHER], r14
+    mov  [rel clipboard_entry + CLIP_E_INLINE_LEN], r13d
+    mov  dword [rel clipboard_entry + CLIP_E_HISTORY], CLIP_HISTORY_NONE
+    lea  rsi, [rel str_clip_media_text]
+    lea  rdi, [rel clipboard_entry + CLIP_E_MEDIA]
+    mov  ecx, 11                       ; complete text/plain plus terminator
+    rep  movsb
+    lea  rdi, [rel clipboard_entry + CLIP_E_INLINE]
+    mov  rsi, r12
+    mov  ecx, r13d
+    rep  movsb
+    inc  qword [rel clipboard_generation]
+    mov  rax, [rel clipboard_generation]
+    mov  [rel clipboard_entry + CLIP_E_GENERATION], rax
+    call clipboard_lock_release
+    xor  eax, eax
+    jmp  .out
+.unlock_bad:
+    call clipboard_lock_release
+.bad:
+    mov  eax, -1
+.out:
+    pop  r14
+    pop  r13
+    pop  r12
+    ret
+
+; RDI=owned output, ESI=capacity -> EAX=complete byte count or -1. No pointer,
+; terminator or partial copy is returned. Caller wipes its snapshot after use.
+clipboard_text_snapshot_human:
+    push r12
+    push r13
+    push r14
+    mov  r12, rdi
+    mov  r13d, esi
+    call clipboard_text_gesture_allowed
+    test eax, eax
+    jz   .bad
+    call clipboard_lock_acquire
+    cmp  byte [rel clipboard_entry + CLIP_E_PRESENT], 1
+    jne  .unlock_bad
+    cmp  byte [rel clipboard_entry + CLIP_E_KIND], CLIP_KIND_INLINE
+    jne  .unlock_bad
+    ; Native shortcuts never consume the command channel.
+    cmp  byte [rel clipboard_entry + CLIP_E_ORIGIN], CLIP_ORIGIN_NATIVE
+    jne  .unlock_bad
+    call session_shell_local_authority
+    test rax, rax
+    jz   .unlock_bad
+    cmp  rax, [rel clipboard_entry + CLIP_E_PUBLISHER]
+    jne  .unlock_bad
+.media:
+    lea  rdi, [rel clipboard_entry + CLIP_E_MEDIA]
+    lea  rsi, [rel str_clip_media_text]
+    call strcmp
+    test eax, eax
+    jnz  .unlock_bad
+    mov  r14d, [rel clipboard_entry + CLIP_E_INLINE_LEN]
+    cmp  r14d, r13d
+    ja   .unlock_bad
+    test r14d, r14d
+    jz   .validate
+    test r12, r12
+    jz   .unlock_bad
+.validate:
+    lea  rsi, [rel clipboard_entry + CLIP_E_INLINE]
+    mov  ecx, r14d
+    call clipboard_text_valid
+    test eax, eax
+    jz   .unlock_bad
+    lea  rsi, [rel clipboard_entry + CLIP_E_INLINE]
+    mov  rdi, r12
+    mov  ecx, r14d
+    cld
+    rep  movsb
+    call clipboard_lock_release
+    mov  eax, r14d
+    jmp  .out
+.unlock_bad:
+    call clipboard_lock_release
+.bad:
+    mov  eax, -1
+.out:
+    pop  r14
+    pop  r13
+    pop  r12
+    ret
+
+; RDI=the exact CLIPGET request. Called under clipboard_lock before any actual
+; native length/content, including explicit textfield paste, can be observed.
+; Slot20 continues to authorize COMMAND data; it never grants native text.
+clipboard_native_read_allowed:
+    cmp  byte [rel clipboard_entry + CLIP_E_ORIGIN], CLIP_ORIGIN_COMMAND
+    je   .yes
+    cmp  byte [rel clipboard_entry + CLIP_E_ORIGIN], CLIP_ORIGIN_NATIVE
+    jne  .no
+    cmp  qword [rel clipboard_entry + CLIP_E_PUBLISHER], CMD_PRINCIPAL_OWNER
+    jne  .no
+    test rdi, rdi
+    jz   .no
+    cmp  qword [rdi + REQ_SOURCE], CMD_SOURCE_CONSOLE
+    jne  .no
+    cmp  qword [rdi + REQ_PRINCIPAL], CMD_PRINCIPAL_OWNER
+    jne  .no
+    push rdi
+    call session_shell_local_authority
+    pop  rdi
+    cmp  rax, CMD_PRINCIPAL_OWNER
+    jne  .no
+    jmp  command_auth_ticket_owner      ; excludes injected/nested tainted lines
+.yes:
+    mov  eax, 1
+    ret
+.no:
+    xor  eax, eax
+    ret
+
 ; ---- bounded reply builder -------------------------------------------------
 clipboard_out_reset:
     lea  rax, [rel clipboard_out_buf]
@@ -481,8 +676,15 @@ clipboard_stage_metadata:
     call clipboard_out_kind
     lea  rdi, [rel str_clip_bytes_key]
     call clipboard_out_puts
+    cmp  byte [rel clipboard_entry + CLIP_E_ORIGIN], CLIP_ORIGIN_NATIVE
+    jne  .command_bytes
+    lea  rdi, [rel str_clip_withheld]
+    call clipboard_out_puts
+    jmp  .provenance
+.command_bytes:
     mov  edi, [rel clipboard_entry + CLIP_E_INLINE_LEN]
     call clipboard_out_putdec
+.provenance:
     lea  rdi, [rel str_clip_prov_key]
     call clipboard_out_puts
     cmp  dword [rel clipboard_entry + CLIP_E_PROV_LEN], 0
@@ -512,14 +714,22 @@ clipboard_stage_metadata:
     pop  r12
     ret
 
-; RDI=requested media. Emits the capability-scoped content/handle.
+; RDI=requested media, RSI=exact request. Emits scoped content/handle.
 clipboard_stage_get:
     push rbx
+    push r12
     mov  rbx, rdi
+    mov  r12, rsi
     call clipboard_out_reset
     call clipboard_lock_acquire
     cmp  byte [rel clipboard_entry + CLIP_E_PRESENT], 1
     jne  .empty
+    mov  rdi, r12
+    call clipboard_native_read_allowed
+    test eax, eax
+    jz   .native_refused
+    cmp  dword [rel clipboard_entry + CLIP_E_INLINE_LEN], CLIP_INLINE_MAX
+    ja   .oversize
     lea  rdi, [rel clipboard_entry + CLIP_E_MEDIA]
     mov  rsi, rbx
     call strcmp
@@ -578,11 +788,22 @@ clipboard_stage_get:
     lea  rdi, [rel str_clip_ref_media]
     call clipboard_out_puts
     mov  eax, -1
+    jmp  .unlock
+.native_refused:
+    lea  rdi, [rel str_clip_ref_native]
+    call clipboard_out_puts
+    mov  eax, -1
+    jmp  .unlock
+.oversize:
+    lea  rdi, [rel str_clip_ref_get_oversize]
+    call clipboard_out_puts
+    mov  eax, -1
 .unlock:
     push rax
     call clipboard_lock_release
     mov  byte [rel clipboard_out_ready], 1
     pop  rax
+    pop  r12
     pop  rbx
     ret
 
@@ -747,10 +968,12 @@ cmd_verb_clipset:
 cmd_verb_clipget:
     call cmd_handler_prologue
     push rbx
+    push rbp
     push r12
     push r13
     push r14
     push r15
+    mov  rbp, rdi                      ; exact request; never ambient principal
     mov  r14, rsi
     mov  r12, [rdi + REQ_ARG]
     test r12, r12
@@ -776,6 +999,7 @@ cmd_verb_clipget:
     cmp  byte [r13], 0
     jne  .target
     mov  rdi, r12
+    mov  rsi, rbp
     call clipboard_stage_get
     test eax, eax
     jnz  .semantic_refusal
@@ -799,6 +1023,10 @@ cmd_verb_clipget:
     mov  ebx, eax
     ; Snapshot only an inline text/plain entry before invoking the GUI setter.
     call clipboard_lock_acquire
+    mov  rdi, rbp
+    call clipboard_native_read_allowed
+    test eax, eax
+    jz   .unlock_native
     cmp  byte [rel clipboard_entry + CLIP_E_PRESENT], 1
     jne  .unlock_empty
     cmp  byte [rel clipboard_entry + CLIP_E_KIND], CLIP_KIND_INLINE
@@ -847,6 +1075,9 @@ cmd_verb_clipget:
     jmp  .unlock_refuse
 .unlock_widget:
     lea  r15, [rel str_clip_ref_bad_widget]
+    jmp  .unlock_refuse
+.unlock_native:
+    lea  r15, [rel str_clip_ref_native]
 .unlock_refuse:
     call clipboard_lock_release
     mov  rdi, r15
@@ -871,6 +1102,7 @@ cmd_verb_clipget:
     pop  r14
     pop  r13
     pop  r12
+    pop  rbp
     pop  rbx
     ret
 
@@ -1149,6 +1381,7 @@ str_clip_prov_key:          db " provenance=",0
 str_clip_history_key:       db " history_reserved=",0
 str_clip_generation_key:    db " generation=",0
 str_clip_none:              db "none",0
+str_clip_withheld:          db "withheld",0
 str_clip_empty_metadata:    db " media_type=none kind=empty bytes=0 provenance=none history_reserved=16 generation=0",0
 str_clip_ref_secret_set:    db "CLIPSET SECRET REFUSED reason=secret_media mutation=0",0
 str_clip_ref_bad_media_set: db "CLIPSET REFUSED reason=unknown_media mutation=0",0
@@ -1163,6 +1396,8 @@ str_clip_ref_bad_args_get:  db "CLIPGET REFUSED reason=bad_args mutation=0",0
 str_clip_ref_empty:         db "CLIPGET REFUSED reason=empty mutation=0",0
 str_clip_ref_media:         db "CLIPGET REFUSED reason=media_mismatch mutation=0",0
 str_clip_ref_kind:          db "CLIPGET REFUSED reason=handle_not_text mutation=0",0
+str_clip_ref_native:        db "CLIPGET REFUSED reason=native_local_owner_required mutation=0",0
+str_clip_ref_get_oversize:  db "CLIPGET REFUSED reason=wire_capacity mutation=0",0
 str_clip_ref_bad_args_info: db "CLIPINFO REFUSED reason=bad_args mutation=0",0
 str_clip_audit_set:         db "CLIPSET [content-redacted]",0
 

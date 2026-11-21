@@ -115,8 +115,15 @@ nvme_blk_create:
     mov  byte  [rel nvme_vmd_child], 0
     mov  byte  [rel nvme_claim_legacy], 0
     mov  dword [rel nvme_sector_size], 0
+    mov dword [rel nvme_physical_size], 0
+    lea rdi, [rel nvme_identify_fields]
+    mov ecx, 7
+    xor eax, eax
+    rep stosd
     mov  qword [rel nvme_lba_max], 0
     mov  byte  [rel nvme_model], 0
+    mov  dword [rel nvme_info + blk_info.unit], 0   ; present member: namespace unit 0
+    mov  byte  [rel nvme_class_seen], 0
 
     ; --- detect an NVMe controller on the PCI bus -------------------------
     mov  qword [rel nvme_bar0], 0
@@ -131,7 +138,14 @@ nvme_blk_create:
     mov  edi, 0x010802
     call vmd_find_child
     test rax, rax
-    jz   .degraded                          ; no controller -> degrade path
+    jnz  .vmd_ctrl
+    ; ROOT 121997 / rc-review 122056: no usable controller. Only a scan that saw no
+    ; NVM-class or RAID-class (possible VMD root) function at all, before any driver
+    ; gate, is absence; a refused, zero-BAR or hidden controller stays present.
+    cmp  byte [rel nvme_class_seen], 0
+    jne  .degraded
+    jmp  .no_controller
+.vmd_ctrl:
     mov  [rel nvme_bar0], rax
     mov [rel nvme_vmd_cfg], rdx
     mov  byte [rel nvme_vmd_child], 1
@@ -255,6 +269,12 @@ nvme_blk_create:
     mov  dword [rel nvme_health], HEALTH_OK
     jmp  .fill_info
 
+.no_controller:
+    ; ROOT 121997: the scan saw no NVM- or RAID-class function and no VMD child
+    ; was found. Mark the seam as no unit, like the AHCI no-disk seam, so the
+    ; census never reads it as a present unit without geometry. A controller
+    ; that matched, was gate-refused or failed keeps unit 0 and stays present.
+    mov  dword [rel nvme_info + blk_info.unit], 0xFFFFFFFF
 .degraded:
     ; controller absent / bring-up failed -> every op returns -1, degrade never crash
     mov  r8d, PCI_CLAIM_FAILED               ; only if a controller had matched
@@ -279,23 +299,26 @@ nvme_blk_create:
     mov  byte  [rbx + blk_info.removable], 0
     mov  dword [rbx + blk_info.flags], 0
     ; RCQ-05 storage rung: a healthy namespace declares its v2 geometry and BLKCAP
-    ; mask; the degraded member declares nothing. Each command moves one logical
-    ; block (a single-block write is the namespace's atomic unit, so physical =
-    ; logical, alignment 0), at most NVME_MAX_XFER per call. flush() issues a real
+    ; mask; the degraded member declares nothing. Physical/preferred granularity
+    ; comes from this namespace's Identify fields, not the command transfer size.
+    ; Each command moves one logical block, at most NVME_MAX_XFER per call.
+    ; flush() issues a real
     ; NVM Flush: it commits completed writes held in a volatile write cache, and
     ; completes with no effect when none is present or enabled, where a completed
     ; write is already non-volatile. FLUSH is truthful either way.
     xor  eax, eax
     xor  ecx, ecx
     xor  edx, edx
+    xor  esi, esi
     cmp  dword [rel nvme_health], HEALTH_OK
     jne  .declare
     mov  eax, [rel nvme_sector_size]
+    mov  esi, [rel nvme_physical_size]
     mov  ecx, BLKCAP_ALL_IO
     mov  edx, NVME_MAX_XFER
 .declare:
     mov  [rbx + blk_info.logical_sector_bytes], eax
-    mov  [rbx + blk_info.physical_sector_bytes], eax
+    mov  [rbx + blk_info.physical_sector_bytes], esi
     mov  dword [rbx + blk_info.physical_alignment_bytes], 0
     mov  [rbx + blk_info.max_transfer_sectors], edx
     mov  [rbx + blk_info.capabilities], rcx
@@ -348,8 +371,11 @@ nvme_detect_cb:
     mov  eax, r10d
     shr  eax, 16
     and  al, 0xFF
+    cmp  al, 0x04                           ; subclass = RAID: a VMD root may hide NVMe
+    je   .raid_seen
     cmp  al, 0x08                           ; subclass = NVM
     jne  .pop
+    or   byte [rel nvme_class_seen], 1      ; NVM class seen, before any driver gate
     mov  eax, r10d
     shr  eax, 8
     and  al, 0xFF
@@ -397,6 +423,9 @@ nvme_detect_cb:
 .bar32:
     and  r11d, 0xFFFFFFF0
     mov  [rel nvme_bar0], r11
+    jmp  .pop
+.raid_seen:
+    or   byte [rel nvme_class_seen], 2      ; observation only; VMD owns any use
 .pop:
     pop  rdx
     pop  rsi
@@ -678,6 +707,12 @@ nvme_identify:
     ret
 .power_admitted:
     push rbx
+    ; A failed Identify cannot retain geometry or raw fields from a prior page.
+    mov dword [rel nvme_physical_size], 0
+    lea rdi, [rel nvme_identify_fields]
+    mov ecx, 7
+    xor eax, eax
+    rep stosd
     ; A repeated failed controller Identify must not expose the prior identity.
     ; Clear only these bounded outputs; namespace qualification stays separate.
     lea  rdi, [rel nvme_model]
@@ -774,7 +809,24 @@ nvme_identify:
 ; RBX = completed 4096-byte Identify Namespace buffer; clobbers RAX,RCX,RDX.
 nvme_parse_namespace:
     mov  dword [rel nvme_sector_size], 0
+    mov  dword [rel nvme_physical_size], 0
     mov  qword [rel nvme_lba_max], 0
+    ; Retain the completed page's exact inputs even when its format is refused.
+    ; The low nibble always addresses one of the bounded sixteen LBAF entries.
+    mov dword [rel nvme_identify_valid], 1
+    movzx eax, byte [rbx + 26]
+    mov [rel nvme_identify_flbas], eax
+    and eax, 15
+    mov eax, [rbx + rax*4 + 128]
+    mov [rel nvme_identify_lbaf], eax
+    movzx eax, byte [rbx + 24]
+    mov [rel nvme_identify_nsfeat], eax
+    movzx eax, word [rbx + 64]
+    mov [rel nvme_identify_npwg], eax
+    movzx eax, word [rbx + 72]
+    mov [rel nvme_identify_nows], eax
+    movzx eax, word [rbx + 36]
+    mov [rel nvme_identify_nawupf], eax
     movzx eax, byte [rbx + 26]              ; FLBAS: low four-bit format only
     test eax, 0xF0                         ; no metadata/extended/reserved flags
     jnz  .bad
@@ -805,6 +857,10 @@ nvme_parse_namespace:
     mul  rcx                              ; representable namespace byte size
     test rdx, rdx
     jnz  .bad
+    call nvme_namespace_physical
+    test eax, eax
+    jz .bad
+    mov [rel nvme_physical_size], eax
     mov  rax, [rbx]
     dec  rax
     mov  [rel nvme_lba_max], rax
@@ -813,6 +869,35 @@ nvme_parse_namespace:
     ret
 .bad:
     mov  eax, -1
+    ret
+
+; RBX=Identify Namespace, ECX=qualified logical bytes. EAX=preferred physical
+; granularity, or zero if it cannot be represented by the block class ABI.
+; NVMe 1.4, Identify Namespace: NSFEAT.OPT PERF validates NPWG (64:65),
+; a zero-based count of logical blocks. NOWS (72:73) is optimal write *size*,
+; not granularity: retain it in BLKINFO, never substitute it for NPWG.
+; Without OPT PERF, namespace NAWUPF (36:37) is usable only with NSABP (bit 1).
+; Zero NAWUPF supplies no larger namespace unit; fall back to one logical block.
+; No controller-wide atomicity or Windows-specific emulation is inferred.
+nvme_namespace_physical:
+    mov eax, 1
+    test byte [rbx + 24], 0x10
+    jz .atomic
+    movzx eax, word [rbx + 64]
+    inc eax
+    jmp .bytes
+.atomic:
+    test byte [rbx + 24], 2
+    jz .bytes
+    movzx eax, word [rbx + 36]
+    inc eax
+.bytes:
+    imul eax, ecx                         ; 512 * (u16 + 1), no u32 overflow
+    lea edx, [rax - 1]
+    test eax, edx                         ; existing ABI requires a power of two
+    jz .out
+    xor eax, eax                          ; never round or invent a unit
+.out:
     ret
 
 ; ---------------------------------------------------------------------------
@@ -2274,6 +2359,15 @@ nvme_io_poisoned: db 0                       ; 1 = timeout/foreign completion: I
 nvme_present:     db 0
 nvme_vmd_child:   db 0                    ; 1 = BAR0 came from the Intel VMD child domain
 nvme_sector_size: dd 0
+nvme_physical_size: dd 0
+nvme_identify_fields:
+nvme_identify_valid: dd 0
+nvme_identify_flbas: dd 0
+nvme_identify_lbaf: dd 0
+nvme_identify_nsfeat: dd 0
+nvme_identify_npwg: dd 0
+nvme_identify_nows: dd 0
+nvme_identify_nawupf: dd 0
 nvme_lba_max:     dq 0
 nvme_scratch_rt:  dq 0
 
@@ -2343,3 +2437,12 @@ nvme_quiesce_completion: resq 8
 nvme_qc_scope: resb 1                  ; private passive capture scope, no authority
 %endmacro
 WDATA_BSS_DEFER WDATA_dev_blk_nvme_quiesce
+
+; ROOT 121997 / rc-review 122056: storage-class sightings of this create's PCI
+; scan, recorded before any driver gate (bit 0 NVM 01:08, bit 1 RAID 01:04, a
+; possible VMD root). Observation only: it never selects, claims or enables a
+; function; it only keeps a refused or unusable controller from reading as absent.
+%macro WDATA_dev_blk_nvme_seam 0
+nvme_class_seen: resb 1
+%endmacro
+WDATA_BSS_DEFER WDATA_dev_blk_nvme_seam

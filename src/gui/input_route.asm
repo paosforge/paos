@@ -1,6 +1,6 @@
 ;; MODULE gui/input_route
 ;; LAYER 6
-;; EXPORTS input_modifiers_are_human, input_route_live_hook, input_route_live_no_kbd, input_ai_key_pop, input_ai_counts, input_ai_refused, input_ai_locked, input_ai_cancelled, input_ai_dropped, gui_input_route_init, gui_input_route_tick, input_route_tl_live, input_kbd_routed, input_kbd_submits, input_kbd_mods, input_kbd_caps, gui_input_global_key_hook, gui_input_modal_key_hook, input_win_down, input_win_chord, input_layout_set, input_layout_id, input_text_dropped, input_layout_selectable, input_layout_tags, input_kbd_ctx_other, input_dead_origin_other, input_ime_ops, input_ime_lq_scalar, input_ime_tray, input_ime_pop, input_layout_focus_check
+;; EXPORTS input_enter_is_typematic, input_route_live_hook, input_route_live_no_kbd, input_ai_key_pop, input_ai_counts, input_ai_refused, input_ai_locked, input_ai_cancelled, input_ai_dropped, gui_input_route_init, gui_input_route_tick, input_route_tl_live, input_kbd_routed, input_kbd_submits, input_kbd_mods, input_kbd_caps, gui_input_global_key_hook, gui_input_modal_key_hook, input_win_down, input_win_chord, input_layout_set, input_layout_id, input_text_dropped, input_layout_selectable, input_layout_tags, input_kbd_ctx_other, input_dead_origin_other, input_ime_ops, input_ime_lq_scalar, input_ime_tray, input_ime_pop, input_layout_focus_check
 ;; IMPORTS gui/calendar, core/log, core/time, core/keyboard_layout, core/unicode_edit, dev/usb/hid, dev/input/ps2, gui/window_mgmt, gui/widget, gui/widget_tabstrip, gui/summon_palette, gui/chat_app, gui/start_programs, boot/serial, sec/session
 ;; CAPS CAP_GUI
 ;; OWNER saga:verb_console
@@ -11,6 +11,8 @@ INPUT_ROUTE_BUDGET equ 16
 INPUT_LOCK_NUM       equ 1
 INPUT_LOCK_CAPS      equ 2
 INPUT_LOCK_CAPS_HAND equ 4
+INPUT_ENTER_MAIN     equ 1          ; input_enter_down bits: main Enter (1C), keypad Enter (E0 1C)
+INPUT_ENTER_PAD      equ 2
 ; RCQ-09: private per-side modifier bits; input_kbd_mods keeps its consumer
 ; layout (1 Shift, 2 Ctrl, 4 Alt) and is derived from these.
 INPUT_SIDE_LSHIFT equ 0x01
@@ -178,7 +180,7 @@ gui_input_route_tick:
     cmp  byte [rel input_win_down], 1   ; Win+<extended key> is a shell chord
     je   .win_chord
     cmp  bl, 0x1C                       ; keypad Enter
-    je   .key_enter
+    je   .key_enter_pad
     cmp  bl, 0x35                       ; keypad /
     je   .key_slash
 .nav_scan:                              ; E0 navigation, and the NumLock-off keypad
@@ -213,6 +215,8 @@ gui_input_route_tick:
     je   .rctrl_off
     cmp  bl, 0x38
     je   .ralt_off
+    cmp  bl, 0x1C                       ; keypad Enter: ends its held press (app events)
+    je   .enter_off_pad
     jmp  .next                          ; fake-shift E0 AA/B6 and key releases: no state
 .ordinary:
     test bl, 0x80
@@ -327,7 +331,7 @@ gui_input_route_tick:
     cmp  bl, 0x0E
     je   .key_backspace
     cmp  bl, 0x1C
-    je   .key_enter
+    je   .key_enter_main
     ; Set-1 F1..F10 are contiguous; F11/F12 follow the keypad range.
     ; Shell/modal ownership and Alt+F4 have already been checked above.
     cmp  bl, 0x3B
@@ -445,6 +449,8 @@ gui_input_route_tick:
     jmp  .next
 .release:
     and  bl, 0x7F
+    cmp  bl, 0x1C                       ; Enter: ends its held press (app events)
+    je   .enter_off_main
     cmp  bl, 0x39                       ; a Space release re-arms Ctrl+Space and ends Win+Space
     je   .space_off
     cmp  bl, 0x6E                       ; RCQ-51: F23, the Copilot key
@@ -825,6 +831,33 @@ gui_input_route_tick:
 .key_slash:
     mov  eax, '/'
     jmp  .deliver
+.enter_off_pad:
+    mov  al, INPUT_ENTER_PAD
+    jmp  .enter_off
+.enter_off_main:
+    mov  al, INPUT_ENTER_MAIN
+.enter_off:                             ; a hand break, or its retired keyboard's, ends the
+    cmp  byte [rel input_key_origin], KO_RETIRED ; held press; a synthetic break cannot
+    je   .enter_clear                   ; re-arm the hand's press (as Caps Lock)
+    call input_key_is_hand
+    jne  .next
+.enter_clear:
+    not  al
+    and  [rel input_enter_down], al
+    mov  byte [rel input_enter_typematic], 0 ; INPUT 120784: no stale mark after the press
+    jmp  .next
+.key_enter_pad:
+    mov  al, INPUT_ENTER_PAD
+    jmp  .enter_latch
+.key_enter_main:
+    mov  al, INPUT_ENTER_MAIN
+.enter_latch:                           ; INPUT 120628 I2: typematic makes of a held hand
+    mov  byte [rel input_enter_typematic], 0 ; Enter reach the GUI as before, but raise no
+    call input_key_is_hand              ; app event (input_enter_is_typematic). Only the
+    jne  .key_enter                     ; hand arms or repeats the latch.
+    test [rel input_enter_down], al
+    setnz byte [rel input_enter_typematic]
+    or   [rel input_enter_down], al
 .key_enter:
     mov  eax, GUI_KEY_ENTER
     jmp  .deliver
@@ -991,24 +1024,6 @@ gui_input_route_tick:
     pop  rbx
     ret
 
-; input_modifiers_are_human -> EAX 1 when every held modifier belongs to
-; the native hand. Use alongside keyprov_key_is_human at human-action
-; boundaries: the trigger's provenance alone says nothing about a held chord.
-; These are the same per-side custody bits used by the router's shortcuts.
-; Released Win may retain its old taint; only a held Win participates.
-input_modifiers_are_human:
-    xor  eax, eax
-    cmp  byte [rel input_kbd_sides_inj], 0
-    jne  .out
-    cmp  byte [rel input_win_down], 0
-    je   .yes
-    cmp  byte [rel input_win_inj], 0
-    jne  .out
-.yes:
-    mov  eax, 1
-.out:
-    ret
-
 ; input_key_is_hand -> ZF=1 when the key being routed is the owner's hand:
 ; KO_HUMAN, or KO_INTERNAL while the router's own boot KAT drives it
 ; (input_route_tl_kat). Never KBINJ/TERMFEED/HOOK (slot-bound) or untethered.
@@ -1020,6 +1035,15 @@ input_key_is_hand:
     jne  .out
     cmp  byte [rel input_route_tl_kat], 1
 .out:
+    ret
+
+; input_enter_is_typematic -> EAX 1 when the Enter being routed repeats a held
+; press of the native hand (typematic make, no break between), else 0. Valid
+; while that Enter is delivered. App events (form_events_signal) raise one
+; on_submit / menu choice per press; native widgets still see every repeat.
+; INPUT 120628 I2. Clobbers RAX only.
+input_enter_is_typematic:
+    movzx eax, byte [rel input_enter_typematic]
     ret
 
 ; ---- RCQ-51: the AI key's gesture machine -----------------------------------
@@ -2036,6 +2060,8 @@ gui_input_route_init:
     mov  byte [rel input_route_tl_kat], 0
     movzx edi, byte [rel input_layout_kat_id]
     call input_layout_set
+    mov  byte [rel input_enter_down], 0      ; the KAT's Enter make had no break: never a
+    mov  byte [rel input_enter_typematic], 0 ; held press for the owner's first Enter (I2)
 %if IME_BUILT
     call ime_route_init                 ; RCQ-38 I3b-1: after the KAT, which runs without the IME
 %endif
@@ -2128,6 +2154,8 @@ input_kbd_numlock: db 1                 ; boot default on: keypad digits as befo
 ; without changing their toggle modes. Each lock's break clears only its bits.
 input_kbd_numlock_down: db 0            ; INPUT_LOCK_* held-press flags
 input_win_down:    db 0
+input_enter_down:  db 0                 ; INPUT_ENTER_* held hand Enter presses (I2 latch)
+input_enter_typematic: db 0             ; 1 = the routed Enter repeats a held hand press
 input_win_chord:   db 0                 ; a key/click arrived while Win was held
 input_win_inj:     db 0                 ; K1b: the held Win's make was not the owner's hand
 input_win_sides:   db 0                 ; RCQ-09: 1 left Win, 2 right Win; down is their boolean

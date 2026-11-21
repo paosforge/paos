@@ -4377,6 +4377,7 @@ xhci_op_interrupt_ss_configure:
 ; Interrupt and bulk endpoints share this producer. Small transfers segment on
 ; MaxPacketSize; large bulk-IN uses one aligned multi-packet Normal TRB. TDs may
 ; cross a cycle-correct Link TRB. Only the terminal Normal TRB has IOC; IN has ISP.
+; xHCI 1.2b 4.11.2.4: TD Size is remaining packets, saturated at 31, terminal 0.
 ; RDI=state, ESI=exact length, EDX=publish doorbell (0 for synthetic KAT).
 xhci_interrupt_queue_state:
     XHCI_POWER_GATE 0
@@ -4525,9 +4526,27 @@ xhci_interrupt_queue_state:
     mov  ecx, r10d
     cmp  ecx, r9d
     cmova ecx, r9d
-    mov  [rbx + 8], ecx
     sub  r10d, ecx
     add  r11d, ecx
+    test r10d, r10d
+    jz   .td_size_ready             ; terminal Normal TRB always advertises zero
+    ; Every nonterminal member ends on MPS (small-report path above).
+    ; The one-TRB large-IN path is terminal and never enters this calculation.
+    mov  eax, r10d
+    xor  edx, edx
+    div  r9d
+    test edx, edx
+    jz   .td_packets_ready
+    inc  eax
+.td_packets_ready:
+    cmp  eax, 31
+    jbe  .td_packets_bounded
+    mov  eax, 31
+.td_packets_bounded:
+    shl  eax, 17
+    or   ecx, eax
+.td_size_ready:
+    mov  [rbx + 8], ecx
     mov  eax, (XHCI_TRB_NORMAL << 10)
     or   eax, [r12 + xhci_intr_ep.pcs]
     test byte [r12 + xhci_intr_ep.ep_addr], USB_EP_DIR_IN
@@ -5833,6 +5852,21 @@ xhci_op_interrupt_in_queue:
 ; its owner's, so callers commit it (without credit) instead of leaving it to
 ; block every peer and command behind it.
 XHCI_ROUTE_ERROR_OWNED equ 2
+;
+; Short IN follow-up (xHCI 1.2 4.10.1.1). After a Short Packet event on an ISP
+; member, the xHC may still report the TD's IOC TRB: always for a short member
+; before the last (mid-TD), and as a "spurious success" on the same TRB on
+; xHCI >= 1.0 parts (Linux XHCI_SPURIOUS_SUCCESS). qemu-xhci reports once. The
+; first event completes the TD; the follow-up names a TRB no TD owns any more,
+; and a refused head is never acknowledged, so it held ERDP and every later
+; completion behind it (feed 749 Beelink cdc_ecm: RXF stayed 1). A bulk or
+; interrupt owner remembers only the terminal TRB of a TD it completed short
+; (ring index + 1, 0 = none, and that TRB's cycle) and consumes exactly one later
+; Success/Short Packet event naming exactly that TRB, with no completion, bytes or
+; accept credit. ISO owners keep pad_ss for their burst index/left and never
+; reach either edge.
+XHCI_SHORT_TAIL       equ xhci_intr_ep.pad_ss
+XHCI_SHORT_TAIL_CYCLE equ xhci_intr_ep.pad_ss+2
 xhci_interrupt_route_event:
     push rbx
     push r12
@@ -5953,6 +5987,52 @@ xhci_interrupt_route_event:
     mov eax,XHCI_ROUTE_ERROR_OWNED
     jmp .out
 .single_packet:
+    cmp  byte [r15 + xhci_intr_ep.attributes], USB_EP_XFER_ISO
+    je   .live_td
+    movzx eax, word [r15 + XHCI_SHORT_TAIL]
+    test eax, eax
+    jz   .live_td
+    dec  eax
+    shl  eax, 4
+    add  rax, [r15 + xhci_intr_ep.ring]
+    cmp  r14, rax
+    jne  .live_td                    ; only the remembered terminal TRB
+    mov  edx, [r15 + xhci_intr_ep.generation]
+    cmp  edx, [rel xhci_generation]
+    jne  .live_td
+    mov  edx, [rax + 12]
+    mov  ecx, edx
+    and  ecx, 1
+    cmp  cx, [r15 + XHCI_SHORT_TAIL_CYCLE]
+    jne  .live_td                    ; that slot was recycled at the other cycle
+    shr  edx, 10
+    and  edx, 0x3F
+    cmp  edx, XHCI_TRB_NORMAL
+    jne  .live_td
+    test dword [rax + 12], (1 << 5)  ; the TD's IOC TRB
+    jz   .live_td
+    test byte [rbx + 12], 4          ; Event Data clear: a TRB pointer
+    jnz  .live_td
+    mov  edx, [rbx + 8]
+    shr  edx, 24
+    cmp  edx, 1
+    je   .follow_cc
+    cmp  edx, 13
+    jne  .live_td
+.follow_cc:
+    cmp  byte [r15 + xhci_intr_ep.pending], 1
+    jne  .follow_owned
+    mov  rdi, r15
+    mov  rsi, r14
+    call xhci_interrupt_event_in_pending_td
+    test eax, eax
+    jnz  .live_td                    ; a live TD reuses that TRB: ordinary path
+.follow_owned:
+    mov  dword [r15 + XHCI_SHORT_TAIL], 0   ; tail index and cycle: exactly once
+    inc  qword [rel xhci_intr_short_follow]
+    mov  eax, XHCI_ROUTE_ERROR_OWNED
+    jmp  .out
+.live_td:
     cmp  byte [r15 + xhci_intr_ep.pending], 1
     jne  .duplicate
     mov  eax, [r15 + xhci_intr_ep.generation]
@@ -6004,6 +6084,23 @@ xhci_interrupt_route_event:
     mov  eax, [r14 + 12]
     and  eax, 1
     mov  [r15 + xhci_intr_ep.completed_cycle], eax
+    cmp  byte [r15 + xhci_intr_ep.attributes], USB_EP_XFER_ISO
+    je   .tail_ready                 ; ISO owns pad_ss
+    mov  dword [r15 + XHCI_SHORT_TAIL], 0
+    test byte [r15 + xhci_intr_ep.ep_addr], USB_EP_DIR_IN
+    jz   .tail_ready
+    mov  edx, [rbx + 8]
+    shr  edx, 24
+    cmp  edx, 13
+    jne  .tail_ready                 ; a full-length TD earns no follow-up
+    mov  rdx, [r15 + xhci_intr_ep.pending_trb]
+    sub  rdx, [r15 + xhci_intr_ep.ring]
+    shr  rdx, 4
+    inc  edx
+    mov  [r15 + XHCI_SHORT_TAIL], dx
+    mov  edx, [r15 + xhci_intr_ep.pending_cycle]
+    mov  [r15 + XHCI_SHORT_TAIL_CYCLE], dx
+.tail_ready:
     inc  dword [r15 + xhci_intr_ep.completion_sequence]
     jnz  .sequence_ready
     inc  dword [r15 + xhci_intr_ep.completion_sequence]
@@ -6128,12 +6225,17 @@ xhci_event_commit:
     pop  r12
     ret
 
-; Drain at most one asynchronous endpoint Transfer Event, never waiting. An
-; invalid completion is left unacknowledged: only a fully validated owner may
-; advance ERDP/IMAN, so a hostile event cannot consume peer work. Two other
-; heads are committed without credit so they cannot stall every endpoint behind
-; them: a fully validated owner's error completion (ERROR_OWNED), and a valid
-; Port Status Change Event, whose port is latched for later port handling.
+; Drain at most one asynchronous endpoint Transfer Event or Port Status Change
+; Event, never waiting. Only a fully validated owner's completion earns ERDP/IMAN
+; accept credit; nothing else touches an owner, its bytes or a peer's work. Every
+; other head of these two kinds is committed WITHOUT credit, because a head that
+; is never acknowledged holds every later completion on the interrupter behind
+; it (root 119342; feed 749 cdc_ecm stalled behind one such head): a validated
+; owner's error completion (ERROR_OWNED), a valid PSC (port latched), and a
+; refused Transfer Event or malformed PSC. A refusal is counted once, by the
+; router's reason counter or xhci_psc_refused, and delivers nothing. Heads that
+; belong to synchronous waiters (EP0 Transfer Events, command completions and
+; other types) stay for xhci_evt_wait, as before.
 xhci_interrupt_drain_once:
     XHCI_POWER_GATE 0
     push rbx
@@ -6153,10 +6255,8 @@ xhci_interrupt_drain_once:
     and  eax, 0x3F
     cmp  eax, XHCI_TRB_PORT_STATUS_CHANGE
     jne  .transfer
-    call xhci_psc_accept
-    test eax, eax
-    jz   .none                       ; malformed PSC: no ack, like any invalid head
-    xor  edi, edi
+    call xhci_psc_accept             ; malformed: counted there, then committed
+    xor  edi, edi                    ; without credit like any refused head
     jmp  .commit
 .transfer:
     mov  eax, r12d
@@ -6164,11 +6264,9 @@ xhci_interrupt_drain_once:
     test eax, eax
     jz   .none
     call xhci_interrupt_route_event
-    xor  edi, edi
-    cmp  eax, XHCI_ROUTE_ERROR_OWNED
-    je   .commit
-    cmp  eax, 1
-    jne  .none
+    xor  edi, edi                    ; ERROR_OWNED or refused (-1, counted by
+    cmp  eax, 1                      ; reason): commit, deliver nothing, no credit
+    jne  .commit
     mov  edi, 1
 .commit:
     call xhci_event_commit
@@ -10108,6 +10206,8 @@ xhci_intr_refused_dup:   dq 0
 xhci_intr_refused_overflow: dq 0
 xhci_intr_erdp_accept:   dq 0
 xhci_intr_iman_accept:   dq 0
+xhci_intr_short_follow:  dq 0        ; short-IN follow-up events consumed (no completion, no credit);
+                                     ; outside the 9-qword xhci_interrupt_counters_clear block
 xhci_intr_kat_token:     dq 0
 xhci_intr_kat_queued:    dq 0
 xhci_intr_kat_completed: dq 0
@@ -10180,7 +10280,7 @@ xhci_airlock_last_code:   db 1
 xhci_psc_changed:     times 32 db 0  ; bit n = root port n reported a valid PSC (latched, never cleared here)
 xhci_port_quar:       times 32 db 0  ; bit n = root port n refused until controller reset
 xhci_psc_events:      dq 0           ; valid PSC events committed
-xhci_psc_refused:     dq 0           ; malformed-PSC refusals: one per pass over an unacked malformed head
+xhci_psc_refused:     dq 0           ; malformed-PSC refusals: one per malformed head (drain_once acks it)
 xhci_slot_quar:       dd 0           ; bit n = slot n quarantined until controller reset
 xhci_x3_disable_n:    dd 0           ; root-port failure Disable Slot commands issued
 xhci_x3_last_cc:      dd 0           ; their last completion code (0 = none consumed)

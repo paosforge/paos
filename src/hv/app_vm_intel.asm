@@ -122,6 +122,11 @@ app_vm_intel_prepare:
     jnz .refuse_unarmed
     ; Missing isolation refuses here: the capability MSRs below fault on a CPU
     ; without VMX, and only the driver's live root proves VMX is on this CPU.
+    ; Same predicate as INPUT's launch check, so the two cannot drift; the VMX
+    ; flag stays checked here too, so this gate is never weaker than before.
+    call app_vm_isolation_ready
+    cmp eax,1
+    jne .refuse_unarmed
     cmp byte [rel hv_linux_vmx_live],1
     jne .refuse_unarmed
     mov rdi,rsp
@@ -541,6 +546,24 @@ avmi_failed_landing:
     jc app_vm_cpu_stop
     jz app_vm_cpu_stop
     mov [r8+24],rax
+%ifdef PAOS_TOOLS_CPU_INSTANCE
+    ; Tools MMIO decode context: actual CS rights and CPL (SS.DPL). Intel
+    ; supplies no instruction bytes, so hv/tools_vm_mmio walks the tools CR3.
+    mov edi,0x4816
+    vmread rax,rdi
+    jc app_vm_cpu_stop
+    jz app_vm_cpu_stop
+    mov [rel avm_exit_ctx+TXC_CS_AR],eax
+    mov edi,0x4818
+    vmread rax,rdi
+    jc app_vm_cpu_stop
+    jz app_vm_cpu_stop
+    shr eax,5
+    and eax,3
+    mov [rel avm_exit_ctx+TXC_CPL],al
+    mov byte [rel avm_exit_ctx+TXC_INSN_N],0
+    mov byte [rel avm_exit_ctx+TXC_VALID],1
+%endif
     mov edi,0x4408
     vmread rax,rdi
     jc app_vm_cpu_stop
@@ -676,6 +699,8 @@ avmi_init_fields:
     dq 0
 avmi_msr_ids: dd 0xc0000081,0xc0000082,0xc0000083,0xc0000084,0xc0000102,0xc0000103
 avmi_initial: dq AVM_KERNEL+0x200,0x8000,2,0x80010033,0x1000,0x26b0,0,0,0xd01,0x0007040600070406,0x400,0,0,0,0,0x6b0,0,0,0,0
+; Tools uses the same code with separately declared, literal private storage.
+%ifndef PAOS_TOOLS_CPU_INSTANCE
 %include "core/abi/wdata.inc"
 %macro WDATA_hv_app_vm_intel 0
 align 16
@@ -690,3 +715,4 @@ avmi_write_failed: db 0
 avmi_entered: db 0
 %endmacro
 WDATA_DEFER WDATA_hv_app_vm_intel
+%endif

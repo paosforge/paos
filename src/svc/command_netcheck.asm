@@ -107,7 +107,7 @@ netcheck_link_sample:
     je   .shared
     lea  rax, [rel rtl8168_dev]
     cmp  rdi, rax
-    je   .shared
+    je   rtl8168_link_live                      ; same live value as NIC_LINK (ROOT120117)
     cmp  dword [rdi + dev.health], HEALTH_DEAD
     je   .down                                  ; positive detach evidence
     cmp  byte [rel udp_public_dhcp], 1

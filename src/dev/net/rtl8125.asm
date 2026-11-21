@@ -2612,13 +2612,24 @@ r5_lr_sample:
     movzx eax, ax
     mov [rbx+r5i.phys_raw], eax
     mov [rbx+r5i.obs_phys], rax    ; retain every actual read, including unavailable 0xffff
+    mov edx, eax                   ; raw PHY status for the diagnostic record
     cmp eax, 0xffff
     je .bad
     shr eax, 1
     and eax, 1
     ret
 .bad:
+    mov edx, REALTEK_LR_UNREAD
     mov rax, -1
+    ret
+r5_lr_cmd:
+    mov esi, 52                    ; command byte is bits 31:24 of dword 0x34
+    call r5_rd
+    jc .bad
+    shr eax, 24
+    ret
+.bad:
+    mov eax, REALTEK_LR_UNREAD
     ret
 r5_lr_own:
     mov r8, [rbx+r5i.tx_ring]
@@ -2666,6 +2677,9 @@ r5_lr_close:
 
 ; Read-only aggregate over the two independently admitted ports. Five qwords:
 ; down/up/rearmed/stuckOWN/failures. Diagnostic counts, not atomic proof.
+; Once either port's tick has run, each port then adds its own ten-qword
+; record (port 0, then port 1): phase, saved OWN, live OWN, PHY status, BMCR,
+; BMSR, CMD, TX timeouts, rx_poll calls, ticks. EAX = qwords (5 or 25).
 rtl8125_link_rearm_counts:
     lea r8, [rel rtl8125_inst+r5i.link_rearm+16]
     lea r9, [r8+r5i_size]
@@ -2677,4 +2691,25 @@ rtl8125_link_rearm_counts:
     inc ecx
     cmp ecx, 5
     jb .copy
+    mov eax, 5
+    lea r10, [rel rtl8125_inst]
+    mov rcx, [r10+r5i.link_rearm+REALTEK_LR_TICKS]
+    or rcx, [r10+r5i_size+r5i.link_rearm+REALTEK_LR_TICKS]
+    jz .out                          ; never driven: the legacy five-count tuple
+    lea r9, [rdi+40]
+    xor ecx, ecx
+.port:
+    lea r8, [r10+r5i.link_rearm]
+    REALTEK_LR_RECORD
+    mov rax, [r10+r5i.tx_timeouts]
+    mov [r9+56], rax
+    mov rax, [r10+r5i.rx_poll_calls]
+    mov [r9+64], rax
+    add r9, 80
+    add r10, r5i_size
+    inc ecx
+    cmp ecx, R5_MAX_INST
+    jb .port
+    mov eax, 25
+.out:
     ret

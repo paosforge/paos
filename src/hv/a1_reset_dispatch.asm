@@ -1,7 +1,7 @@
 ;; MODULE hv/a1_reset_dispatch
 ;; LAYER 5
 ;; EXPORTS a1_reset_dispatch
-;; IMPORTS hv/a1_reset_hp, hv/a1_reset_i219, hv/a1_reset_rtl8161, hv/a1_reset_rtl8168h, hv/a1_reset_e5000b
+;; IMPORTS hv/a1_reset_hp, hv/a1_reset_i219, hv/a1_reset_rtl8161, hv/a1_reset_rtl8168h, hv/a1_reset_e5000b, hv/a1_reset_rtl8125
 ;; CAPS CAP_MMIO
 ;; OWNER rc-vm-claude
 ;; CONTEXT: bsp_only
@@ -132,12 +132,17 @@ a1_reset_dispatch:
     je .lenovo_probe
     cmp eax, A1_METHOD_BEELINK_RTL8168H
     je .beelink_probe
+    cmp eax, A1_METHOD_REATAN_RTL8125
+    je .reatan_probe
     cmp eax, A1_METHOD_MSI_E5000B
     jne .done
     call a1_reset_e5000b_probe          ; exact config-only op1; no reset claim
     jmp .done
 .beelink_probe:
     call a1_reset_rtl8168h_probe
+    jmp .done
+.reatan_probe:
+    call a1_reset_rtl8125_probe         ; RTL8125B op1 only; 8125A refuses in the leaf
     jmp .done
 .dell_probe:
     call a1_reset_i219_phase           ; op1 only; op2 quiesce is not dispatched

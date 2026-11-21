@@ -1,6 +1,6 @@
 ;; MODULE dev/blk/ahci
 ;; LAYER 3
-;; EXPORTS ahci_blk_create, ahci_terminal_quiesce, ahci_terminal_observations, ahci_vmd_terminal_observations, ahci_flush_for_reset, ahci_flush_observations, ahci_inactive_observations, ahci_table_observations, ahci_self_exercise, ahci_find_identity, ahci_bind_name_identity, ahci_dev_identity_matches, ahci_identity_absent, ahci_scan_summary, ahci_power_gate, ahci_power_command_gate, ahci_issue_cooperative, ahci_identify_dma_to, ahci_vmd_owner_snapshot, ahci_empty_owner_get, ahci_empty_owner_table, ahci_empty_owner_generation, ahci_boh_owner_acquire, ahci_boh_observations, ahci_boh_terminal_observations, ahci_vmd_boh_initial_root, ahci_vmd_boh_initial_child
+;; EXPORTS ahci_blk_create, ahci_terminal_quiesce, ahci_terminal_preflight, ahci_terminal_observations, ahci_vmd_terminal_observations, ahci_flush_for_reset, ahci_flush_observations, ahci_inactive_observations, ahci_table_observations, ahci_self_exercise, ahci_find_identity, ahci_bind_name_identity, ahci_dev_identity_matches, ahci_identity_absent, ahci_scan_summary, ahci_power_gate, ahci_power_command_gate, ahci_issue_cooperative, ahci_identify_dma_to, ahci_vmd_owner_snapshot, ahci_empty_owner_get, ahci_empty_owner_table, ahci_empty_owner_generation, ahci_boh_owner_acquire, ahci_boh_observations, ahci_boh_terminal_observations, ahci_vmd_boh_initial_root, ahci_vmd_boh_initial_child
 ;; IMPORTS bus/hal, core/time, boot/native_driver_gate, fs/blockdev, fs/storage_access, bus/pci, core/dma, boot/serial, dev/blk/vmd, bus/pci_claim, boot/boot_v2_handoff
 ;; CAPS mmio dma
 ;; OWNER saga:storage
@@ -303,6 +303,8 @@ ahci_blk_create:
     mov  edi, r13d
     call serial_hex64
     call serial_newline
+    mov  edi, r13d                          ; T4-4 328: end the firmware's FIS DMA right on
+    call ahci_atapi_fre_stop                ; this skipped port (one PxCMD write, no command)
     jmp  .pnext
 .not_atapi:
     cmp  r14d, AHCI_MAX_DISKS

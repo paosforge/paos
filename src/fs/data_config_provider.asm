@@ -16,6 +16,8 @@ FD_DATA_APP_MAX equ 1024 * 1024
 FD_DATA_DAILY_CLASS equ 257              ; distinct purpose, NOT byte maximum
 FD_DATA_DAILY_MAX equ 256
 FD_DATA_UPDATES_MAX equ 256              ; dedicated local Updates consent only
+FD_DATA_TERMINAL_CLASS equ 4193         ; independent provider-policy purpose
+FD_DATA_TERMINAL_MAX equ 4192           ; exact record size on writes
 FD_DATA_DOC_MAX equ 4224                 ; native public-documents aggregate only
 
 ; RDI=registered exact read-only selected mount handle, RSI=descriptor[56],
@@ -316,6 +318,12 @@ fd_data_policy:
     test rax, rax
     jz .updates
     mov rdi, rbx
+    lea rsi, [rel fd_data_terminal]
+    mov edx, 11
+    call memcmp
+    test rax, rax
+    jz .terminal
+    mov rdi, rbx
     lea rsi, [rel fd_data_daily]
     mov edx, 11
     call memcmp
@@ -353,6 +361,9 @@ fd_data_policy:
 .learn:
     mov eax, FD_DATA_MAX
     jmp .out
+.terminal:
+    mov eax, FD_DATA_TERMINAL_CLASS
+    jmp .out
 .daily:
     mov eax, FD_DATA_DAILY_CLASS
     jmp .out
@@ -370,6 +381,11 @@ fd_data_policy:
 
 ; EAX=purpose class -> EAX actual byte maximum. Not an admission checker.
 fd_data_size_limit:
+    cmp eax, FD_DATA_TERMINAL_CLASS
+    jne .daily
+    mov eax, FD_DATA_TERMINAL_MAX
+    ret
+.daily:
     cmp eax, FD_DATA_DAILY_CLASS
     jne .out
     mov eax, FD_DATA_DAILY_MAX
@@ -397,6 +413,14 @@ fd_data_name_gate:
     call fd_data_policy
     test eax, eax
     jz .no
+    cmp dword [rel fd_data_mode], 7
+    jne .not_terminal
+    cmp eax, FD_DATA_TERMINAL_CLASS
+    jne .no
+    jmp .allowed
+.not_terminal:
+    cmp eax, FD_DATA_TERMINAL_CLASS
+    je .no
     cmp dword [rel fd_data_mode], 6
     jne .not_daily
     cmp eax, FD_DATA_DAILY_CLASS
@@ -578,7 +602,8 @@ data_config_write:                     ; ordinary request authority only
     xor r10d, r10d
     jmp fd_data_write_common
 
-; R10D mode: 0 request, 1 learned, 2 local CFG, 3 app, 4 docs, 5 Updates.
+; R10D mode: 0 request, 1 learned, 2 local CFG, 3 app, 4 docs, 5 Updates,
+; 6 daily, 7 Terminal provider policy (exact4192, independent native checker).
 fd_data_write_common:
     push rbx
     push rbp
@@ -613,6 +638,11 @@ fd_data_write_common:
     call fd_data_policy
     test eax, eax
     jz .refuse
+    cmp eax,FD_DATA_TERMINAL_CLASS
+    jne .size_limit
+    cmp r15,FD_DATA_TERMINAL_MAX
+    jne .refuse
+.size_limit:
     call fd_data_size_limit
     cmp r15, rax
     ja .refuse
@@ -1242,6 +1272,7 @@ fd_data_daily: db 'UPDAILY CFG'
 fd_data_learn0: db 'DDLEARN0BIN'
 fd_data_learn1: db 'DDLEARN1BIN'
 fd_data_apps: db 'PAOSAPPSBIN'
+fd_data_terminal: db 'TERMNET CFG'
 fd_data_docs: db 'PAOSDOCSBIN'
 %macro WDATA_BSS_fs_data_config 0
 alignb 8

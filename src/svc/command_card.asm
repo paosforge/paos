@@ -399,6 +399,7 @@ cmd_verb_aitaint:
     test eax, eax
     jz   .refused
     mov  qword [rel ai_web_taint_mask], 0
+    mov  byte [rel ai_web_taint_overflow], 0   ; web-taint-cap (SEC 121686, track B L67): the owner clear ends the >= 64 taint too
     lea  rdi, [rel str_card_taint_cleared_serial]
     call serial_string
     call card_out_reset
@@ -411,6 +412,10 @@ cmd_verb_aitaint:
     call card_out_str
     mov  rdi, [rel ai_web_taint_mask]
     call card_out_hex16
+    cmp  byte [rel ai_web_taint_overflow], 0
+    je   .ok
+    lea  rdi, [rel str_card_taint_overflow]   ; web-taint-cap: shown only while set (the MASK= line is pinned)
+    call card_out_str
 .ok:
     mov  qword [r13 + RSP_CODE], CMDE_OK
     mov  rax, [rel ai_web_taint_mask]
@@ -635,21 +640,31 @@ command_dispatch_card:
 ; Installed ADVISEFILE marks ADVISOR before reading untrusted VFS bytes.
 ; RCQ-39 S2 browser WEBDIGEST handover is still unimplemented and must do so too.
 ; CARDPROPOSE and effectful HOOK SET/INPUT/CANCEL refuse while the bit is set.
+; web-taint-cap (SEC 121686 CALL 18fe1093; track B L67; SR-58 H4): a principal >= 64 has no
+; bit. A set for one raises the sticky ai_web_taint_overflow flag, and of() for
+; ANY principal >= 64 answers that flag: fail closed, never a silently dropped
+; set. Principals below 64 keep their exact bit. Only the local-owner AITAINT
+; CLEAR lowers the flag (with the mask).
 ; ---------------------------------------------------------------------------
 ai_web_taint_set:                         ; RDI = principal
     cmp  rdi, 64
-    jae  .out
+    jae  .overflow
     bts  qword [rel ai_web_taint_mask], rdi
-.out:
+    ret
+.overflow:
+    mov  byte [rel ai_web_taint_overflow], 1
     ret
 
 ai_web_taint_of:                          ; RDI = principal -> EAX 1 tainted
     xor  eax, eax
     cmp  rdi, 64
-    jae  .out
+    jae  .overflow
     bt   qword [rel ai_web_taint_mask], rdi
     setc al
-.out:
+    ret
+.overflow:
+    cmp  byte [rel ai_web_taint_overflow], 0
+    setne al
     ret
 
 ; ---------------------------------------------------------------------------
@@ -1369,6 +1384,7 @@ str_card_netcfg_dhcp:   db "DHCP ONCE ",0
 str_card_r_local_owner: db "local_owner_only",0
 str_card_taint_mask:    db "AITAINT MASK=",0
 str_card_taint_cleared: db "AITAINT CLEARED",0
+str_card_taint_overflow: db " OVERFLOW=1",0
 str_card_taint_cleared_serial: db "[PAOS64] aitaint.clear by=local_owner [card.taint.clear]",13,10,0
 str_card_audit:         db "[PAOS64] card.confirm key=",0
 str_card_audit_verb:    db " verb=",0
@@ -1441,6 +1457,7 @@ card_new_label:         resb 1
 card_rule:              resb 1
 card_new_rule:          resb 1
 card_out_ready:         resb 1
+ai_web_taint_overflow:  resb 1           ; web-taint-cap: sticky taint for principals >= 64
 card_tok:               resb CARD_TOK_MAX
 card_numbuf:            resb 24
 card_args:              resb CARD_ARG_MAX + 1

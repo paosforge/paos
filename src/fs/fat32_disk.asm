@@ -1,6 +1,6 @@
 ;; MODULE fs/fat32_disk
 ;; LAYER 4
-;; EXPORTS fat32_disk_select_owned_ro, fat32_disk_owned_read_state, fat32_disk_is_boot_extent, update_esp_current, update_esp_readonly, update_esp_begin, update_esp_io, update_esp_freeze, update_esp_reclaim, fat32_disk_list_observe, fat32_disk_guest_source_open, fat32_disk_guest_source_hint, fat32_disk_read_device, fat32_disk_scratch_diagnostic, fat32_disk_scratch_arm, fat32_disk_scratch_off, fat32_disk_ro_diag, fat32_disk_select_ro_exact, fat32_disk_source_dir, fat32_disk_source_node, fat32_disk_source_next, fat32_disk_source_device, fat32_disk_source_bind, fat32_disk_source_token, fat32_disk_source_current, fat32_disk_source_stat, fat32_disk_read_at_path, fat32_disk_boot_esp_open, fat32_disk_dirs_lfn_kat, fat32_disk_register, fat32_disk_select_exact, fat32_disk_kat, fat32_disk_create_kat, fat32_disk_txn_kat, fat32_disk_idle_arm, fat32_disk_media_kat, fat32_disk_kat_mount, fat32_disk_kat_finish, fat32_disk_selected_dev, fat32_disk_selected_port, fat32_disk_selected_volume_id, fat32_disk_selection_reason, fat32_disk_last_error, fat32_disk_dirs_write_kat, fat32_disk_copy, fat32_disk_idle_observer, fat32_disk_part_type, fat32_disk_replay_state, fat32_disk_descriptor_absent, fat32_disk_source_mtime, fat32_disk_format_ops
+;; EXPORTS fat32_disk_select_owned_ro, fat32_disk_owned_read_state, fat32_disk_is_boot_extent, update_esp_current, update_esp_readonly, update_esp_begin, update_esp_io, update_esp_freeze, update_esp_reclaim, fat32_disk_list_observe, fat32_disk_guest_source_open, fat32_disk_guest_esp_open, fat32_disk_pair_report_state, fat32_disk_guest_source_hint, fat32_disk_read_device, fat32_disk_scratch_diagnostic, fat32_disk_scratch_arm, fat32_disk_scratch_off, fat32_disk_ro_diag, fat32_disk_select_ro_exact, fat32_disk_source_dir, fat32_disk_source_node, fat32_disk_source_next, fat32_disk_source_device, fat32_disk_source_bind, fat32_disk_source_token, fat32_disk_source_current, fat32_disk_source_stat, fat32_disk_read_at_path, fat32_disk_boot_esp_open, fat32_disk_dirs_lfn_kat, fat32_disk_register, fat32_disk_select_exact, fat32_disk_kat, fat32_disk_create_kat, fat32_disk_txn_kat, fat32_disk_idle_arm, fat32_disk_media_kat, fat32_disk_kat_mount, fat32_disk_kat_finish, fat32_disk_selected_dev, fat32_disk_selected_port, fat32_disk_selected_volume_id, fat32_disk_selection_reason, fat32_disk_last_error, fat32_disk_dirs_write_kat, fat32_disk_copy, fat32_disk_idle_observer, fat32_disk_part_type, fat32_disk_replay_state, fat32_disk_descriptor_absent, fat32_disk_source_mtime, fat32_disk_format_ops
 ;; IMPORTS fs/fs_identify, fs/guest_volume, fs/update_esp, fs/data_config_provider, core/lib/crc32, fs/ext4_copy, fs/blockdev, fs/storage_access, fs/vfs, fs/vol_owner, core/lib/mem, core/unicode_edit, core/cadence, core/time, boot/serial, boot/boot_esp_guid
 ;; CAPS
 ;; OWNER saga:fs_wave
@@ -110,6 +110,14 @@ FD_ERR_NOT_READY    equ 14                  ; RCQ-20: the idle cadence that runs
 FD_ERR_TOO_DEEP     equ 15                  ; RCQ-20 S5b: a tree's directory below FS_TREE_DEPTH_MAX levels
 FD_ERR_VOLUME_RO    equ 17                  ; T5-15.4: this volume is read-only to this request
 FD_ERR_SOURCE_CHANGED equ 16                ; source identity/size/mtime changed during copy
+; Guest-pair scan results (root 119659/119679, SEC 119661/119673): fd_pair_scan, GUESTVM STAT.
+FD_PAIR_NOT_RUN     equ 0
+FD_PAIR_OK          equ 1                   ; one clean medium holds the GUID, no medium faulted
+FD_PAIR_TOLERATED   equ 2                   ; as OK, and another medium's fault was tolerated (never silent)
+FD_PAIR_NONE        equ 3                   ; no medium holds a mountable entry with the GUID
+FD_PAIR_AMBIGUOUS   equ 4                   ; the GUID sighted twice, any media, faulting ones included
+FD_PAIR_FAULT       equ 5                   ; no clean selection and a medium faulted (the holder included)
+FD_PAIR_NAME        equ 16                  ; a kept medium name: at most 15 bytes + NUL
 
 FD_FAULT_NONE       equ 0
 FD_FAULT_ALLOC      equ 1
@@ -666,40 +674,33 @@ fat32_disk_guest_source_open:
     mov  [rel fd_guest_guid + 8], rax
     lea  rax, [rel fd_guest_guid]
     mov  [rel fd_want_guid], rax
-    mov  dword [rel fd_want_seen], 0      ; G1b (rc-sec b2): every scan counts afresh
-    mov  byte [rel fd_want_fault], 0
-    xor  ebx, ebx                         ; the previous device
-    xor  r13d, r13d                       ; media holding the GUID
-    xor  r14d, r14d                       ; the one that does
-.next:
-    mov  rdi, rbx
-    mov  esi, BLKCAP_READ
-    xor  edx, edx
-    call blk_iter_after
-    test rax, rax
-    jz   .scanned
-    mov  rbx, rax
-    mov  [rel fd_guest_ctx + FD_DEV], rax
-    lea  rdi, [rel fd_guest_ctx]
-    call fat32_disk_mount_ctx
-    test rax, rax
-    jnz  .next
-    inc  r13d
-    mov  r14, rbx
-    jmp  .next
-.scanned:
-    mov  qword [rel fd_want_guid], 0
-    mov  dword [rel fd_guest_ctx + FD_MOUNTED], 0
+    ; SEC 119673 (5): the guest-pair consumer's scoped rule. Every byte read through this
+    ; handle is checked against the signed profile's whole-file pins, so another medium's
+    ; fault costs nothing; ambiguity and a fault on the GUID's own medium still refuse.
+    lea  r12, [rel fd_guest_ctx]
+    call fd_pair_scan                     ; EAX state, RDX selected dev, RCX first faulting dev
+    mov  [rel fd_pair_state + 1], al
+    lea  rdi, [rel fd_pair_name + FD_PAIR_NAME]
+    call fd_pair_keep_name                ; STAT's copy of the faulting medium's name, never the dev*
+    mov  [rel fd_want_fault_dev], rcx     ; the diagnostic names the first medium that faulted
+    mov  r14, rdx
     mov  dword [rel fat32_disk_last_error], FD_ERR_IO
     lea  rdi, [rel str_fd_guest_fault]
-    cmp  byte [rel fd_want_fault], 0
-    jne  .fail_fault_log                        ; a medium could not be read or parsed: fail closed
+    cmp  eax, FD_PAIR_FAULT
+    je   .fail_fault_log                  ; the GUID's own medium faulted, or none mounted after a fault
     mov  dword [rel fat32_disk_last_error], FD_ERR_NOT_FOUND
     lea  rdi, [rel str_fd_guest_ambiguous]
-    cmp  dword [rel fd_want_seen], 1
-    ja   .fail_log                        ; the GUID named twice, on any media, mounting or not
-    cmp  r13d, 1
-    jne  .fail_none                       ; never named, or its one entry did not mount
+    cmp  eax, FD_PAIR_AMBIGUOUS
+    je   .fail_log                        ; the GUID named twice, on any media, faulting ones included
+    cmp  eax, FD_PAIR_NONE
+    je   .fail_none                       ; never named, or its one entry did not mount
+    cmp  eax, FD_PAIR_TOLERATED
+    jne  .selected
+    lea  rdi, [rel str_fd_guest_tolerated]
+    call serial_string                    ; a tolerated fault is never silent
+    call serial_newline
+    call fd_guest_fault_dev_log
+.selected:
     mov  [rel fd_guest_ctx + FD_DEV], r14
     call fd_guest_build_ops
     call vfs_register_guest_source        ; fixed unnamed RO backend, no write-generation barrier
@@ -735,6 +736,254 @@ fat32_disk_guest_source_open:
 fd_guest_mount:
     mov  rdi, [rdi + fsmount.priv]
     lea  rax, [rel fd_guest_guid]
+    mov  [rel fd_want_guid], rax
+    call fat32_disk_mount_ctx
+    mov  qword [rel fd_want_guid], 0
+    ret
+
+; fd_pair_scan(R12 = the scan's own ctx; fd_want_guid set) -> EAX = FD_PAIR_*, RDX = the selected
+; device (OK/TOLERATED only, else 0), RCX = the first medium that faulted (0 = none). The guest-pair
+; consumer's scoped rule (root 119659/119679, SEC 119661/119673). Every READ-capable device is mounted
+; in turn; each medium's fault is its own (fd_want_fault is cleared per medium), and a medium that
+; latched a fault never selects, even if its entry mounted. Every sighting still counts: the GUID on a
+; faulting medium plus a readable one is ambiguous. fd_want_guid is cleared and the ctx left
+; unmounted. Never touches fd_ro_ctx/fd_ro_guid/fd_ro_handle. Preserves RBX, R12-R15.
+fd_pair_scan:
+    push rbx
+    push r13
+    push r14
+    push r15
+    sub  rsp, 8                           ; mount_ctx sees the open routines' own stack shape
+    mov  dword [rel fd_want_seen], 0      ; every scan counts afresh
+    xor  ebx, ebx                         ; the previous device
+    xor  r13d, r13d                       ; clean media whose entry mounted
+    xor  r14d, r14d                       ; the one that did
+    xor  r15d, r15d                       ; the first medium that faulted
+.next:
+    mov  byte [rel fd_want_fault], 0      ; this medium's own fault only
+    mov  rdi, rbx
+    mov  esi, BLKCAP_READ
+    xor  edx, edx
+    call blk_iter_after
+    test rax, rax
+    jz   .scanned
+    mov  rbx, rax
+    mov  [r12 + FD_DEV], rax
+    mov  rdi, r12
+    call fat32_disk_mount_ctx
+    cmp  byte [rel fd_want_fault], 0
+    jne  .faulted                         ; a medium that latched a fault never selects
+    test rax, rax
+    jnz  .next
+    inc  r13d
+    mov  r14, rbx
+    jmp  .next
+.faulted:
+    test r15, r15
+    jnz  .next
+    mov  r15, rbx
+    jmp  .next
+.scanned:
+    mov  qword [rel fd_want_guid], 0
+    mov  dword [r12 + FD_MOUNTED], 0
+    test r15, r15
+    setnz byte [rel fd_want_fault]        ; the scan's fault, as the strict scans leave it
+    xor  edx, edx
+    mov  eax, FD_PAIR_AMBIGUOUS
+    cmp  dword [rel fd_want_seen], 1
+    ja   .out                             ; the GUID named twice, on any media, mounting or not
+    cmp  r13d, 1
+    jne  .absent
+    mov  rdx, r14
+    mov  eax, FD_PAIR_OK
+    test r15, r15
+    jz   .out
+    mov  eax, FD_PAIR_TOLERATED
+    jmp  .out
+.absent:
+    mov  eax, FD_PAIR_NONE
+    test r15, r15
+    jz   .out
+    mov  eax, FD_PAIR_FAULT               ; a fault on the GUID's own medium stays a refusal
+.out:
+    mov  rcx, r15
+    add  rsp, 8
+    pop  r15
+    pop  r14
+    pop  r13
+    pop  rbx
+    ret
+
+; fat32_disk_guest_esp_open(RDI = the boot ESP's unique partition GUID, 16 on-media bytes)
+;   -> RAX = vfs handle / -1. The guest-pair consumer's boot-ESP open ONLY (hv_guest_files_begin):
+; root 119659/119679, SEC 119661/119673. The boot-ESP scan under fd_pair_scan's scoped rule, on its
+; own unnamed RO ctx (fd_gesp_ctx, its own read-slot ops table and GUID). It never reads or writes
+; fd_ro_ctx/fd_ro_guid/fd_ro_handle and never registers the shared RO handle, so
+; fat32_disk_boot_esp_open (res_pack, wallpaper_prefs, app_runtime, update_esp) keeps b1's
+; fail-closed rule unchanged. Location carries no authority here: the signed profile pins every
+; byte. BSP only, non-reentrant. Same GUID answers the same handle; another GUID is refused.
+fat32_disk_guest_esp_open:
+    push rbx
+    push r12
+    push r13
+    push r14
+    mov  r12, rdi
+    mov  dword [rel fat32_disk_last_error], FD_ERR_BAD_ARG
+    test r12, r12
+    jz   .refuse
+    mov  rax, [r12]
+    or   rax, [r12 + 8]
+    jz   .refuse                          ; a zero GUID names no partition
+    mov  eax, [rel fd_gesp_handle]
+    test eax, eax
+    jz   .scan
+    mov  rax, [r12]                       ; open: only its own GUID, and the open handle stays
+    cmp  rax, [rel fd_gesp_guid]
+    jne  .refuse
+    mov  rax, [r12 + 8]
+    cmp  rax, [rel fd_gesp_guid + 8]
+    jne  .refuse
+    mov  eax, [rel fd_gesp_handle]
+    dec  eax
+    jmp  .out
+.scan:
+    mov  rax, [r12]
+    mov  [rel fd_gesp_guid], rax
+    mov  rax, [r12 + 8]
+    mov  [rel fd_gesp_guid + 8], rax
+    lea  rax, [rel fd_gesp_guid]
+    mov  [rel fd_want_guid], rax
+    lea  r12, [rel fd_gesp_ctx]
+    call fd_pair_scan                     ; EAX state, RDX selected dev, RCX first faulting dev
+    mov  [rel fd_pair_state], al
+    lea  rdi, [rel fd_pair_name]
+    call fd_pair_keep_name                ; STAT's copy of the faulting medium's name, never the dev*
+    mov  r13, rcx
+    mov  r14, rdx
+    mov  dword [rel fat32_disk_last_error], FD_ERR_IO
+    lea  rdi, [rel str_fd_gesp_fault]
+    cmp  eax, FD_PAIR_FAULT
+    je   .fail_fault_log
+    mov  dword [rel fat32_disk_last_error], FD_ERR_NOT_FOUND
+    lea  rdi, [rel str_fd_gesp_ambiguous]
+    cmp  eax, FD_PAIR_AMBIGUOUS
+    je   .fail_log
+    lea  rdi, [rel str_fd_gesp_none]
+    cmp  eax, FD_PAIR_NONE
+    je   .fail_log
+    cmp  eax, FD_PAIR_TOLERATED
+    jne  .selected
+    lea  rdi, [rel str_fd_gesp_tolerated]
+    call serial_string                    ; a tolerated fault is never silent
+    call serial_newline
+    mov  rsi, r13
+    call fd_gesp_fault_dev_log
+.selected:
+    mov  [rel fd_gesp_ctx + FD_DEV], r14
+    call fd_gesp_build_ops
+    call vfs_register_guest_esp           ; fixed unnamed RO backend, no write-generation barrier
+    test rax, rax
+    js   .fail
+    inc  eax
+    mov  [rel fd_gesp_handle], eax
+    dec  eax
+    jmp  .out
+.fail_fault_log:
+    call serial_string
+    call serial_newline
+    mov  rsi, r13
+    call fd_gesp_fault_dev_log            ; diagnostic only
+    jmp  .fail
+.fail_log:
+    call serial_string                    ; diagnostic only; the consumer decides, no fallback authority
+    call serial_newline
+.fail:
+    mov  qword [rel fd_gesp_guid], 0
+    mov  qword [rel fd_gesp_guid + 8], 0
+.refuse:
+    mov  rax, -1
+.out:
+    pop  r14
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+
+; Serial diagnostic only (RSI = dev*, 0 = none): names the medium the boot-ESP pair scan faulted on.
+fd_gesp_fault_dev_log:
+    push rbx
+    mov  rbx, rsi
+    lea  rdi, [rel str_fd_gesp_fault_dev]
+    call serial_string
+    lea  rdi, [rel str_fd_guest_fault_noname]
+    test rbx, rbx
+    jz   .name
+    mov  rax, [rbx + dev.name]
+    test rax, rax
+    jz   .name
+    mov  rdi, rax
+.name:
+    call serial_string
+    call serial_newline
+    pop  rbx
+    ret
+
+; fd_pair_keep_name(RDI = a 16-byte name slot, RCX = dev* or 0): the medium's registry name, at most
+; FD_PAIR_NAME-1 bytes + NUL, or "-" (no medium, or a nameless one). Leaf; preserves every register.
+fd_pair_keep_name:
+    push rax
+    push rcx
+    push rsi
+    push rdi
+    lea  rsi, [rel str_fd_guest_fault_noname]
+    test rcx, rcx
+    jz   .copy
+    mov  rax, [rcx + dev.name]
+    test rax, rax
+    jz   .copy
+    mov  rsi, rax
+.copy:
+    mov  ecx, FD_PAIR_NAME - 1
+.byte:
+    mov  al, [rsi]
+    test al, al
+    jz   .end
+    mov  [rdi], al
+    inc  rsi
+    inc  rdi
+    dec  ecx
+    jnz  .byte
+.end:
+    mov  byte [rdi], 0
+    pop  rdi
+    pop  rsi
+    pop  rcx
+    pop  rax
+    ret
+
+; fat32_disk_pair_report_state(EDI = 0 the boot-ESP pair scan / 1 the SOURCE.BIN scan)
+;   -> EAX = its last FD_PAIR_* (0 = not run), RDX = its faulting medium's kept name (NUL text, "-" when
+;   none). For GUESTVM STAT: a copied name, never an address or an LBA. Read-only. Any other EDI = 0, "-".
+fat32_disk_pair_report_state:
+    xor  eax, eax
+    lea  rdx, [rel str_fd_guest_fault_noname]
+    cmp  edi, 1
+    ja   .out
+    lea  rcx, [rel fd_pair_state]
+    movzx eax, byte [rcx + rdi]
+    test eax, eax
+    jz   .out
+    mov  ecx, edi
+    shl  ecx, 4                           ; FD_PAIR_NAME
+    lea  rdx, [rel fd_pair_name]
+    add  rdx, rcx
+.out:
+    ret
+
+; The scoped boot-ESP handle's .mount: always re-selects the entry with its own GUID.
+fd_gesp_mount:
+    mov  rdi, [rdi + fsmount.priv]
+    lea  rax, [rel fd_gesp_guid]
     mov  [rel fd_want_guid], rax
     call fat32_disk_mount_ctx
     mov  qword [rel fd_want_guid], 0
@@ -857,6 +1106,39 @@ fd_guest_build_ops:
     mov  [rel fd_guest_ops + fs_ops.file_extents], rax
     lea  rax, [rel fat32_disk_extent_check]
     mov  [rel fd_guest_ops + fs_ops.extent_check], rax
+    ret
+
+; The scoped boot-ESP pair handle's table: the same explicit READ slots; everything else stays 0.
+fd_gesp_build_ops:
+    lea  rdi, [rel fd_gesp_ops]
+    xor  eax, eax
+    mov  ecx, fs_ops_size / 8
+    cld
+    rep  stosq
+    lea  rax, [rel str_fd_ro_backend]
+    mov  [rel fd_gesp_ops + fs_ops.name], rax
+    lea  rax, [rel fd_gesp_mount]
+    mov  [rel fd_gesp_ops + fs_ops.mount], rax
+    lea  rax, [rel fat32_disk_stat]
+    mov  [rel fd_gesp_ops + fs_ops.stat], rax
+    lea  rax, [rel fat32_disk_read_at]
+    mov  [rel fd_gesp_ops + fs_ops.read_at], rax
+    lea  rax, [rel fat32_disk_info]
+    mov  [rel fd_gesp_ops + fs_ops.info], rax
+    lea  rax, [rel fat32_disk_list_root]
+    mov  [rel fd_gesp_ops + fs_ops.list_root], rax
+    lea  rax, [rel fat32_disk_stat_path]
+    mov  [rel fd_gesp_ops + fs_ops.stat_path], rax
+    lea  rax, [rel fat32_disk_replace_meta]
+    mov  [rel fd_gesp_ops + fs_ops.replace_meta], rax
+    lea  rax, [rel fat32_disk_read_at_path]
+    mov  [rel fd_gesp_ops + fs_ops.read_at_path], rax
+    lea  rax, [rel fat32_disk_list_dir]
+    mov  [rel fd_gesp_ops + fs_ops.list_dir], rax
+    lea  rax, [rel fat32_disk_file_extents]
+    mov  [rel fd_gesp_ops + fs_ops.file_extents], rax
+    lea  rax, [rel fat32_disk_extent_check]
+    mov  [rel fd_gesp_ops + fs_ops.extent_check], rax
     ret
 
 ; Validate the new source's complete bounded primary GPT before accepting or
@@ -1024,10 +1306,17 @@ fat32_disk_guest_source_hint:
     test rbx,rbx
     jz .fail
     call .clear
-    lea rax,[rel fd_ro_ops]
+    lea rax,[rel fd_ro_ops]               ; the shared boot-ESP handle, or the guest-pair scoped one
+    cmp [r12+fsmount.ops],rax
+    jne .scoped
+    lea rax,[rel fd_ro_ctx]
+    jmp .pair_ctx
+.scoped:
+    lea rax,[rel fd_gesp_ops]
     cmp [r12+fsmount.ops],rax
     jne .fail
-    lea rax,[rel fd_ro_ctx]
+    lea rax,[rel fd_gesp_ctx]
+.pair_ctx:
     cmp [r12+fsmount.priv],rax
     jne .fail
     cmp dword [rax+FD_MOUNTED],1
@@ -1042,8 +1331,8 @@ fat32_disk_guest_source_hint:
     jnz .fail
     mov r13,rsi
     mov qword [rel fd_path_cache_ctx],0
-    mov byte [rel fd_ro_ctx+FD_LOOKUP_VALID],0
-    lea rdi,[rel fd_ro_ctx]
+    mov rdi,[r12+fsmount.priv]           ; the checked ctx: fd_ro_ctx or fd_gesp_ctx
+    mov byte [rdi+FD_LOOKUP_VALID],0
     mov byte [rel fd_resolve_strict],1
     call fat32_disk_resolve_path_lfn
     mov byte [rel fd_resolve_strict],0
@@ -2428,6 +2717,10 @@ fd_ro_alias_invalidate:
     lea  rdx, [rel fd_guest_ctx]
     call .one
     pop  rdi
+    push rdi
+    lea  rdx, [rel fd_gesp_ctx]
+    call .one
+    pop  rdi
     ret
 .one:
     cmp  dword [rdx + FD_MOUNTED], 1
@@ -2475,6 +2768,9 @@ fd_write_sectors:
     lea  rax, [rel fd_guest_ctx]
     cmp  r12, rax
     je   .read_only
+    lea  rax, [rel fd_gesp_ctx]
+    cmp  r12, rax
+    je   .read_only                       ; the guest-pair boot-ESP handle never writes (by address)
     lea  rax, [rel fd_selected_ctx]
     cmp  r12, rax
     je   .read_only                       ; G1b: the boot-ESP handle never writes (by address)
@@ -2607,6 +2903,9 @@ fd_flush:
     lea  rcx, [rel fd_guest_ctx]
     cmp  rbx, rcx
     je   .read_only
+    lea  rcx, [rel fd_gesp_ctx]
+    cmp  rbx, rcx
+    je   .read_only                       ; the guest-pair boot-ESP handle never flushes (by address)
     lea  rcx, [rel fd_selected_ctx]
     cmp  rbx, rcx
     je   .read_only                       ; G1b: the boot-ESP handle never flushes (by address)
@@ -8472,6 +8771,24 @@ alignb 8
 fd_want_fault_dev: resq 1 ; dev* of the first medium that latched fd_want_fault (diagnostic only)
 %endmacro
 WDATA_BSS_DEFER WDATA_BSS_fs_fat32_guest_fault_dev
+; Guest-pair scoped boot-ESP handle and both pair scans' facts (root 119659/119679, SEC 119661/119673):
+; its own block, never the shared RO handle's.
+%macro WDATA_BSS_fs_fat32_guest_pair 0
+alignb 8
+fd_gesp_ctx: resb FD_CTX_SIZE
+fd_gesp_ops: resb fs_ops_size
+fd_gesp_guid: resb 16
+fd_gesp_handle: resd 1
+fd_pair_state: resb 2           ; FD_PAIR_*: [0] the boot-ESP pair scan, [1] the SOURCE.BIN scan
+fd_pair_name: resb 2 * FD_PAIR_NAME   ; each scan's first faulting medium's name, copied (STAT text only)
+%endmacro
+WDATA_BSS_DEFER WDATA_BSS_fs_fat32_guest_pair
+str_fd_guest_tolerated: db "[PAOS64] guest source fault tolerated",0
+str_fd_gesp_tolerated: db "[PAOS64] guest pair boot ESP fault tolerated",0
+str_fd_gesp_fault: db "[PAOS64] guest pair boot ESP unreadable/malformed",0
+str_fd_gesp_ambiguous: db "[PAOS64] guest pair boot ESP ambiguous",0
+str_fd_gesp_none: db "[PAOS64] guest pair boot ESP absent/unmountable",0
+str_fd_gesp_fault_dev: db "[PAOS64] guest pair boot ESP fault dev=",0
 ; RCQ-20 S5b: its own block (the tree walk; every field is meaningful only while fd_tree_on).
 %macro WDATA_BSS_fs_fat32_copy_s5b 0
 alignb 8
@@ -15416,13 +15733,17 @@ fd_tx_commit_seen:  db 0
 ; censuses native writers against this list; a new store reddens it until listed.
 ; VR-1 (ROOT109242): PAOS2 CFG (input settings v2) and UPDATE CFG (update consent) are
 ; DATA policy stores like PAOS CFG; only the DATA context may create or replace them.
-FD_PROTECTED_COUNT equ 16
+; ROOT121098 (F): UPDAILY CFG (daily update consent, DATA mode 6) is one too.
+; ADMIN 121096 R1: TERMNET CFG (Terminal network provider policy, AV pane) is one too.
+FD_PROTECTED_COUNT equ 18
 fd_protected_names:
     db 'PAOSDOCSBIN'
     db 'PAOSAPPSBIN'
     db 'PAOS    CFG'
     db 'PAOS2   CFG'
     db 'UPDATE  CFG'
+    db 'UPDAILY CFG'
+    db 'TERMNET CFG'
     db 'DDLEARN0BIN'
     db 'DDLEARN1BIN'
     db '~TMPPLAN   '
@@ -15813,8 +16134,20 @@ fat32_disk_scratch_arm:                 ; RDI=disk GUID, ESI=serial, RDX=part GU
     mov rax, 0xc79926b7b668c087
     cmp [rbp + 8], rax
     jne .fail
-    cmp qword [rbp + 48], 0             ; no hidden/read-only/required GPT attributes
-    jne .fail
+    ; GPT attributes: none, or root 119199's one case, bit 63 alone on the build-
+    ; pinned MSI reserved partition. Read only; no GPT write, Peter's bit stays.
+    mov rdi, [rbp + 48]
+    test rdi, rdi
+    jz .serial
+    lea rsi, [rel fd_selected_ctx + FD_DISK_GUID]
+    lea rdx, [rbp + 16]                 ; this entry's unique partition GUID
+    mov rcx, [rbp + 32]                 ; first LBA
+    mov r8, [rbp + 40]                  ; last LBA
+    sub r8, rcx
+    inc r8
+    call volume_pin_reserved_attrs      ; EAX 1 admitted, 0 refused (0 = the old refusal)
+    test eax, eax
+    jz .fail
 .serial:
     test r13d, r13d
     jz .fail

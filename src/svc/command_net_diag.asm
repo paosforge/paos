@@ -136,6 +136,7 @@ tcpdiag_stage_snapshot:
     mov dword [rel tcpdiag_realtek_omitted], 0
     lea rdi, [rel tcpdiag_realtek_counts]
     call rtl8125_link_rearm_counts
+    mov edx, eax
     lea rdi, [rel str_tcpstat_rtl8125]
     mov esi, 1
     call tcpdiag_out_rearm_group
@@ -145,12 +146,14 @@ tcpdiag_stage_snapshot:
 %else
     lea rdi, [rel tcpdiag_realtek_counts]
     call rtl8126_link_rearm_counts
+    mov edx, eax
     lea rdi, [rel str_tcpstat_rtl8126]
     mov esi, 2
     call tcpdiag_out_rearm_group
 %endif
     lea rdi, [rel tcpdiag_realtek_counts]
     call rtl8168_link_rearm_counts
+    mov edx, eax
     lea rdi, [rel str_tcpstat_rtl8168]
     mov esi, 4
     call tcpdiag_out_rearm_group
@@ -167,34 +170,37 @@ tcpdiag_stage_snapshot:
 ; Stage one complete decimal tuple before appending. Retain the existing
 ; 640-byte typed TCPSTAT receipt ABI, including at full-u64 counter values.
 ; Keep 20 bytes for an explicit omitted-family bitmask; never clip a number.
-; RDI label, ESI family bit, five diagnostic qwords in scratch.
+; RDI label, ESI family bit, EDX qword count (5, or 15/25 with the provider's
+; diagnostic record, ROOT120117), the diagnostic qwords in scratch.
 tcpdiag_out_rearm_group:
     push rbx
     push r12
     push r13
+    push r14
+    push r15
     mov ebx, esi
+    mov r14d, edx
+    cmp r14d, TCPDIAG_REALTEK_MAX
+    jbe .count_ok
+    mov r14d, 5                       ; an unknown provider shape prints only the counts
+.count_ok:
     mov r12, [rel tcpdiag_out_cur]
     lea rax, [rel tcpdiag_realtek_group]
     mov [rel tcpdiag_out_cur], rax
     call tcpdiag_out_text
-    mov rdi, [rel tcpdiag_realtek_counts+0]
-    call tcpdiag_out_u64
+    xor r15d, r15d
+.value:
+    test r15d, r15d
+    jz .first
     lea rdi, [rel str_tcpstat_rearm_comma]
     call tcpdiag_out_text
-    mov rdi, [rel tcpdiag_realtek_counts+8]
+.first:
+    lea rax, [rel tcpdiag_realtek_counts]
+    mov rdi, [rax+r15*8]
     call tcpdiag_out_u64
-    lea rdi, [rel str_tcpstat_rearm_comma]
-    call tcpdiag_out_text
-    mov rdi, [rel tcpdiag_realtek_counts+16]
-    call tcpdiag_out_u64
-    lea rdi, [rel str_tcpstat_rearm_comma]
-    call tcpdiag_out_text
-    mov rdi, [rel tcpdiag_realtek_counts+24]
-    call tcpdiag_out_u64
-    lea rdi, [rel str_tcpstat_rearm_comma]
-    call tcpdiag_out_text
-    mov rdi, [rel tcpdiag_realtek_counts+32]
-    call tcpdiag_out_u64
+    inc r15d
+    cmp r15d, r14d
+    jb .value
     mov r13, [rel tcpdiag_out_cur]
     lea rax, [rel tcpdiag_realtek_group]
     sub r13, rax
@@ -209,6 +215,8 @@ tcpdiag_out_rearm_group:
 .omit:
     or [rel tcpdiag_realtek_omitted], ebx
 .done:
+    pop r15
+    pop r14
     pop r13
     pop r12
     pop rbx
@@ -228,8 +236,9 @@ tcpdiag_out_ready: db 0
 align 8
 tcpdiag_out_cur:   dq 0
 tcpdiag_snapshot:  times TCPD_SIZE db 0
-tcpdiag_realtek_counts: times 5 dq 0
-tcpdiag_realtek_group: times 128 db 0
+TCPDIAG_REALTEK_MAX equ 25           ; rtl8125: five counts + two ten-qword port records
+tcpdiag_realtek_counts: times TCPDIAG_REALTEK_MAX dq 0
+tcpdiag_realtek_group: times 8 + TCPDIAG_REALTEK_MAX*21 db 0   ; label + u64 and comma each
 tcpdiag_realtek_omitted: dd 0
 tcpdiag_out_buf:   times 640 db 0
 

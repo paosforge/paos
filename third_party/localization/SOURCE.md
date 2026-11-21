@@ -393,3 +393,33 @@ All existing IDs, English, translations, widths and glyphs remain unchanged.
 The existing public Disk offline until restart message is reused. The site
 digest, mirrors, manifest/recipe pins and generated catalog are refreshed by
 the unchanged compiler. This supplies no physical power or recovery proof.
+
+## Bounded desktop power failure label translations (2026-11-13)
+
+The fifteen critical power failure cause labels (message IDs 4610-4624) gain
+machine-authored de, es, fr, ja and zh-Hans text; 4611 and 4612 reuse the
+accepted translations of the identical English messages 1125 and 1126. All
+other message IDs, English, translations, widths and glyph inputs are
+unchanged. The catalog entry in SOURCES.json, the manifest and recipe pins and
+the generated outputs are refreshed together by the unchanged compiler. This
+supplies no localized widget rendering, native-language evaluation or power
+observation; back translation and security review remain owed.
+
+Review revision (2026-11-13): after rc-input back translation (LEDGER 118728,
+R1), the French text of 4613 and 4619 names the pending writes, as the
+accepted French 1066 does, instead of "vidage du disque". No other string
+changes.
+
+## Staged-owner continuation texts (2026-11-15)
+
+T5-9: message 4071 ("Owner staged; restart to apply") is retired and kept as
+a reserved tombstone, because the staged credential now applies without a
+restart. Three critical security/consent messages are added (IDs 4645-4647):
+two lock-card notices for a change or setup that did not apply, and the
+first-owner disclosure that, until PaOS next starts, other systems on the PC
+can see a protected copy of the new password check. They have
+machine-authored de, es, fr, ja and zh-Hans text, read by rc-sec and
+back-translated by rc-input as drafts. Current source pins are refreshed at
+the base commit. All other message IDs, English, translations and widths are
+unchanged, and the glyph output is unchanged. This supplies no native
+rendering proof or native-language evaluation.

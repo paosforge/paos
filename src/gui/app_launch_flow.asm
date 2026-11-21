@@ -2,7 +2,7 @@
 ;; LAYER 6
 ;; PURPOSE Native owner policy and bounded isolated-app launch composition.
 ;; EXPORTS app_launch_flow_click_observe, app_launch_flow_init, app_launch_flow_tick, app_launch_flow_begin, app_launch_flow_available, app_launch_flow_observe, app_launch_flow_quiesce
-;; IMPORTS gui/form_loader, gui/calendar, gui/chat_send, gui/form_events, gui/app_launcher, sec/app_binding, sec/session, svc/app_script, hv/app_vm, gui/widget, gui/window_mgmt, gui/wm_pointer, svc/command, core/time, core/smp, hv/vmx, hv/app_vm_memory, boot/gop
+;; IMPORTS gui/form_loader, gui/calendar, gui/chat_send, gui/form_events, gui/app_launcher, sec/app_binding, sec/session, svc/app_script, hv/app_vm, hv/app_vm_cpu, gui/widget, gui/window_mgmt, gui/wm_pointer, svc/command, core/time, core/smp, hv/vmx, hv/app_vm_memory, boot/gop
 ;; OWNER saga:app_launch_flow
 ;; CONTEXT: bsp_only
 ; Native-only. One original VM lifecycle, no guest command/setter/executor.
@@ -19,6 +19,7 @@ AF_UI_BOUND_US equ 30000000
 AF_DWELL_US equ 400000
 AF_POLICY_US equ 300000000
 AF_FALLBACK_US equ 400000
+AF_NOTICE_NO_GUEST equ 4          ; error card, named no-guest body
 
 ; Called once after WAIT registration and launcher init. Missing WAIT refuses.
 ; Real producer include/init is wired only with the actual app VM implementation.
@@ -115,6 +116,9 @@ app_launch_flow_begin:
     call app_script_descriptor
     cmp eax,1
     jne .bad
+    call app_vm_isolation_ready        ; ROOT118968 N: precondition, never admission
+    cmp eax,1
+    jne .no_guest
     call af_notice_close
     mov [rel af_handle],rbx
     mov [rel af_attempt],r12
@@ -155,6 +159,18 @@ app_launch_flow_begin:
     mov dword [rel af_state],AF_POLICY
     mov eax,2
     jmp .out
+.no_guest:
+    ; No running Linux guest lends the app VM its isolation. Nothing is captured,
+    ; shown or prepared: the attempt ends without failure (button back to its
+    ; name, no retry of this attempt) and the error card names the reason. The
+    ; launcher's later terminal report for this spent attempt is a no-op.
+    call af_notice_close
+    mov rdi,rbx
+    mov rsi,r12
+    call app_launcher_ended
+    mov edi,AF_NOTICE_NO_GUEST
+    call af_notice
+    jmp .bad
 .bad_close:
     call af_panel_close
 .bad:
@@ -588,6 +604,10 @@ af_idle_turn:
     call af_current
     cmp eax,1
     jne af_abort
+    mov rdi,[rel af_instance]
+    call app_vm_guest_ended             ; the app ended itself: its guest powered off
+    cmp eax,1
+    je af_abort                         ; shown -> ordinary end, never shown -> failed
     cmp dword [rel af_state],AF_RUNNING
     jne .not_running
     call chat_send_tick                 ; sole human Send turn, identity rechecked
@@ -689,6 +709,9 @@ af_idle_turn:
     mov rax,[rel af_start_spent_us]
     mov [rel af_start_us],rax
 .start_clock_done:
+    call app_vm_isolation_ready        ; the guest can stop while the panel is open
+    cmp eax,1
+    jne af_no_guest
     call af_panel_close
     call af_new_deadline
     cmp eax,1
@@ -965,6 +988,8 @@ af_notice:
     lea rdi,[rel af_error_title]
     cmp r13d,2
     je .open
+    cmp r13d,AF_NOTICE_NO_GUEST
+    je .open
     lea rdi,[rel af_stopped_title]
 .open:
     mov [rel af_notice_title],rdi
@@ -1019,6 +1044,9 @@ af_notice:
     je .text
     lea rsi,[rel af_error_text]
     cmp r13d,2
+    je .text
+    lea rsi,[rel af_no_guest_text]
+    cmp r13d,AF_NOTICE_NO_GUEST
     je .text
     lea rsi,[rel af_stopped_text]
 .text:
@@ -1095,6 +1123,14 @@ af_abort:
 .ordinary:
     mov byte [rel af_end_ordinary],1
     jmp af_retire
+
+; Start found no running Linux guest: nothing was prepared, so this is a named
+; refusal, not a launch failure. Same card as at the click.
+af_no_guest:
+    mov byte [rel af_end_ordinary],1    ; nothing was prepared: not a launch failure
+    call af_retire
+    mov edi,AF_NOTICE_NO_GUEST
+    jmp af_notice
 
 ; The human declined before Start: nothing failed.
 af_decline:
@@ -1537,6 +1573,7 @@ af_starting_title: db 'Starting app',0
 af_error_title: db 'App launch failed',0
 af_starting_text: db 'Starting... waiting for the app',0
 af_error_text: db 'The app stopped or could not start.',0
+af_no_guest_text: db 'Apps need a running Linux guest.',0 ; AV 2026-11-14 text
 af_stopped_title: db 'App stopped',0
 af_stopped_text: db 'The app stopped unexpectedly.',0
 af_notice_widget: db 'app_launch_status',0

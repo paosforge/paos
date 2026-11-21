@@ -1933,6 +1933,7 @@ cmd_verb_smpwork:
 
 ; Explicit additive grammar (bounded, exact; legacy numeric grammar untouched):
 ; ASYNC BEGIN 0xhhhhhhhh
+; ASYNC BEGIN 0xhhhhhhhh HOLD 0xmmmmmmmm (hold ms 1..5000; PENDING/cancellable until then)
 ; ASYNC POLL 0xhhhhhhhh 0xgggggggggggggggg
 ; ASYNC CANCEL 0xhhhhhhhh 0xgggggggggggggggg
 ; ASYNC STATUS 0xhhhhhhhh 0xgggggggggggggggg (read-only retained state)
@@ -1972,6 +1973,8 @@ smpwork_async_command:
     jc   .malformed
     cmp  eax, 22
     je   .begin
+    cmp  eax, 38
+    je   .begin_hold
     cmp  eax, 40
     je   .poll
     cmp  eax, 43
@@ -2031,14 +2034,18 @@ smpwork_async_command:
     mov  r15d, 1
     add  rdi, 11
     jmp  .nonce
+.begin_hold:
+    mov  r15d, 7
+    jmp  .begin_word
 .begin:
+    xor  r15d, r15d
+.begin_word:
     cmp  dword [rdi + 5], ' BEG'
     jne  .malformed
     cmp  word [rdi + 9], 'IN'
     jne  .malformed
     cmp  byte [rdi + 11], ' '
     jne  .malformed
-    xor  r15d, r15d
     add  rdi, 12
 .nonce:
     cmp  word [rdi], '0x'
@@ -2050,6 +2057,8 @@ smpwork_async_command:
     mov  r14d, eax
     test r15d, r15d
     jz   .dispatch
+    cmp  r15d, 7
+    je   .hold
     cmp  byte [rdi], ' '
     jne  .malformed
     inc  rdi
@@ -2060,6 +2069,19 @@ smpwork_async_command:
     call smpwork_async_hex
     jc   .malformed
     mov  r13, rax
+    jmp  .dispatch
+.hold:
+    cmp  dword [rdi], ' HOL'
+    jne  .malformed
+    cmp  word [rdi + 4], 'D '
+    jne  .malformed
+    cmp  word [rdi + 6], '0x'
+    jne  .malformed
+    add  rdi, 8
+    mov  ecx, 8
+    call smpwork_async_hex
+    jc   .malformed
+    mov  r13, rax                         ; hold ms (core owns the 1..cap bound); replaced by the handle
 .dispatch:
     cmp  byte [rdi], 0
     jne  .malformed
@@ -2070,6 +2092,8 @@ smpwork_async_command:
     mov  rcx, r13
     test r15d, r15d
     jz   .start
+    cmp  r15d, 7
+    je   .start_hold
     cmp  r15d, 2
     je   .cancel
     cmp  r15d, 3
@@ -2130,6 +2154,11 @@ smpwork_async_command:
     jmp  .reply
 .cancel:
     call smpwork_async_cancel
+    jmp  .reply
+.start_hold:
+    mov  ecx, r13d
+    call smpwork_async_begin_hold
+    mov  r13, rdx                         ; never disclose another owner's handle
     jmp  .reply
 .start:
     call smpwork_async_begin
@@ -2224,8 +2253,13 @@ smpwork_async_reply:
     jmp  .state
 .cancel:
     cmp  ebx, SMPWORK_ASYNC_CANCELLED
-    jne  .clock
+    jne  .not_cancelled
     lea  rdi, [rel str_swa_cancelled]
+    jmp  .state
+.not_cancelled:
+    cmp  ebx, SMPWORK_ASYNC_NOT_CANCELLED  ; refusal: finished work was kept
+    jne  .clock
+    lea  rdi, [rel str_swa_not_cancelled]
     jmp  .state
 .clock:
     cmp  ebx, SMPWORK_ASYNC_CLOCK
@@ -3256,6 +3290,7 @@ str_swa_partial: db "PARTIAL", 0
 str_swa_busy: db "BUSY", 0
 str_swa_stale: db "STALE", 0
 str_swa_cancelled: db "CANCELLED", 0
+str_swa_not_cancelled: db "NOT_CANCELLED", 0
 str_swa_clock: db "CLOCK", 0
 str_swa_counter: db "COUNTER", 0
 str_swa_topology: db "TOPOLOGY", 0

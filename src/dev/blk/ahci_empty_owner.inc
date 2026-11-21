@@ -7,6 +7,16 @@ AEO_BYTES equ 192
 AEO_PORTS equ 32
 AEO_POLLS equ 200
 AEO_US equ 200000
+; F4 (ROOT 121225, SEC 121230 S-1..S-6): firmware-latched PxIS on an idle empty port.
+; One shared DHRS-only mask (BOOT's ATAPI A2b uses the same equ); any other bit refuses.
+AEO_IS_STALE equ 0x1
+; ahci_empty_owner_is_table: u64 claimed ABAR, u32 packed BDF, u32 latched-port bitmap,
+; then 32 x {u32 original PxIS at first admission, u32 cleared mask (W1C intent)}.
+AEO_IS_ABAR equ 0
+AEO_IS_BDF equ 8
+AEO_IS_LATCHED equ 12
+AEO_IS_ENTRIES equ 16
+AEO_IS_BYTES equ AEO_IS_ENTRIES+AEO_PORTS*8
 ; get(RDI=full-width physical port) -> RAX=record, EDX=state, CF0;
 ; invalid -> RAX=0 EDX=0 CF1. Other registers unchanged. No hardware/effects.
 ahci_empty_owner_get:
@@ -16,6 +26,28 @@ ahci_empty_owner_get:
     lea rdx,[rel ahci_empty_owner_table]
     add rax,rdx
     mov edx,[rax+4]
+    clc
+    ret
+.bad:
+    xor eax,eax
+    xor edx,edx
+    stc
+    ret
+
+; is_get(RDI=full-width physical port) -> RAX=&{u32 original PxIS, u32 cleared mask},
+; EDX=1 latched this boot/0 not yet, CF0; invalid -> RAX=EDX=0, CF1. Read-only RAM query;
+; other registers unchanged. The table header carries the one claimed HBA identity.
+ahci_empty_owner_is_get:
+    cmp rdi,AEO_PORTS
+    jae .bad
+    lea rax,[rel ahci_empty_owner_is_table]
+    push rcx
+    mov ecx,edi
+    mov edx,[rax+AEO_IS_LATCHED]
+    shr edx,cl
+    and edx,1
+    pop rcx
+    lea rax,[rax+AEO_IS_ENTRIES+rdi*8]
     clc
     ret
 .bad:
@@ -93,6 +125,25 @@ ahci_empty_owner_acquire:
     mov [r12+96],rax
     or dword [r12+12],1
     mov dword [r12+148],2                ; engine closure
+    ; F4: exactly one W1C of the latched stale status, before any engine effect.
+    lea rdx,[rel ahci_empty_owner_is_table]
+    mov eax,[rdx+AEO_IS_ENTRIES+r13*8]
+    test eax,eax
+    jz .status_clear
+    call .fresh                          ; S-3: still the latched original, no superset
+    jc .fail
+    lea rdx,[rel ahci_empty_owner_is_table]
+    mov eax,[rdx+AEO_IS_ENTRIES+r13*8]
+    cmp eax,[r12+132]
+    jne .fail
+    mov [rdx+AEO_IS_ENTRIES+r13*8+4],eax ; intent latched first; stale admission now OFF
+    mov edx,eax                         ; the observed bits only, never all-ones
+    mov esi,0x10
+    call .write
+    jc .fail
+    ; S-4: both paths below begin with .fresh, now with the stale admission off, so
+    ; PxIS must read 0 before the next effect (a re-raised DHRS refuses as partial).
+.status_clear:
     test dword [r12+108],0x10
     jz .close_wait
     call .fresh
@@ -249,6 +300,8 @@ ahci_empty_owner_acquire:
     AEO_READ 0x40,136
     AEO_READ 0x20,140
 %unmacro AEO_READ 2
+    call .stale_latch
+    jc .bad
     mov eax,[r12+112]
     and eax,15
     jnz .bad
@@ -258,8 +311,8 @@ ahci_empty_owner_acquire:
     jne .bad
     cmp dword [r12+128],0
     jne .bad
-    cmp dword [r12+132],0
-    jne .bad
+    call .stale_check
+    jc .bad
     cmp dword [r12+136],0
     jne .bad
     test dword [r12+140],0x89
@@ -270,6 +323,45 @@ ahci_empty_owner_acquire:
     jnz .bad
     test dword [r12+12],4
     jnz .pointers
+    clc
+    ret
+; First fresh read of a port this boot: bind the one claimed HBA identity and keep the
+; raw firmware PxIS once (S-5). Re-entry never reaches here (row already attempted).
+.stale_latch:
+    lea rdx,[rel ahci_empty_owner_is_table]
+    cmp dword [rdx+AEO_IS_LATCHED],0
+    jne .stale_identity
+    mov [rdx+AEO_IS_ABAR],rbx
+    mov eax,[r12+32]
+    mov [rdx+AEO_IS_BDF],eax
+.stale_identity:
+    cmp [rdx+AEO_IS_ABAR],rbx
+    jne .bad
+    mov eax,[r12+32]
+    cmp eax,[rdx+AEO_IS_BDF]
+    jne .bad
+    bt dword [rdx+AEO_IS_LATCHED],r13d
+    jc .stale_kept
+    mov eax,[r12+132]
+    mov [rdx+AEO_IS_ENTRIES+r13*8],eax
+    bts dword [rdx+AEO_IS_LATCHED],r13d
+.stale_kept:
+    clc
+    ret
+; PxIS is 0, or (before the one W1C) exactly the latched original and DHRS only.
+; IE==0 and DET==0 are already required by the caller's same fresh read (S-2).
+.stale_check:
+    mov eax,[r12+132]
+    test eax,eax
+    jz .stale_ok
+    lea rdx,[rel ahci_empty_owner_is_table]
+    cmp dword [rdx+AEO_IS_ENTRIES+r13*8+4],0
+    jne .bad
+    cmp eax,[rdx+AEO_IS_ENTRIES+r13*8]
+    jne .bad
+    test eax,~AEO_IS_STALE
+    jnz .bad
+.stale_ok:
     clc
     ret
 .admit:
@@ -456,5 +548,6 @@ ahci_empty_owner_acquire:
 align 8
 ahci_empty_owner_generation: dq 1         ; boot-local, never reset by attach
 ahci_empty_owner_table: times AEO_PORTS*AEO_BYTES db 0
+ahci_empty_owner_is_table: times AEO_IS_BYTES db 0   ; F4 stale-status record, written once
 %endmacro
 WDATA_DEFER WDATA_dev_blk_ahci_empty_owner

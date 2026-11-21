@@ -1,7 +1,7 @@
 ;; MODULE hv/driver_domain_boot
 ;; LAYER 5
 ;; EXPORTS nd_boot_start, nd_boot_record_tick
-;; IMPORTS hv/driver_domain, hv/nd_isolation, hv/nic_selection, hv/a1_nic_selection, hv/vm_profile, hv/amdvi, bus/pci, bus/pci_bdf, bus/pci_claim, core/csprng
+;; IMPORTS hv/driver_domain, hv/nd_isolation, hv/nic_selection, hv/a1_nic_selection, hv/vm_profile, hv/amdvi, hv/vtd, bus/pci, bus/pci_bdf, bus/pci_claim, core/csprng
 ;; CAPS extension
 ;; OWNER saga:hv
 ;; CONTEXT: bsp_only
@@ -337,15 +337,17 @@ nd_boot_pci_cb:
     ret
 
 ; W3 (ROOT 109394, SEC 109421 C3/C4): once per boot, before the first group
-; gate for the one discovered function and with the AMD-Vi owner active, turn
+; gate for the one discovered function and with AMD-Vi or native VT-d owned, turn
 ; ACS on along its chain: each Root Port (PCIe type 4) and Switch Downstream
 ; Port (type 6) between it and bus 0, only through pci_ecam_acs_enable.
-; Upstream ports (5), PCI bridges and functions off the chain are never
-; written. Parents are exact secondary-bus matches from one complete bridge
-; census; a missing or duplicate parent, a chain deeper than ND_ACS_DEPTH or
+; VT-d also checks/enables Switch Upstream Ports (5); if they lack the
+; required ACS bits, admission refuses. AMD keeps its existing type-4/6 scope.
+; PCI bridges and functions off the chain are never written. Parents are
+; exact secondary-bus matches from one complete bridge census.
+; A missing or duplicate parent, a chain deeper than ND_ACS_DEPTH or
 ; an overflowing census writes nothing. nd_acs_record keeps count u32, then
 ; per enabled port: bdf u16, port type u8, status u8, before u32, after u32,
-; zero u32. It is evidence only: pcia_iso_cb reads ACS fresh at every gate.
+; zero u32. Evidence only: each backend reads ACS fresh at admission.
 ND_ACS_BRIDGES equ 32
 ND_ACS_DEPTH equ 8
 nd_boot_acs_chain:
@@ -357,7 +359,10 @@ nd_boot_acs_chain:
     mov r12d,edi
     mov dword [rel nd_acs_record],0
     cmp byte [rel amdvi_owned],1
+    je .owned
+    cmp byte [rel vtd_native_ready],1
     jne .out
+.owned:
     mov dword [rel nd_acs_bridge_n],0
     mov byte [rel nd_acs_overflow],0
     lea rdi,[rel nd_acs_bridge_cb]
@@ -391,6 +396,28 @@ nd_boot_acs_chain:
 .found:
     cmp r9d,-1
     je .out                         ; no parent: incomplete, no write
+    cmp byte [rel amdvi_owned],1
+    je .parent_valid
+    ; VT-d: validate every window and port before the first enable store.
+    mov eax,r12d
+    shr eax,8
+    movzx edx,byte [r8+r9*8+2]
+    cmp eax,edx
+    jb .out
+    movzx edx,byte [r8+r9*8+3]
+    cmp eax,edx
+    ja .out
+    cmp byte [r8+r9*8+1],0
+    jne .switch_port
+    cmp byte [r8+r9*8+4],4
+    jne .out
+    jmp .parent_valid
+.switch_port:
+    cmp byte [r8+r9*8+4],5
+    je .parent_valid
+    cmp byte [r8+r9*8+4],6
+    jne .out
+.parent_valid:
     lea rax,[rel nd_acs_chain]
     mov [rax+r13],r9b
     inc r13d
@@ -409,7 +436,11 @@ nd_boot_acs_chain:
     cmp eax,4                       ; Root Port
     je .enable
     cmp eax,6                       ; Switch Downstream Port
+    je .enable
+    cmp eax,5                       ; VT-d requires the whole chain, including upstream
     jne .next
+    cmp byte [rel amdvi_owned],1
+    je .next
 .enable:
     movzx edi,word [r15]
     call pci_ecam_acs_enable

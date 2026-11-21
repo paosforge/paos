@@ -6,6 +6,11 @@
 ; attach/write -> 1 accepted, 0 refused; read -> bytes, -1 detached/overflow.
 ; A missing prompt, a transport acceptance or a shell-ready bit is not proof.
 HV_TERMINAL_CAP equ 8192
+%ifdef HV_VCON_TX_MAX
+%if HV_VCON_TX_MAX > HV_TERMINAL_CAP
+%error "Terminal backpressure requires every valid TX chain to fit its ring"
+%endif
+%endif
 
 ; ESI=requested generation. No side effects; preserves all but EAX.
 hv_terminal_current:
@@ -101,6 +106,46 @@ hv_terminal_matches:
     jmp hv_terminal_current
 .bad:
     xor eax, eax
+    ret
+
+; ECX=complete validated TX chain length (<=HV_VCON_TX_MAX). Preserve all
+; except EAX/flags. No reservation is retained: BSP cannot yield between this
+; admission and the complete capture. Unattached/private consumers stay free.
+hv_terminal_tx_room:
+    push rsi
+    cmp qword [rel hv_terminal_owner], 0
+    je .unattached
+    mov esi, [rel hv_terminal_generation]
+    call hv_terminal_current
+    test eax, eax
+    jz .unattached
+    mov eax, HV_TERMINAL_CAP
+    cmp eax, [rel hv_terminal_count]
+    jb .full
+    sub eax, [rel hv_terminal_count]
+    cmp eax, ecx
+    setae al
+    movzx eax, al
+    pop rsi
+    ret
+.full:
+    xor eax, eax
+    pop rsi
+    ret
+.unattached:
+    mov eax, 1
+    pop rsi
+    ret
+
+; RDI/ESI=attached owner/START. GUI stopped-vCPU turn, no yield. The producer
+; may have stopped notifying while its head was blocked; revalidate everything
+; in the existing bounded TX engine instead of saving any guest addresses.
+hv_terminal_poll:
+    call hv_terminal_matches
+    test eax, eax
+    jz .out
+    call hv_vcon_serve_tx                    ; stopped vCPU, bounded validated retry
+.out:
     ret
 
 hv_terminal_write:

@@ -17,7 +17,9 @@ app_vm_amd_prepare:
     jne .bad
     ; Missing isolation refuses here, not after READY, form and activation: with
     ; no live driver SVM the first turn could only refuse.
-    cmp byte [rel hv_linux_running],1
+    ; Same predicate as INPUT's launch check, so the two cannot drift.
+    call app_vm_isolation_ready
+    cmp eax,1
     jne .bad
     push rbx
     mov rbx,[rel avm_base]
@@ -38,7 +40,7 @@ app_vm_amd_prepare:
     mov [rel avm_svm+VSP_HOST],rax
     mov rax,[rel avm_root]
     mov [rel avm_svm+VSP_NPT],rax
-    mov qword [rel avm_svm+VSP_ASID],2
+    mov qword [rel avm_svm+VSP_ASID],AVM_CPU_ASID
     lea rdi,[rbx+AVM_CS]
     mov dword [rdi+VMCB_CR_ICPT],SVM_ICPT_CR4_WRITE
     mov dword [rdi+VMCB_EXC],(1<<8)|(1<<18)
@@ -48,7 +50,7 @@ app_vm_amd_prepare:
     mov [rdi+VMCB_IOPM],rax
     lea rax,[rbx+AVM_MSRPM]
     mov [rdi+VMCB_MSRPM],rax
-    mov dword [rdi+VMCB_ASID],2
+    mov dword [rdi+VMCB_ASID],AVM_CPU_ASID
     mov byte [rdi+VMCB_TLB],1
     mov dword [rdi+VMCB_VINTR],SVM_VINTR_MASKING
     mov qword [rdi+VMCB_NP],1
@@ -328,6 +330,32 @@ app_vm_amd_turn:
     call hv_svm_exit_record_at
     test eax,eax
     jz app_vm_cpu_stop
+%ifdef PAOS_TOOLS_CPU_INSTANCE
+    ; Tools MMIO decode context: CS attrib (type/S/DPL/P bits 0-7, AVL/L/DB/G
+    ; bits 8-11) in VMX AR layout, the VMCB CPL, and DecodeAssists bytes.
+    mov rdi,[rel avm_svm+VSP_VMCB]
+    movzx eax,word [rdi+VMCB_CS+2]
+    mov ecx,eax
+    and eax,0xff
+    and ecx,0xf00
+    shl ecx,4
+    or eax,ecx
+    mov [rel avm_exit_ctx+TXC_CS_AR],eax
+    movzx eax,byte [rdi+TVM_VMCB_CPL]
+    mov [rel avm_exit_ctx+TXC_CPL],al
+    movzx eax,byte [rdi+TVM_VMCB_INSN_N]
+    cmp eax,15
+    jbe .tools_insn_count
+    xor eax,eax                    ; an impossible count: walk instead
+.tools_insn_count:
+    mov [rel avm_exit_ctx+TXC_INSN_N],al
+    lea rsi,[rdi+TVM_VMCB_INSN]
+    lea rdi,[rel avm_exit_ctx+TXC_INSN]
+    mov ecx,15
+    cld
+    rep movsb
+    mov byte [rel avm_exit_ctx+TXC_VALID],1
+%endif
     mov rdi,[rel avm_svm+VSP_VMCB]
     mov eax,[rdi+VMCB_EXITINTINFO]
     mov [rel avm_vectoring],eax
@@ -366,8 +394,11 @@ app_vm_amd_turn:
 
 avma_offsets: dw 0x578,0x5d8,0x570,0x558,0x550,0x548,0x448,0x458,0x4d0,0x668,0x560,0xa8,0xac,0xffff,0x68,0xffff,0x670,0x628,0x630,0x638
 avma_initial: dq AVM_KERNEL+0x200,0x8000,2,0x80010033,0x1000,0x6b0,0,0,0xd01,0x0007040600070406,0x400,0,0,0,0,0x6b0,0,0,0,0
+; Tools uses the same code with separately declared, literal private storage.
+%ifndef PAOS_TOOLS_CPU_INSTANCE
 %include "core/abi/wdata.inc"
 %macro WDATA_hv_app_vm_amd 0
 avma_entered: db 0
 %endmacro
 WDATA_DEFER WDATA_hv_app_vm_amd
+%endif

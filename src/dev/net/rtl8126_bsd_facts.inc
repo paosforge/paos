@@ -1,5 +1,6 @@
 ; Register/firmware data from pinned ISC OpenBSD if_rge.c / if_rgereg.h.
 ; Copyright (c) 2019, 2020, 2023-2025 Kevin Lo <kevlo@openbsd.org>
+; Copyright (c) 2019, 2020, 2025 Kevin Lo <kevlo@openbsd.org>
 ; Permission to use, copy, modify, and distribute this software for any purpose
 ; with or without fee is hereby granted, provided that the above copyright
 ; notice and this permission notice appear in all copies.

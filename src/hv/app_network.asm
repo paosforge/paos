@@ -7,6 +7,7 @@
 ;; OWNER saga:hv
 ;; CONTEXT: bsp_only
 %include "hv/app_network.inc"
+%include "hv/guest_destination.inc"
 ; One actual app VM exists. All pointers, bindings, routes and TCP custody are
 ; native. Linux supplies only a bounded host/port and opaque stream bytes.
 ; Policy callback: RDI actual snapshot128, RSI zeroed host256, EDX256,
@@ -558,6 +559,9 @@ an_open:
     rep movsq
     jmp an_progress
 
+an_public_peer:
+    HV_GUEST_PUBLIC_IP
+
 an_status:
     cmp dword [rel an_phase],AN_IDLE
     je an_fault
@@ -603,10 +607,14 @@ an_progress:
     inc qword [rel an_queries]
     jmp an_pending
 .address:
-    test edx,edx
+    mov [rel an_peer_ip],edx
+    mov eax,edx
+    xor edx,edx
+    xor ecx,ecx
+    AN_CALL an_public_peer
+    test eax,eax
     jz an_failed
-    cmp edx,-1
-    je an_failed
+    mov edx,[rel an_peer_ip]
     mov [rel an_peer_ip],edx
     mov dword [rel an_phase],AN_ARP
 .route:
@@ -616,6 +624,16 @@ an_progress:
     AN_CALL dns_wire_route_snapshot
     test rax,rax
     jnz an_pending
+    mov edx,[rel an_route_snapshot]
+    test edx,edx
+    jz an_failed
+    mov ecx,[rel an_route_snapshot+8]
+    test ecx,ecx
+    jz an_failed
+    mov eax,[rel an_peer_ip]
+    AN_CALL an_public_peer
+    test eax,eax
+    jz an_failed
     mov eax,[rel an_route_snapshot]
     mov [rel an_route+4],eax
     xor eax,[rel an_peer_ip]

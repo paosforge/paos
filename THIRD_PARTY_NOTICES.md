@@ -15,7 +15,9 @@ This snapshot is a source preview, not a release distribution.
     0x80..0xFF are blank;
   - `src/bootmgr/paos_bootmgr.asm` `face_ocr_font`: the Boot Manager face glyphs U+0020..U+007E; the control rows are
     blank cells;
-  - `src/boot/boot_menu.asm` `bm_face_ocr_font`: the 22-glyph compact copy of the same face.
+  - `src/boot/boot_menu.asm` `bm_face_ocr_font`: the 22-glyph compact copy of the same face;
+  - `src/boot/boot_face.asm` `bf_font`: the 41-glyph copy (U+002B..U+0039, U+0061..U+007A) for the public loading
+    face's version text.
 - **Source:** Spleen 2.1.0 by Frederic Cambus, https://github.com/fcambus/spleen (tag `2.1.0`, commit
   `c3b655c5718757863e828c02115e96b149281159`), release tarball `spleen-2.1.0.tar.gz`
   (SHA-256 `8b47c56f1a6eb858fbcf9e34530557404b02fbb3455e38e64fb84473fd0c372f`), file `spleen-8x16.bdf`
@@ -376,6 +378,21 @@ acknowledgment; no RTL8168 derivation check or counsel dependency. This does not
 clear I219 or other unresolved provenance leads. AX88179, RTL8125/RTL8126 and the
 other provenance leads remain unresolved; none receives an MPL grant by virtue
 of this file.
+
+## Native RTL8125 and RTL8126 OpenBSD rge(4) notices (ISC)
+
+`src/dev/net/rtl8125.asm`, `src/dev/net/rtl8126.asm` and
+`src/dev/net/rtl8126_bsd_facts.inc` reference the pinned OpenBSD rge(4)
+sources `sys/dev/pci/if_rge.c` and `sys/dev/pci/if_rgereg.h` (ISC):
+
+> Copyright (c) 2019, 2020, 2023-2025 Kevin Lo <kevlo@openbsd.org>
+> Copyright (c) 2019, 2020, 2025 Kevin Lo <kevlo@openbsd.org>
+
+Both notices, with the full ISC permission and disclaimer text, upstream URLs
+and pinned revisions, are retained in
+[LICENSES/RGE_OPENBSD_ISC_NOTICES.md](LICENSES/RGE_OPENBSD_ISC_NOTICES.md).
+This is notice compliance only (ROOT118591): RTL8125/RTL8126 provenance and
+similarity review remain unresolved, and no MPL grant follows from this entry.
 
 ## Mozc romaji preedit conversion table (BSD-3-Clause)
 
@@ -916,3 +933,34 @@ revision/patch history and local-only synthesis input custody limits are also
 explicit. See `third_party/mp3/SOURCE.md` for the exact deterministic preparation,
 shipped-table transformations and remaining limitations. Source delivery and
 coefficient regeneration are not whole candidate or codec qualification.
+
+## Stock wallpapers: Unsplash photographs (Unsplash License)
+
+Seven of the nine stock wallpapers in `src/gui/wallpapers/` are photographs
+published on Unsplash under the Unsplash License, <https://unsplash.com/license>.
+They are third-party works, not PaOS project source, and are not licensed under
+the project's MPL-2.0 or Apache-2.0 terms. The Unsplash License permits copying,
+modifying and redistributing the photos. It does not permit selling unmodified
+copies, or compiling photos from Unsplash to replicate a similar or competing
+service. PaOS ships them only as desktop wallpapers. The credits below are
+copied from `src/gui/wallpapers/STOCK.JSN`, which also records each delivered
+file's size and SHA-256.
+
+| File | Photo | Photographer | Unsplash page |
+|---|---|---|---|
+| `W01.JPG` | White blossoms | Mink Mingle | <https://unsplash.com/photos/white-petaled-flowers-during-day-96JD67agngE> |
+| `W02.JPG` | Infinite ferns | Teemu Paananen | <https://unsplash.com/photos/photo-of-green-fern-plant-OOE4xAnBhKo> |
+| `W03.JPG` | Water ripples | Mink Mingle | <https://unsplash.com/photos/a-view-of-the-water-from-the-bottom-of-a-swimming-pool-AlEyuIKuSmc> |
+| `W04.JPG` | City waterfront | CHUTTERSNAP | <https://unsplash.com/photos/landscape-photography-of-city-skyline-at-night-JH0wCegJsrQ> |
+| `W07.JPG` | Lake at dawn | Intricate Explorer | <https://unsplash.com/photos/majestic-mountains-reflected-in-a-serene-lake-at-sunrise-gjI-YoxuFys> |
+| `W08.JPG` | Misty ridges | Willian Justen de Vasconcellos | <https://unsplash.com/photos/landscape-photography-of-mountains-with-fog-_MMP5j_fCqw> |
+| `W09.JPG` | Painted light | Nathan Broadbent | <https://unsplash.com/photos/abstract-textured-painting-with-blue-and-yellow-strokes-DkO2Isk9tjo> |
+
+The other two stock wallpapers are not Unsplash photos. They were generated with
+AI for PaOS (`STOCK.JSN` source "PaOS original") and are identified here as
+generated material, as CONTRIBUTING.md asks. Each JPEG is a baseline delivery
+encoding of a retained PNG original (Pillow 12.1.0, quality 88, 4:2:0, no crop,
+resize or edits; Peter 10/31), recorded in the `conversions` list of `STOCK.JSN`:
+
+- `W05.JPG` "Wildflower Dusk": AI-generated for PaOS; JPEG SHA-256 `24268efc05035b32625391219a7b0beac4eb9e778877b0ac20ad2e954b1fb1f2`, converted from the retained PNG original SHA-256 `8d9fca4738defafa6e4d93eb190e65723d722c59a4971b65f4eac63a6846f76b`.
+- `W06.JPG` "Midnight Skyline": AI-generated for PaOS; JPEG SHA-256 `26afbe0054477edf48979b819862f82c0f09fb83b92095c38a0afac16fa4efee`, converted from the retained PNG original SHA-256 `9f09dd103225c6fee32c6b1696ff8d54c9530ac72edcaab1a32f445afa279b8e`.

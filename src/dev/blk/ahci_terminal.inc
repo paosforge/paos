@@ -5,6 +5,15 @@
 ; RBX/RBP/R12..R15. Family12: header +32 physical ports, fixed40u32 each.
 AT_BYTES equ 33*160
 AT_POLLS equ 200
+; T4-4 328 (ROOT 121217(2), SEC 121222 A4): the same admission and all-port
+; .preflight, MMIO/config reads only, into its own buffer; no latch, no write.
+; EAX 0/1 every port qualifies (or no owned AHCI), -1 refusal, -2 latched replay.
+; power_s5_nic_stop calls it before any native terminal effect.
+ahci_terminal_preflight:
+    mov byte [rel ahci_terminal_preflight_mode],1
+    call ahci_terminal_quiesce
+    mov byte [rel ahci_terminal_preflight_mode],0
+    ret
 ahci_terminal_quiesce:
     pushfq
     push rbx
@@ -16,6 +25,10 @@ ahci_terminal_quiesce:
     cld
     call ahci_vmd_terminal_reset
     lea r13,[rel ahci_terminal_observations]
+    cmp byte [rel ahci_terminal_preflight_mode],0
+    je .buffer
+    lea r13,[rel ahci_terminal_preflight_observations] ; A4: never reads as a terminal outcome
+.buffer:
     mov rdi,r13
     mov ecx,AT_BYTES/8
     xor eax,eax
@@ -254,6 +267,11 @@ ahci_terminal_quiesce:
     jb .preflight
     mov dword [r13+112],0
     or dword [r13+16],16
+    cmp byte [rel ahci_terminal_preflight_mode],0
+    je .effects
+    mov eax,1                            ; preflight: every port qualifies; stop before any write
+    jmp .out
+.effects:
     ; All owners qualified before first mutation; re-admit original device now.
     call .admit
     jc .refused
@@ -599,16 +617,21 @@ ahci_terminal_quiesce:
     je ahci_empty_terminal_check
     cmp dword [r12+4],1
     je .owned_check
+    ; ROOT 122179: an unregistered port's PxIS is read (read-only) before its predicates,
+    ; so a refusing row names its bits (Lenovo 776 :960 refused before IS was read).
+    AT_PORT_READ 0x10,35
     mov eax,[r12+76]
     and eax,15
-    jnz .bad
+    jz .det_inactive
+    call ahci_atapi_terminal_admit       ; T4-4 328 A3: DET3 only for this boot's stopped ATAPI row
+    jc .bad
+.det_inactive:
     test dword [r12+104],0xc011
     jnz .bad
     cmp dword [r12+100],0
     jne .bad
-    AT_PORT_READ 0x10,35                 ; no pending IRQ owned by an unregistered port
-    test eax,eax
-    jnz .bad
+    cmp dword [r12+140],0                ; no pending IRQ owned by an unregistered port
+    jne .bad
     mov dword [r12+148],0
     mov dword [r12+152],0
     mov dword [r12+12],0                 ; independently qualified unregistered inactive
@@ -654,5 +677,14 @@ ahci_terminal_selected_id: dd 0
 ahci_terminal_latched: dd 0
 align 8
 ahci_terminal_observations: times AT_BYTES db 0
+; T4-4 328 A4: the preflight's own state, a separate zero block (existing layout unchanged).
+%include "core/abi/wdata.inc"
+%macro WDATA_BSS_dev_blk_ahci_terminal_preflight 0
+alignb 8
+ahci_terminal_preflight_observations: resb AT_BYTES
+ahci_terminal_preflight_mode: resb 1
+%endmacro
+WDATA_BSS_DEFER WDATA_BSS_dev_blk_ahci_terminal_preflight
 
 %include "dev/blk/ahci_empty_terminal.inc"
+%include "dev/blk/ahci_atapi_stop.inc"         ; T4-4 328 bring-up record + A3 admission

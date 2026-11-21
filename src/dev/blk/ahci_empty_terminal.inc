@@ -175,8 +175,20 @@ ahci_empty_terminal_validate:
     jnz .bad
     cmp dword [r10+144],5
     jb .bad
+    call .stale_entry                     ; S-6 (SEC 121230): FS F4 table (b) for this port
+    jc .bad
     cmp dword [r10+144],6
-    ja .bad
+    jbe .writes_bound                     ; 5..6 as before, only with no clear recorded
+    cmp dword [r10+144],7
+    jne .bad
+    test edx,edx                          ; 7 only with the one DHRS W1C recorded
+    jz .bad
+    or dword [r12+16],16384               ; kind3 row: accepted the F4 seventh write
+    jmp .writes_ok
+.writes_bound:
+    test edx,edx
+    jnz .bad
+.writes_ok:
     cmp dword [r10+148],0
     jne .bad
     cmp dword [r10+152],200
@@ -201,6 +213,41 @@ ahci_empty_terminal_validate:
     clc
     ret
 .bad:
+    stc
+    ret
+; S-6 helper: EDX=1 when this port's F4 entry records the one W1C (original ==
+; cleared == AEO_IS_STALE) under the same claimed HBA (ABAR, BDF), 0 when nothing
+; was latched as cleared. CF1 for any other entry, another HBA or a bad query. RAM only.
+.stale_entry:
+    push rdi
+    mov edi,r14d
+    call ahci_empty_owner_is_get
+    pop rdi
+    jc .stale_bad
+    test edx,edx
+    jz .stale_none                        ; never latched: no clear possible
+    mov edx,[rax+4]
+    test edx,edx
+    jz .stale_none                        ; latched, no W1C intent: 5..6 only
+    cmp edx,AEO_IS_STALE
+    jne .stale_bad
+    cmp edx,[rax]
+    jne .stale_bad
+    lea rax,[rel ahci_empty_owner_is_table]
+    mov rdx,[rax+AEO_IS_ABAR]
+    cmp rdx,[r13+64]
+    jne .stale_bad
+    mov edx,[rax+AEO_IS_BDF]
+    cmp edx,[r10+32]                      ; already bound to the terminal's bus/dev/fn
+    jne .stale_bad
+    mov edx,1
+    clc
+    ret
+.stale_none:
+    xor edx,edx
+    clc
+    ret
+.stale_bad:
     stc
     ret
 

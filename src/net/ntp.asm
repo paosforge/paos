@@ -1,6 +1,6 @@
 ;; MODULE net/ntp
 ;; LAYER 4
-;; EXPORTS ntp_reply_view, ntp_reply_start_ms, ntp_reply_done_ms, ntp_route_revoke, ntp_sample_t1_1, ntp_sample_t1_2, ntp_sample_t1_3, ntp_sample_t1_4, ntp_sample_t4_1, ntp_sample_t4_2, ntp_sample_t4_3, ntp_sample_t4_4, ntp_init, ntp_mark_ready, ntp_sync_start, ntp_sync_wall_offset, ntp_tick, ntp_wire_ingest, ntp_applied, ntp_offset_ms, ntp_delay_ms, ntp_stratum, ntp_state, ntp_reason, ntp_server_port, ntp_timeout_phase, ntp_arp_tx, ntp_query_tx, ntp_rx_udp, ntp_rx_match, ntp_sample_count, ntp_selected_sample, ntp_wall_offset_before, ntp_wall_offset_after, ntp_sync_mono_start, ntp_sync_mono_commit, ntp_rtc_reads_before, ntp_rtc_reads_after, ntp_rtc_writes_before, ntp_rtc_writes_after, ntp_guard_start_ms, ntp_guard_deadline_ms, ntp_guard_fire_ms, ntp_guard_fired, ntp_receipt_valid, ntp_receipt_persisted, ntp_receipt_objid, ntp_receipt_version, ntp_receipt_owner, ntp_receipt_schema, ntp_receipt_checksum, ntp_receipt_utc_us, ntp_receipt_offset_fp, ntp_receipt_delay_fp, ntp_receipt_server_ip, ntp_receipt_samples, ntp_receipt_selected, ntp_receipt_stratum, ntp_m_ready, ntp_m_query, ntp_m_apply
+;; EXPORTS ntp_first_commit_us, ntp_first_commit_origin, ntp_reply_view, ntp_reply_start_ms, ntp_reply_done_ms, ntp_route_revoke, ntp_sample_t1_1, ntp_sample_t1_2, ntp_sample_t1_3, ntp_sample_t1_4, ntp_sample_t4_1, ntp_sample_t4_2, ntp_sample_t4_3, ntp_sample_t4_4, ntp_init, ntp_mark_ready, ntp_sync_start, ntp_sync_start_ip, ntp_sync_wall_offset, ntp_origin, ntp_receipt_origin, ntp_tick, ntp_wire_ingest, ntp_applied, ntp_offset_ms, ntp_delay_ms, ntp_stratum, ntp_state, ntp_reason, ntp_server_port, ntp_timeout_phase, ntp_arp_tx, ntp_query_tx, ntp_rx_udp, ntp_rx_match, ntp_sample_count, ntp_selected_sample, ntp_wall_offset_before, ntp_wall_offset_after, ntp_sync_mono_start, ntp_sync_mono_commit, ntp_rtc_reads_before, ntp_rtc_reads_after, ntp_rtc_writes_before, ntp_rtc_writes_after, ntp_guard_start_ms, ntp_guard_deadline_ms, ntp_guard_fire_ms, ntp_guard_fired, ntp_receipt_valid, ntp_receipt_persisted, ntp_receipt_objid, ntp_receipt_version, ntp_receipt_owner, ntp_receipt_schema, ntp_receipt_checksum, ntp_receipt_utc_us, ntp_receipt_offset_fp, ntp_receipt_delay_fp, ntp_receipt_server_ip, ntp_receipt_samples, ntp_receipt_selected, ntp_receipt_stratum, ntp_m_ready, ntp_m_query, ntp_m_apply
 ;; IMPORTS lib/safe_buffer, boot/serial, core/lib/mem, core/lib/fixed, core/time, net/arp_cache, net/dns, net/udp
 ;; CAPS
 ;; OWNER saga:net
@@ -30,6 +30,11 @@ NTP_GUARD_INTERVAL_MS equ 10000
 NTP_MAX_ROOT_16       equ 0x00050000   ; 5.0 s signed root delay
 NTP_MAX_DISP_16       equ 0x00050000   ; 5.0 s unsigned root dispersion
 NTP_RECEIPT_OWNER     equ 1
+; Who started the current/last exchange (SEC 122036 T1). 0 = none this boot.
+; The automatic codes equal command_ntp's NTP_AUTO_R_OPT42 / NTP_AUTO_R_DEFAULT.
+NTP_ORIGIN_OWNER      equ 1             ; owner NTPSYNC (text path)
+NTP_ORIGIN_OPT42      equ 2             ; clock unit: DHCP option-42 server
+NTP_ORIGIN_DEFAULT    equ 3             ; clock unit: resolved default name
 NTP_RECEIPT_OBJID     equ 0x4e54505245434549 ; stable "NTPRECEI" object id
 NTP_RECEIPT_SCHEMA    equ 0x4e545053594e4301 ; "NTPSYNC" schema v1
 
@@ -215,6 +220,8 @@ ntp_grade_commit_best:
     mov  [rel ntp_receipt_selected], al
     mov  al, [rel ntp_stratum]
     mov  [rel ntp_receipt_stratum], al
+    mov  al, [rel ntp_origin]             ; RAM only: not in NTR1, KV or checksum
+    mov  [rel ntp_receipt_origin], al
     mov  byte [rel ntp_receipt_valid], 1
     mov  byte [rel ntp_receipt_persisted], 0
     mov  rax, [rel ntp_offset_fp]
@@ -233,6 +240,7 @@ ntp_grade_commit_best:
     mov  byte [rel ntp_applied], 1
     mov  byte [rel ntp_state], NTP_ST_DONE
     mov  byte [rel ntp_reason], NTP_R_ACCEPTED
+    call ntp_first_commit_note
     xor  eax, eax
     ret
 .commit_fail:
@@ -241,10 +249,51 @@ ntp_grade_commit_best:
     mov  rax, -1
     ret
 
+; First successful commit of any origin this boot. Starts/rejects/retries never
+; write it; CLOCK PAINT binds to this immutable RAM receipt, not the FSM stamp.
+ntp_first_commit_note:
+    cmp  qword [rel ntp_first_commit_us], 0
+    jne  .out
+    mov  rax, [rel ntp_sync_mono_commit]
+    mov  [rel ntp_first_commit_us], rax
+    movzx eax, byte [rel ntp_origin]
+    mov  [rel ntp_first_commit_origin], rax
+.out:
+    ret
+
 ; Contract-facing name for the Task1060-backed wall-offset synchronization.
 ; It is an alias, not a second packet/client path.
 ntp_sync_wall_offset:
     jmp  ntp_sync_start
+
+; ntp_sync_start_ip(EDI=wire-order IPv4, ESI=NTP_ORIGIN_OPT42 or _DEFAULT) ->
+; same results as ntp_sync_start, at port 123. Any other ESI is recorded as
+; DEFAULT: this entry is never labelled as an owner sync. Clock unit (ROOT 122029): the boot server (DHCP option 42 or the
+; resolved default name) enters the one SNTP path right after its text parse;
+; every route, envelope and accept rule below is shared, not duplicated. Only a
+; unicast server is accepted (SEC 122036 T3): 0/8, 127/8, 224/4, 240/4 and
+; 255.255.255.255 refuse as a bad server before any packet.
+ntp_sync_start_ip:
+    mov  qword [rel ntp_reply_start_ms], 0
+    mov  qword [rel ntp_reply_done_ms], 0
+    push rbx
+    push r12
+    push r13
+    xor  r12d, r12d
+    mov  ebx, edi
+    mov  r13d, NTP_PORT
+    cmp  esi, NTP_ORIGIN_OPT42
+    je   .origin
+    mov  esi, NTP_ORIGIN_DEFAULT
+.origin:
+    mov  [rel ntp_origin], sil
+    test bl, bl                         ; wire order: BL = first octet
+    jz   ntp_sync_start.bad_server
+    cmp  bl, 127
+    je   ntp_sync_start.bad_server
+    cmp  bl, 224
+    jae  ntp_sync_start.bad_server
+    jmp  ntp_sync_start.parsed
 
 ; ntp_sync_start(RDI=dotted IPv4[:port] text) -> 0 pending / -1 bad / -2 no route.
 ; Port 123 remains the ordinary/default service.  The optional port is a real
@@ -254,6 +303,7 @@ ntp_sync_start:
     ; Even a refused fresh request must not project the previous reply timer.
     mov  qword [rel ntp_reply_start_ms], 0
     mov  qword [rel ntp_reply_done_ms], 0
+    mov  byte [rel ntp_origin], NTP_ORIGIN_OWNER
     ; 1230e1 seam: accepted samples may update wall time, never monotonic time.
     push rbx
     push r12
@@ -264,6 +314,7 @@ ntp_sync_start:
     je   .bad_server
     mov  ebx, eax
     mov  r13d, edx
+.parsed:
     lea  rdi, [rel ntp_route]
     call dns_wire_route_snapshot
     test rax, rax
@@ -901,17 +952,21 @@ ntp_set_reject:
 
 ; Deterministic request/read-back + bounded lowest-delay selection and hostile
 ; KAT.  Every rejection is checked against the byte-exact prior wall_offset;
-; the live wall is restored after the temporary apply.
+; all live clock state is restored after the temporary apply, including the
+; anti-revival hold and previous NTP frame. This runs before command service.
 ntp_selftest:
+    sub  rsp, 8                         ; keep callback/helper calls ABI-aligned
+    lea  rdi, [rel .kat_body]
+    call time_wall_selftest_run
+    jmp  .kat_live_state
+.kat_body:
+    push qword [rel ntp_first_commit_us]
+    push qword [rel ntp_first_commit_origin]
     push rbx
     push r12
     push r13
     push r14
     push r15
-    call time_wall_now_us
-    mov  r15, rax                       ; restore point
-    movzx eax, byte [rel time_wall_source]
-    mov  [rel ntp_kat_saved_source], al ; RCQ-17: restored with the wall
     lea  rdi, [rel ntp_kat_endpoint_default]
     call ntp_parse_ipv4
     cmp  eax, 0x0a0200c0                ; wire bytes 192.0.2.10
@@ -1217,14 +1272,6 @@ ntp_selftest:
     lea  rdi, [rel str_ntp_kat_fail]
     call serial_string
 .kat_restore:
-    test r15, r15
-    jz   .kat_unseeded
-    mov  rdi, r15
-    movzx esi, byte [rel ntp_kat_saved_source]
-    call time_wall_set_us
-    jmp  .kat_reset
-.kat_unseeded:
-    call time_wall_clear                ; RCQ-17: no fixture time left as a valid ntp wall
 .kat_reset:
     call ntp_grade_reset
     mov  byte [rel ntp_state], NTP_ST_IDLE
@@ -1242,6 +1289,16 @@ ntp_selftest:
     mov  qword [rel ntp_receipt_offset_fp], 0
     mov  qword [rel ntp_receipt_delay_fp], 0
     mov  qword [rel ntp_receipt_server_ip], 0
+    pop  r15
+    pop  r14
+    pop  r13
+    pop  r12
+    pop  rbx
+    pop  qword [rel ntp_first_commit_origin]
+    pop  qword [rel ntp_first_commit_us]
+    ret
+.kat_live_state:
+    ; The clock-owned wrapper has now restored the live frame, not the KAT's.
     mov  rax, [rel wall_offset]
     mov  [rel ntp_wall_offset_before], rax
     mov  [rel ntp_wall_offset_after], rax
@@ -1254,11 +1311,7 @@ ntp_selftest:
     mov  rax, [rel time_rtc_write_count]
     mov  [rel ntp_rtc_writes_before], rax
     mov  [rel ntp_rtc_writes_after], rax
-    pop  r15
-    pop  r14
-    pop  r13
-    pop  r12
-    pop  rbx
+    add  rsp, 8
     ret
 
 %include "core/abi/wdata.inc" ; WDATA_DEFER; standalone assemblies expand blocks in place
@@ -1318,7 +1371,6 @@ ntp_timeout_phase: db 0
 ntp_m_ready:     db 0
 ntp_m_query:     db 0
 ntp_m_apply:     db 0
-ntp_kat_saved_source: db 0             ; RCQ-17: pre-self-test wall source
 align 8
 ntp_arp_tx:      dq 0
 ntp_query_tx:    dq 0
@@ -1344,6 +1396,8 @@ ntp_receipt_selected:   db 0
 ntp_receipt_stratum:    db 0
 ntp_receipt_valid:      db 0
 ntp_receipt_persisted:  db 0
+ntp_origin:             db 0              ; NTP_ORIGIN_* of the current/last exchange
+ntp_receipt_origin:     db 0              ; NTP_ORIGIN_* of the applied receipt
 
 align 8
 ntp_route:       times dns_route_snapshot_size db 0
@@ -1367,3 +1421,11 @@ ntp_kat_endpoint_port:    db "192.0.2.10:40123",0
 ntp_kat_endpoint_bad:     db "192.0.2.10:70000",0
 %endmacro
 WDATA_DEFER WDATA_net_ntp_0
+
+%include "core/abi/wdata.inc"
+%macro WDATA_net_ntp_first_commit 0
+align 8
+ntp_first_commit_us: dq 0
+ntp_first_commit_origin: dq 0
+%endmacro
+WDATA_DEFER WDATA_net_ntp_first_commit

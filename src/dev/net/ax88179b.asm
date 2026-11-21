@@ -213,7 +213,7 @@ axb_control:
     mov [rel axb_diag_result],rax   ; preserve the complete uint64 completion
     cmp rax,2
     jne .done
-    mov rdx,0x00020011000302c0      ; only an exact existing PHYSR read
+    mov rdx,0x00020001000302c0      ; only an exact MII BMSR read (latest of the pair)
     cmp [rel axb_diag_setup],rdx
     jne .done
     movzx edx,word [rbx]
@@ -648,10 +648,11 @@ axb_link_status:
     mov dword [rel axb_diag_phase],3
     mov dword [rel axb_diag_outcome],3
     mov qword [rel axb_diag_phy_valid],0
-    AXB_USB 0x00020011000302c0,axb_phy,2
-    cmp rax,2
-    jne .retire
-    movzx eax,word [rel axb_phy]
+    lea rcx,[rel axb_control]
+    movzx edx,byte [rel axb_port]
+    call ax88179b_phy_word          ; standard MII link/speed/duplex, read-only
+    test eax,eax
+    jz .retire
     and eax,0xe400
     movzx edx,word [rel axb_link+8]
     and edx,0xe400
@@ -732,10 +733,12 @@ ax88179b_frame_stats:
 
 ; Cached newer-AX diagnostic, RDI=128 writable bytes. No HC/port callback,
 ; allocation, policy, health, selection or lifecycle change. Private owner is
-; tried once; a busy record has only version=1,busy=1 and no sampled values.
+; tried once; a busy record has only version=2,busy=1 and no sampled values.
 ; Sixteen uint64 fields: version,state,registered,health,busy,phase,outcome,
 ; phy_valid,phy,cached_link_valid,cached_phy,cached_usb,cached_chip,
-; control_count,last_setup,last_result. PHY-valid belongs to the latest
+; control_count,last_setup,last_result. Version2: phy is the raw MII BMSR
+; (latest exact read); cached_phy keeps the PHYSR-layout word that
+; ax88179b_phy_word derives from standard MII. PHY-valid belongs to the latest
 ; activation/active-link sample; cached-link fields belong to the last completed
 ; helper publication and may be older. Setup is eight wire bytes, never a pointer.
 ; Phase:0 none,1 bind/init,2 activation,3 active PHY poll,4 disconnect.
@@ -751,7 +754,7 @@ ax88179b_link_snapshot:
     mov ecx,16
     cld
     rep stosq
-    mov qword [r8],1
+    mov qword [r8],2
     mov ecx,1
     lock cmpxchg [rel axb_busy],ecx
     jne .busy
@@ -826,7 +829,7 @@ axb_dev: times dev_size db 0
 axb_ops: times netdev_ops_size db 0
 axb_info: times netdev_info_size db 0
 axb_setup: times 8 db 0
-axb_phy: times 2 db 0
+axb_phy: times 2 db 0                ; unused since the MII oracle; kept so AXB STATIC layout is unchanged
 axb_plan: times 48 db 0
 axb_parked: times 16 db 0
 axb_link: times 32 db 0

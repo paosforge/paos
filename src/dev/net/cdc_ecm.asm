@@ -1,6 +1,6 @@
 ;; MODULE dev/net/cdc_ecm
 ;; LAYER 3
-;; EXPORTS cdc_ecm_port_owned, cdc_ecm_selftest, cdc_ecm_create, cdc_ecm_frame_stats
+;; EXPORTS cdc_ecm_port_owned, cdc_ecm_selftest, cdc_ecm_create, cdc_ecm_frame_stats, cdc_ecm_usb_counters
 ;; IMPORTS boot/native_driver_gate, usb/enum, net/netdev, boot/serial, core/lib/fmt, core/lib/str, dev/net/ax88179, dev/net/ax88179b, dev/net/ax88179b_attach
 ;; CAPS
 ;; OWNER saga:net
@@ -741,6 +741,41 @@ cdc_ecm_frame_stats:
     ret
 ; END FRAME STATS
 
+; cdc_ecm_usb_counters(RDI=handle, RSI=out 10 qwords) -> EAX 0, or -1 when RDI is
+;   not this backend's static device (out untouched). NETCFG USB SHOW readout
+;   (ROOT118715): pointer equality only, no transfer, no health or watch change.
+;   out: 0 rx_calls 1 rx_frames 2 rx_errors 3 rx_last_rc 4 rx_gated
+;        5 tx_calls 6 tx_frames 7 tx_last_rc 8 dev.health 9 watch.streak
+cdc_ecm_usb_counters:
+    lea  rax, [rel cdc_ecm_dev]
+    cmp  rdi, rax
+    jne  .unavailable
+    mov  eax, [rel cdc_ecm_rx_calls]
+    mov  [rsi + 0], rax
+    mov  rax, [rel cdc_ecm_stat_rx_frames]
+    mov  [rsi + 8], rax
+    mov  eax, [rel cdc_ecm_rx_errors]
+    mov  [rsi + 16], rax
+    mov  rax, [rel cdc_ecm_rx_last_rc]
+    mov  [rsi + 24], rax
+    mov  eax, [rel cdc_ecm_rx_gated]
+    mov  [rsi + 32], rax
+    mov  eax, [rel cdc_ecm_tx_calls]
+    mov  [rsi + 40], rax
+    mov  rax, [rel cdc_ecm_stat_tx_frames]
+    mov  [rsi + 48], rax
+    mov  rax, [rel cdc_ecm_tx_last_rc]
+    mov  [rsi + 56], rax
+    mov  eax, [rel cdc_ecm_dev + dev.health]
+    mov  [rsi + 64], rax
+    mov  eax, [rel cdc_ecm_watch + usbnic_watch.streak]
+    mov  [rsi + 72], rax
+    xor  eax, eax
+    ret
+.unavailable:
+    mov  eax, -1
+    ret
+
 cdc_ecm_tx:
     cmp  dword [rel cdc_ecm_dev + dev.health], HEALTH_DEAD
     je   .err                           ; RCQ-10: never a transfer to a GONE device (DEGRADED still sends)
@@ -821,6 +856,7 @@ cdc_ecm_rx_poll:
     pop  rsi
     test rax, rax
     jz   .present
+    inc  dword [rel cdc_ecm_rx_gated]   ; GONE gate: no transfer (USB SHOW RXGATE)
     xor  eax, eax
     ret
 .present:
@@ -852,6 +888,9 @@ cdc_ecm_rx_poll:
     inc  dword [rel cdc_ecm_rx_calls]
     test rax, rax
     jz   .rx_ret                        ; 0 = nothing queued (the idle case) -> silent
+    jns  .rx_err_counted
+    inc  dword [rel cdc_ecm_rx_errors]  ; refused/error completion (USB SHOW RXERR)
+.rx_err_counted:
     push rax
     xor  edx, edx
     test rax, rax
@@ -1013,6 +1052,8 @@ cdc_ecm_reg_rc:        dd 0            ; netdev_register rc: slot index or -1 (r
 cdc_ecm_bind_step:     db 0            ; RCQ-10: bind step reached (1 SET_CONFIG .. 6 packet filter)
 cdc_ecm_tx_calls:      dd 0
 cdc_ecm_rx_calls:      dd 0
+cdc_ecm_rx_errors:     dd 0
+cdc_ecm_rx_gated:      dd 0
 cdc_ecm_tx_reported:   db 0
 cdc_ecm_rx_reported:   db 0
 cdc_ecm_tx_last_rc:    dq 0

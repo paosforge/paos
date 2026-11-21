@@ -1,6 +1,6 @@
 ;; MODULE gui/widget_tabstrip
 ;; LAYER 6
-;; EXPORTS wgt_menu_type, wgt_tabstrip_register, wgt_menu_dismiss_outside, wgt_menu_hover, wgt_menu_shown_at, wgt_menu_overlay_press, wgt_menu_key, wgt_tabstrip_state, wgt_tabstrip_active_tag, wgt_tabstrip_has_tag, wgt_tabstrip_key, wgt_tabstrip_middle, wgt_tabstrip_release_window, ts_close_request
+;; EXPORTS wgt_menu_type, wgt_tabstrip_type, wgt_tabstrip_active_of, wgt_tabstrip_register, wgt_menu_dismiss_outside, wgt_menu_hover, wgt_menu_shown_at, wgt_menu_overlay_press, wgt_menu_key, wgt_tabstrip_state, wgt_tabstrip_active_tag, wgt_tabstrip_has_tag, wgt_tabstrip_key, wgt_tabstrip_middle, wgt_tabstrip_release_window, ts_close_request
 ;; IMPORTS gui/window, gui/widget, gui/window_mgmt, gui/font_aa, gui/chat_app, gui/wm_pointer, boot/serial, core/lib/str
 ;; CAPS
 ;; OWNER saga:gui
@@ -703,6 +703,8 @@ wgt_tabstrip_hit:
     call ts_remove_tab
     jmp  .handled
 .select:
+    cmp  [r12 + TS_ACTIVE], eax
+    setne byte [rel ts_sig_changed]     ; the app's on_click only on a real change
     mov  [r12 + TS_ACTIVE], eax
     mov  edi, eax
     mov  esi, TS_EV_SELECT
@@ -726,6 +728,8 @@ wgt_tabstrip_hit:
     jb   .ov_set
     xor  eax, eax
 .ov_set:
+    cmp  [r12 + TS_ACTIVE], eax
+    setne byte [rel ts_sig_changed]
     mov  [r12 + TS_ACTIVE], eax
     mov  edi, eax
     mov  esi, TS_EV_OVERFLOW
@@ -892,6 +896,9 @@ wgt_tabstrip_key:
 .prev_dec:
     dec  eax
 .select:
+    mov  byte [rel ts_sig_bykbd], 1       ; a key drove this change: FE checks the hand
+    cmp  [r12 + TS_ACTIVE], eax
+    setne byte [rel ts_sig_changed]     ; the app's on_click only on a real change
     mov  [r12 + TS_ACTIVE], eax
     mov  edi, eax
     mov  esi, TS_EV_SELECT
@@ -963,11 +970,48 @@ ts_sync_host_label:
     mov  [rcx + rdx*8], rdi
     ret
 
-; ts_event(edi=index, esi=kind, R12=inst)
+; ts_event(edi=index, esi=kind, R12=inst). A caller that changed TS_ACTIVE by
+; a human select/overflow set ts_sig_changed: the strip's app on_click record
+; (wgt_form_signal_hook) follows. Consumes both one-shot flags. Preserves all
+; registers except flags, as before.
 ts_event:
     mov  [r12 + TS_EV_KIND], esi
     mov  [r12 + TS_EV_INDEX], edi
     inc  dword [r12 + TS_EV_SEQ]
+    cmp  byte [rel ts_sig_changed], 0
+    je   .done
+    push rax
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    mov  rax, [rel wgt_form_signal_hook]
+    test rax, rax
+    jz   .restore
+    mov  edi, [r12 + TS_WID]
+    mov  esi, WGT_SIG_TAB
+    cmp  byte [rel ts_sig_bykbd], 0
+    je   .call
+    or   esi, WGT_SIG_KEY
+.call:
+    call rax
+.restore:
+    pop  r11
+    pop  r10
+    pop  r9
+    pop  r8
+    pop  rdi
+    pop  rsi
+    pop  rdx
+    pop  rcx
+    pop  rax
+.done:
+    mov  byte [rel ts_sig_changed], 0
+    mov  byte [rel ts_sig_bykbd], 0
     ret
 
 ; ts_new_tab(R12=inst): "<bound base title> <n>" (UI wave 2 B6c: the base is
@@ -1209,6 +1253,35 @@ wgt_tabstrip_state:
 .out:
     ret
 
+; wgt_tabstrip_active_of(EDI=widget id) -> EAX = its active tab index, or -1
+;   when no instance is bound to that widget at its current birth (WGI_ID) and
+;   window. Read-only (no rebind). Clobbers RCX, RDX.
+wgt_tabstrip_active_of:
+    push rbx
+    mov  ebx, edi
+    call wgt_slot_ptr
+    mov  rdx, rax
+    lea  rax, [rel ts_inst]
+    mov  ecx, TS_MAX_INST
+.scan:
+    cmp  [rax + TS_WID], ebx
+    jne  .next
+    mov  edi, [rdx + WGI_WIN]
+    cmp  [rax + TS_WIN], edi
+    jne  .next
+    mov  rdi, [rdx + WGI_ID]
+    cmp  [rax + TS_BIRTH], rdi
+    jne  .next
+    mov  eax, [rax + TS_ACTIVE]
+    pop  rbx
+    ret
+.next:
+    add  rax, TS_SZ
+    loop .scan
+    mov  eax, -1
+    pop  rbx
+    ret
+
 ; wgt_tabstrip_active_tag(EDI=host slot) -> EAX = stable tag of the active tab
 ;   (0 = the slot has no bound tab strip), ECX = tab count. B5 (usage suite
 ;   TAB-02/TAB-03): the identity an app keys its per-tab content on; tags follow
@@ -1427,6 +1500,7 @@ menu_choose:
     push rbx
     push r12
     mov  rbx, rax
+    mov  [rel menu_sig_id], edi         ; the app's on_click record after the redraw
     mov  [rbx + WGI_SEL_HI], ecx            ; chosen item
     inc  dword [rbx + WGI_SUBMITS]          ; selection generation
     mov  dword [rbx + WGI_SEL_LO], 0        ; close
@@ -1484,6 +1558,18 @@ menu_choose:
     call ts_sync_host_label
 .draw:
     call wmx_draw_all
+    mov  rax, [rel wgt_form_signal_hook]
+    test rax, rax
+    jz   .signalled
+    mov  edi, [rel menu_sig_id]
+    mov  esi, WGT_SIG_MENU
+    cmp  byte [rel menu_sig_bykbd], 0
+    je   .signal
+    or   esi, WGT_SIG_KEY
+.signal:
+    call rax
+.signalled:
+    mov  byte [rel menu_sig_bykbd], 0
     pop  r12
     pop  rbx
     ret
@@ -1708,6 +1794,7 @@ wgt_menu_key:
     jae  .yes
     mov  rax, rbx
     mov  edi, r13d
+    mov  byte [rel menu_sig_bykbd], 1     ; Enter chose it: FE checks the hand
     call menu_choose
     jmp  .yes
 .close:
@@ -1849,6 +1936,10 @@ align 4
 wgt_tabstrip_type: dd -1
 wgt_menu_type:     dd -1
 menu_last_item:    dd -1
+menu_sig_id:       dd -1                    ; menu_choose's widget id (on_click record)
+menu_sig_bykbd:      db 0                     ; 1 = wgt_menu_key's Enter drove menu_choose
+ts_sig_changed:    db 0                     ; 1 = a human select/overflow changed TS_ACTIVE
+ts_sig_bykbd:        db 0                     ; 1 = wgt_tabstrip_key drove it
 menu_hit_id:       dd -1                    ; wgt_menu_hit's widget id (menu_choose)
 menu_hot_pointer:  db 0                     ; 1 = the highlight follows the pointer (hover)
 str_menu_new_tab:  db "New_Tab", 0

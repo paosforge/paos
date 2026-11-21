@@ -480,8 +480,12 @@ form_about_click:
     lea rdx, [rel form_titles + 3*FORM_TITLE_MAX]
     cmp [rcx + rbx*8], rdx
     jne .chain
+    ; SEC119469: the built-in About is stamped by wmx_owner_open with the
+    ; opener's principal, never WM_OWNER_CHROME. Only PRIN_OWNER (a local
+    ; human action, or owner console/runner dispatch) credits; 0 (no
+    ; authenticated principal), chrome, Try, system and app principals refuse.
     lea rcx, [rel wm_owner]
-    cmp qword [rcx + rbx*8], WM_OWNER_CHROME
+    cmp qword [rcx + rbx*8], PRIN_OWNER
     jne .chain
     test r13, r13
     jz .chain

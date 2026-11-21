@@ -3,7 +3,7 @@
 ;; LAYER 6
 ;; PURPOSE Stock sign-in composition; sec/session is the only authority owner.
 ;; EXPORTS lock_screen_account_offer, lock_screen_focus_assert, lock_screen_boot_release, lock_screen_notice, lock_screen_init, lock_screen_sync, lock_screen_desktop_start, lock_screen_boot_report, lock_screen_key, lock_screen_click, lock_screen_command_allowed, lock_surface_ready, lock_surface_loading, taskbar_draw_registry, taskbar_attention_tick, lock_composition_ok, lock_desktop_created, lock_wallpaper_load, lock_wallpaper_bind, lock_wallpaper_fit_choice, lock_screen_display_serial
-;; IMPORTS gui/format_confirm, gui/adopt_confirm, gui/calendar, gui/app_launch_flow, gui/app_launcher, gui/lock_ssh_notice, gui/recovery_notice, gui/lock_fade, gui/lock_screen_card, gui/form_loader, gui/widget, gui/widget_image, gui/window, gui/window_mgmt, gui/chat_app, gui/demo_three_windows, gui/console_app, gui/widget_console_grid, gui/session_restore, sec/session, sec/principal, svc/command, svc/command_auth, svc/command_cons, svc/command_udp, boot/header, boot/gop, boot/serial, core/lib/str, gui/taskbar, dev/input/ps2, gui/input_route, config/keep_config, sec/keyprov, gui/netmon_form, gui/terminal_consent, sec/terminal_native, gui/account_local, hv/app_network
+;; IMPORTS boot/boot_menu, gui/format_confirm, gui/adopt_confirm, gui/calendar, gui/app_launch_flow, gui/app_launcher, gui/lock_ssh_notice, gui/recovery_notice, gui/lock_screen_text, gui/lock_fade, gui/lock_screen_card, gui/form_loader, gui/widget, gui/widget_image, gui/window, gui/window_mgmt, gui/chat_app, gui/demo_three_windows, gui/console_app, gui/widget_console_grid, gui/session_restore, sec/session, sec/principal, svc/command, svc/command_auth, svc/command_cons, svc/command_udp, boot/header, boot/gop, boot/serial, core/lib/str, gui/taskbar, dev/input/ps2, gui/input_route, config/keep_config, sec/keyprov, gui/netmon_form, gui/terminal_consent, sec/terminal_native, gui/account_local, hv/app_network
 ;; OWNER saga:login_surfaces
 
 LOCK_SLOT equ WM_MAX - 1                ; reserved from ordinary WM allocation (the top slot; G9: was the literal 7 = old WM_MAX-1)
@@ -52,6 +52,7 @@ lock_screen_init:
     cmp  eax, -1
     je   .fail
     call wmx_retire_floor_windows
+    call fb_boot_surface_restore        ; T5-9: boot desktop tests are done; compose the sign-in on the real surface
     mov  byte [rel lock_surface_loading], 1
     mov  eax, [rel wgt_count]
     mov  [rel lock_widget_first], eax
@@ -545,8 +546,8 @@ lock_screen_focus_assert:
 ; passwordless push on and no password sign-in yet this boot, a phone approval
 ; unlocks without the owner's files, so the prompt says the password opens them.
 lock_prompt_text:
-    cmp  byte [rel lock_setup_staged], 1
-    je   .staged
+    cmp byte [rel prin_stage_not_applied], 1
+    je .not_applied
     call principal_first_owner_available
     cmp  eax, 1
     je   .setup
@@ -563,8 +564,12 @@ lock_prompt_text:
 .setup:
     lea  rsi, [rel str_lock_setup]
     ret
-.staged:
-    lea  rsi, [rel str_lock_staged]
+.not_applied:
+    call principal_first_owner_available
+    cmp eax, 1
+    lea rsi, [rel str_lock_change_not_applied]
+    jne .out
+    lea rsi, [rel str_lock_setup_not_applied]
     ret
 
 lock_screen_setup_label:
@@ -738,6 +743,7 @@ lock_screen_paint:
     call lock_card_layout
     call lock_wallpaper_bind
     call wmx_draw_all
+    call lock_card_owner_disclosure
     mov  edi, [rel lock_notice_kind]        ; RCQ-27: a full repaint keeps the notice
     mov  esi, [rel lock_notice_secs]
     call lock_notice_paint
@@ -783,6 +789,7 @@ lock_bg6_stamp:
 ; then prints the LOGINBOOT line the late boot report owed. Idempotent; preserves
 ; all registers.
 lock_screen_boot_release:
+    call bm_face_retire                   ; T6-1 R6, SEC B3: fence the boot face before any lock scanout copy
     cmp  byte [rel fb_present_boot_hold], 0
     je   .out
     call lock_fade_begin                  ; router keyboard-live edge, no wait
@@ -1210,8 +1217,6 @@ lock_screen_submit:
     push r13
     movzx r13d, byte [rel lock_submit_human]
     mov  byte [rel lock_submit_human], 0
-    cmp  byte [rel lock_setup_staged], 1
-    je   .setup_staged
     call principal_first_owner_available
     cmp  eax, 1
     je   .setup
@@ -1266,18 +1271,23 @@ lock_screen_submit:
     lea  rdi, [rel wgt_secret_bytes]
     mov  esi, [rel wgt_secret_len]
     call principal_first_owner_stage
-    mov  r12d, eax
+    mov r12d, eax
+    mov r13, rdx                        ; fresh handle from this HUMAN submission only
     call wgt_secret_clear
     test r12d, r12d
-    jnz  .denied
-    mov  byte [rel lock_setup_staged], 1
-.setup_staged:
-    call wgt_secret_clear
-    mov  byte [rel lock_submit_human], 0
-    mov  edi, [rel lock_widget_first]
-    add  edi, 8
-    lea  rsi, [rel str_lock_staged]
-    jmp  .notice
+    jnz .denied
+    test r13, r13
+    jz .denied
+    mov edi, PRIN_OWNER
+    mov rsi, r13
+    call session_shell_offer_bind
+    test eax, eax
+    jnz .denied
+    mov byte [rel session_unlock_local_proof], 1
+    call session_shell_unlock
+    test eax, eax
+    jz .sync
+    jmp .denied
 .setup_denied:
     call wgt_secret_clear
 .denied:
@@ -1489,6 +1499,10 @@ lock_cmd_state:
     call form_out_put_str
     jmp  .ready
 .bad:
+    ; SEC 122037 / ROOT 122038: the refusal carries its own code (as SESSIONINFO,
+    ; ACPIINFO). RSI is still the response: only session_nonce_valid ran, and it
+    ; uses R10/RCX/RAX.
+    mov  qword [rsi + RSP_CODE], CMDE_BADARG
     call form_out_reset
     lea  rdi, [rel str_lock_bad_nonce]
     call form_out_put_str
@@ -1581,7 +1595,8 @@ str_lock_user_legacy: db "user",0
 str_login_label_ok: db "[PAOS64] login owner label: one authenticate_bind path and data-preserving rotation KAT PASS [login.owner.label.migration]", 13, 10, 0
 str_login_label_fail: db "[PAOS64] login owner label: rotation KAT FAIL [login.owner.label.migration.fail]", 13, 10, 0
 str_lock_setup: db "Set local owner password",0
-str_lock_staged: db "Owner staged; restart to apply",0
+str_lock_change_not_applied: db "Not applied; password unchanged",0
+str_lock_setup_not_applied: db "Setup not applied; set up again",0
 str_lock_stage: db "Stage owner",0
 str_lock_signin: db "Sign in",0
 str_lock_prompt: db "Enter your password",0

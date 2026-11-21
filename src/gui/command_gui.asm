@@ -1,7 +1,7 @@
 ;; MODULE gui/command_gui
 ;; LAYER 6
 ;; EXPORTS gui_declare, gui_dpms_declare, gui_cursor_apply_relative, cmd_verb_kbinj, cmd_verb_kbdbuf, cmd_verb_mouseinj, cmd_verb_mousestat, cmd_verb_flicker, clock_zone_select, gui_out_buf, gui_out_ready, gui_out_cur
-;; IMPORTS gui/kbd_prefs, gui/lang_prefs, gui/wallpaper_prefs, gui/config_prefs, gui/clock_prefs, core/lib/fmt, svc/command, svc/command_auth, gui/window, gui/cadence_mark, dev/input/ps2, gui/input_route, dev/usb/hid, gui/wm_pointer, gui/widget, gui/chat_app, core/time, gui/window_mgmt, sec/keyprov, gui/input_domain_pad
+;; IMPORTS gui/clock_paint, gui/kbd_prefs, gui/lang_prefs, gui/wallpaper_prefs, gui/config_prefs, gui/clock_prefs, core/lib/fmt, svc/command, svc/command_auth, gui/window, gui/cadence_mark, dev/input/ps2, gui/input_route, dev/usb/hid, gui/wm_pointer, gui/widget, gui/chat_app, core/time, gui/window_mgmt, sec/keyprov, gui/input_domain_pad
 ;; CAPS
 ;; OWNER saga:gui_substrate_input
 ; ============================================================================
@@ -296,6 +296,25 @@ cmd_verb_clock:
     call cmd_handler_prologue
     push rdi
     push rsi
+    mov  rax, [rdi + REQ_ARG]
+    test rax, rax
+    jz   .ordinary
+    ; Exact selector only; nonces and all legacy arguments retain CLOCK bytes.
+    cmp  byte [rax + 0], 'P'
+    jne  .ordinary
+    cmp  byte [rax + 1], 'A'
+    jne  .ordinary
+    cmp  byte [rax + 2], 'I'
+    jne  .ordinary
+    cmp  byte [rax + 3], 'N'
+    jne  .ordinary
+    cmp  byte [rax + 4], 'T'
+    jne  .ordinary
+    cmp  byte [rax + 5], 0
+    jne  .ordinary
+    call clock_paint_format
+    jmp  .ready
+.ordinary:
     call taskbar_read_wall
     call gui_out_reset
     lea  rdi, [rel str_ck_hdr]
@@ -314,6 +333,7 @@ cmd_verb_clock:
     call gui_out_tz_zone
     call gui_out_clock_src
     call gui_out_clock_prefs
+.ready:
     mov  byte [rel gui_out_ready], 1
     pop  rsi
     pop  rdi

@@ -86,6 +86,9 @@ wgt_provider_current:
     jz .ok
     lea rcx,[rel summon_palette_text_event]
     cmp rax,rcx
+    je .ok
+    lea rcx,[rel settings_terminal_network_text_event]
+    cmp rax,rcx
     jne .bad
 .ok:
     mov rax,rbx

@@ -1,7 +1,7 @@
 ;; MODULE sec/keyprov
 ;; LAYER 5
 ;; PURPOSE GA0-K keystroke provenance: a typed line carries where its keys came from, and an injected line runs as the injecting principal.
-;; EXPORTS keyprov_inj_seq, keyprov_inject_scancode, keyprov_refuse_builtin, keyprov_line_note, keyprov_line_clear, keyprov_field_write, keyprov_field_take, keyprov_dispatch, keyprov_key_is_human, keyprov_line_owner_equivalent, keyprov_frame_bind, keyprov_refuse_ssh, keyprov_ctx, keyprov_field_ctx, keyprov_field_state, keyprov_active_taint, keyprov_lines_tainted, keyprov_lines_refused
+;; EXPORTS keyprov_inj_seq, keyprov_inject_scancode, keyprov_refuse_builtin, keyprov_line_note, keyprov_line_clear, keyprov_field_write, keyprov_field_take, keyprov_dispatch, keyprov_key_is_human, input_modifiers_are_human, keyprov_line_owner_equivalent, keyprov_frame_bind, keyprov_refuse_ssh, keyprov_ctx, keyprov_field_ctx, keyprov_field_state, keyprov_active_taint, keyprov_lines_tainted, keyprov_lines_refused
 ;; IMPORTS svc/command, svc/command_auth, svc/command_audit, sec/principal, core/lib/fmt, core/lib/str
 ;; OWNER saga:sec
 ; ============================================================================
@@ -95,6 +95,9 @@ keyprov_inject_scancode:
     mov  rdx, [rel command_auth_remote_ticket]
     test rdx, rdx
     jz   .mask_ready
+%ifdef PAOS_LAB_CHANNEL
+    LAB_INJECT_KEY_MASK
+%endif
     cmp  qword [rdx + AUTH_T_STATE], AUTH_TS_SSH
     je   .ticket_mask
     cmp  qword [rdx + AUTH_T_STATE], AUTH_TS_INJECTED
@@ -292,6 +295,9 @@ keyprov_field_write:
     mov  rax, [rel command_auth_remote_ticket]
     test rax, rax
     jz   .context
+%ifdef PAOS_LAB_CHANNEL
+    LAB_KEYPROV_MASK
+%endif
     cmp  qword [rax + AUTH_T_STATE], AUTH_TS_SSH
     jne  .context
     mov  rsi, [rax + AUTH_T_CAP]
@@ -400,6 +406,24 @@ keyprov_key_is_human:
     sete al
     ret
 
+; input_modifiers_are_human -> EAX 1 when every held modifier belongs to
+; the native hand. Use alongside keyprov_key_is_human at human-action
+; boundaries: the trigger's provenance alone says nothing about a held chord.
+; These are the same per-side custody bits used by the router's shortcuts.
+; Released Win may retain its old taint; only a held Win participates.
+input_modifiers_are_human:
+    xor  eax, eax
+    cmp  byte [rel input_kbd_sides_inj], 0
+    jne  .out
+    cmp  byte [rel input_win_down], 0
+    je   .yes
+    cmp  byte [rel input_win_inj], 0
+    jne  .out
+.yes:
+    mov  eax, 1
+.out:
+    ret
+
 ; keyprov_line_owner_equivalent(RDI = taint record) -> EAX 1 when the line may
 ; act with the owner's authority outside the registry (Terminal power words,
 ; the ssh client): clean, or tethered to the OWNER principal with an
@@ -451,6 +475,9 @@ keyprov_frame_bind:
     mov  rdx, [rel command_auth_remote_ticket]
     test rdx, rdx
     jz   .out
+%ifdef PAOS_LAB_CHANNEL
+    LAB_INJECT_FRAME_MASK
+%endif
     cmp  qword [rdx + AUTH_T_STATE], AUTH_TS_SSH
     je   .ticket_mask
     cmp  qword [rdx + AUTH_T_STATE], AUTH_TS_INJECTED

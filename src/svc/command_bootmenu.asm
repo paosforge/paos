@@ -710,7 +710,13 @@ cmd_verb_boot:
     mov  byte [rel bm_manager_command], 1
     cmp  byte [rel pbm_runtime_code_mapped], 1
     jne  .win_no_runtime
+%ifdef PAOS_LAB_CHANNEL
+    LAB_BOOTNEXT_GRANT
+%endif
     movzx edx, byte [rel bm_bootnext_intent]
+%ifdef PAOS_LAB_CHANNEL
+    LAB_BOOTNEXT_REVOKE
+%endif
     call bm_bootnext_gate              ; BootNext is SENSITIVE (EFI_GLOBAL): SPECIAL only, audited
     test rax, rax
     jnz  .win_nvram_refused
@@ -749,7 +755,13 @@ cmd_verb_boot:
     ; ubuntu one-shot, SB-safe. Falls back to legacy CMOS staging when NX.
     cmp  byte [rel pbm_runtime_code_mapped], 1
     jne  .linux_cmos
+%ifdef PAOS_LAB_CHANNEL
+    LAB_BOOTNEXT_GRANT
+%endif
     movzx edx, byte [rel bm_bootnext_intent]
+%ifdef PAOS_LAB_CHANNEL
+    LAB_BOOTNEXT_REVOKE
+%endif
     call bm_bootnext_gate              ; BootNext is SENSITIVE (EFI_GLOBAL): SPECIAL only, audited
     test rax, rax
     jnz  .linux_nvram_refused

@@ -978,8 +978,9 @@ command_udp_dhcp_accept:
 ;   state on any supported NIC). It runs on EVERY reply, including replies to
 ;   unauthenticated requests, so it never calls a driver (srcreview 06:27): no USB
 ;   control transfer per packet, and no AX88179 link-up read that would re-promote a
-;   DEGRADED NIC. e1000e and rtl8168 keep the shared e1000e_link_up byte they both
-;   maintain (byte-identical replies). Any other command NIC reports the bit the
+;   DEGRADED NIC. e1000e keeps the shared e1000e_link_up byte. rtl8168 reports its
+;   memory-only live value (ROOT120117): the shared byte is a one-way latch for
+;   that backend, so a silent rtl8168 read NIC_LINK=1. Any other command NIC reports the bit the
 ;   rate-limited public DHCP tick last sampled for it (command_udp_public_tick,
 ;   UDP_PUBLIC_LINK_MS). In fleet mode (RCQ-10, admin 12:38: the MSI Killer) the
 ;   static owner reports the bit command_udp_fleet_link_tick last sampled for it,
@@ -994,7 +995,7 @@ udp_nic_link_value:
     je   .shared
     lea  rax, [rel rtl8168_dev]
     cmp  rdi, rax
-    je   .shared
+    je   rtl8168_link_live                      ; memory only: phase 1 and the last PHYSTS LinkSts
     cmp  dword [rdi + dev.health], HEALTH_DEAD
     je   .down
     cmp  byte [rel udp_public_dhcp], 1
@@ -2655,6 +2656,7 @@ command_udp_poll:
     pop  rax
     popfq
     call ntp_tick                       ; NTP receipt persists only via NTPSTAT (implicit intent; storage canon)
+    call ntp_auto_tick                  ; clock unit: once-per-boot SNTP start at network-ready (ROOT 122029)
     pushfq
     push rax
     mov  eax, 11
@@ -7882,7 +7884,10 @@ udp_reinit_take:
     cmp byte [rel bootlog_full_mode], 1
     je .no
     cmp qword [rel udp_rsp + RSP_CODE], CMDE_OK
-    jne .no
+    je .own
+    cmp qword [rel udp_rsp + RSP_CODE], CMDE_BADARG ; REINITWORK no-nonce: its own refusal line
+    jne .no                                          ; (dispatch never sets BADARG, ROOT 122100)
+.own:
     sub rsp, 8
     lea rdi, [rel udp_reinit_verbs]
     call udp_line_in_list
@@ -8592,13 +8597,6 @@ udp_send_reply:
     test rax, rax
     jz   .base_typed_status
 %if !PAOS_PUBLIC_BUILD
-    ; A runtime PMOD load can refuse signature/key/native admission. Preserve
-    ; that result on the wire instead of wrapping CMDE_BADARG in generic OK.
-    lea  rdi, [rel udp_line]
-    lea  rsi, [rel str_udp_pmodctl_typed]
-    call strcmp
-    test rax, rax
-    jz   .base_typed_status
     ; The valid module control must reflect its checked native return too.
     lea  rdi, [rel udp_line]
     lea  rsi, [rel str_udp_nonce_echo_typed]
@@ -8619,6 +8617,11 @@ udp_send_reply:
     call udp_put_str
     mov  rdi, [rel udp_arg_ptr]                 ; the raw arg (echoed verbatim, bounded)
     call udp_put_arg_echo
+    ; Exact successful CLOCK PAINT gets its complete same-boot timing record
+    ; before unrelated diagnostics can consume its bounded datagram.
+    call udp_clock_paint_take
+    test eax, eax
+    jnz  .reply_finish
     ; Complete typed replies fit the wire before unrelated boot diagnostics.
     ; Preserve VERSION/native status/bounded ARG and same-boot uptime.
     call udp_fsown_take
@@ -8826,14 +8829,19 @@ udp_send_reply:
     ;     SRVSTAT does), and BOOTLOG FULL's CRC-bound body never takes this envelope.
     ;     A refused request (RSP_CODE != OK: no such verb, auth/capability/desktop lock)
     ;     never ran its handler, so a line pending under its own family is another
-    ;     request's: dropped too. Every staging handler leaves RSP_CODE OK (RCQ-19 N1). ---
+    ;     request's: dropped too. Every staging handler leaves RSP_CODE OK (RCQ-19 N1),
+    ;     except a handler's own argument refusal: CMDE_BADARG is set only by a handler
+    ;     that ran (dispatch never sets it), so its staged line is its own (ROOT 122100). ---
     cmp  byte [rel blk_out_ready], 1
     jne  .no_blk_line
     mov  byte [rel blk_out_ready], 0            ; consumed by this reply, emitted or not
     cmp  byte [rel bootlog_full_mode], 1
     je   .no_blk_line
     cmp  qword [rel udp_rsp + RSP_CODE], CMDE_OK
+    je   .blk_line_own
+    cmp  qword [rel udp_rsp + RSP_CODE], CMDE_BADARG  ; BLKPOLICY .bad: its own refusal line
     jne  .no_blk_line
+.blk_line_own:
     lea  rdi, [rel udp_blk_line_verbs]
     call udp_line_in_list
     test eax, eax
@@ -8988,6 +8996,9 @@ udp_send_reply:
     call udp_put_str
     mov  rdi, [rel boot_tsc_start]
     call udp_put_dec
+%ifdef PAOS_LAB_CHANNEL
+    LAB_STATUS_HOOK
+%endif
 .no_boot_session:
     ; RCQ-27: AC/battery/power-button fields, STATUS only, only on a machine with
     ; an EC platform descriptor, and only to a request signed by the owner (root
@@ -11719,6 +11730,9 @@ udp_put_status_core:
     call udp_put_str
     mov  rdi, [rel boot_tsc_start]
     call udp_put_dec
+%ifdef PAOS_LAB_CHANNEL
+    LAB_STATUS_HOOK
+%endif
     lea  rdi, [rel str_udp_r_crashes]
     call udp_put_str
     movzx edi, byte [rel boot_crashes_observed]
@@ -12427,6 +12441,67 @@ udp_put_dec:
 .truncated:
     mov  byte [rel udp_truncated], 1
     ret
+
+; Projection only, after normal CLOCK dispatch. Read-only PAINT needs the
+; complete bounded record and boot identity, rather than the bulky status tail.
+; A refusal, another selector, or unstaged GUI output never takes this path.
+udp_clock_paint_take:
+    cmp  byte [rel gui_out_ready], 1
+    jne  .no
+    cmp  qword [rel udp_rsp + RSP_CODE], CMDE_OK
+    jne  .no
+    cmp  dword [rel udp_line], 'CLOC'
+    jne  .no
+    cmp  word [rel udp_line + 4], 'K'
+    jne  .no
+    mov  rax, [rel udp_arg_ptr]
+    test rax, rax
+    jz   .no
+    cmp  byte [rax], 'P'
+    jne  .no
+    cmp  byte [rax + 1], 'A'
+    jne  .no
+    cmp  byte [rax + 2], 'I'
+    jne  .no
+    cmp  byte [rax + 3], 'N'
+    jne  .no
+    cmp  byte [rax + 4], 'T'
+    jne  .no
+    cmp  byte [rax + 5], 0
+    jne  .no
+    call udp_put_uptime
+    lea  rdi, [rel str_udp_clock_now]
+    call udp_put_str
+    call boot_ms_now
+    mov  rdi, rax
+    call udp_put_dec
+    lea  rdi, [rel str_udp_r_crashes]
+    call udp_put_str
+    movzx edi, byte [rel boot_crashes_observed]
+    call udp_put_dec
+    lea  rdi, [rel str_udp_r_build_id]
+    call udp_put_str
+    lea  rdi, [rel paos_build_hex]
+    call udp_put_str
+    lea  rdi, [rel str_udp_r_bid]
+    call udp_put_str
+    call build_id_state_text
+    call udp_put_str
+    lea  rdi, [rel str_udp_r_bootsession]
+    call udp_put_str
+    mov  rdi, [rel boot_tsc_start]
+    call udp_put_dec
+    lea  rdi, [rel str_udp_sp]
+    call udp_put_str
+    lea  rdi, [rel gui_out_buf]
+    call udp_put_str
+    mov  byte [rel gui_out_ready], 0
+    mov  eax, 1
+    ret
+.no:
+    xor  eax, eax
+    ret
+str_udp_clock_now: db ' NOW_MS=',0
 
 ; Actual native FSOWN response, including grammar/auth/storage refusals. Pure
 ; bounded wire projection after normal dispatch; never executes or grants IO.
@@ -18727,9 +18802,6 @@ str_udp_hook_typed: db "HOOK", 0
 str_udp_modelrun_typed: db "MODELRUN", 0
 str_udp_r_ok:       db " OK ARG=", 0
 str_udp_r_refused:  db " REFUSED ARG=", 0
-%if !PAOS_PUBLIC_BUILD
-str_udp_pmodctl_typed: db "PMODCTL", 0
-%endif
 %if !PAOS_PUBLIC_BUILD
 str_udp_nonce_echo_typed: db "NONCE_ECHO", 0
 %endif

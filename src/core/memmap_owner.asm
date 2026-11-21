@@ -199,7 +199,7 @@ memmap_owner_census:
     mov  rax, [rel pmod_external_buf]       ; 13 PMOD HELLO preload buffer (pool, kept)
     mov  edx, MMO_PMOD_FILE
     MMO_PUT
-    mov  rax, [rel pmod_nm_buf]             ; 14 PMOD netmon preload buffer (pool, kept)
+    xor  eax, eax                           ; 14 retired PMOD netmon preload (SEC 119690): always absent
     mov  edx, MMO_PMOD_FILE
     MMO_PUT
 %else

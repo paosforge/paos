@@ -2,7 +2,7 @@
 %include "core/abi/build_profile.inc"
 ;; LAYER 0
 ;; EXPORTS boot_guest_foundation_init, efi_entry, boot_services, runtime_services, image_handle, system_table, boot_ms_now, boot_idle_compositor_ticks, boot_bg4_ebs_tsc, boot_bg5_ready_tsc, boot_bg5b_ack_tsc, boot_bg6_pixel_tsc, boot_p7_tsc, boot_prepixel_tsc, boot_device_cuts_tsc, boot_p1_ckpt_tsc, boot_native_cost_tsc, boot_native_cost_done, boot_nic_ready_tsc, boot_nic_ready_observed, boot_hv_foundation_ready_tsc, boot_hv_foundation_ready_ms, boot_hv_foundation_ready, boot_budget_run_full, boot_budget_gated, boot_budget_class, boot_budget_full_failures, boot_settle_tsc, boot_settle_state
-;; IMPORTS gui/format_confirm, gui/adopt_confirm, sec/node_identity_store, gui/app_isolation, hv/app_vm, gui/app_remove, gui/app_install, gui/app_ingress, gui/app_launch_flow, hv/app_transport, gui/app_launcher, boot/native_driver_preload, boot/native_driver_report, svc/boot_failure_control, core/crash_identity, core/maintenance_sources, core/boot_maintenance_source, svc/command_memory_consumer, svc/service_progress, svc/recovery_boot, svc/recovery_controller, svc/device_failure_record, hv/warm_lifecycle, svc/lab_return, gui/power_exec, gui/lock_fade, core/mca_poll, core/mca_init, cognition/ai_intent_controller, hv/vmx, hv/hv_ops, sec/airlock, svc/boot_clock, boot/boot_menu, boot/serial, boot/paging, boot/pmod_loader, boot/gdt, boot/gop, boot/boot_v2_health, boot/menu_labels_qemu, bus/acpi, config/keep_config, core/idt, core/diag, core/lib/str, core/lib/fmt, core/lib/strmem_kat, core/log, core/heap, core/memmap, core/time, core/sched, core/dma, net/tls13, gui/console, gui/liveness_panel, sec/job_receipt, svc/hotpatch, svc/command_filmstrip, svc/command_compat, dev/net/e1000e, dev/net/cdc_ecm, dev/net/cdc_ncm, dev/net/ax88179, net/netdev, hv/vtd, hv/amdvi, gui/lock_screen, sec/session, core/reset_wipe, sec/owner_stage_key, sec/app_store_seal, dev/snd/hda_boot_handoff, boot/firmware_logo, boot/indicator, core/deadman_identity, svc/normal_deadman_live, gui/config_prefs, gui/command_idle_service, gui/terminal_consent, gui/account_local
+;; IMPORTS sec/terminal_network_record, gui/format_confirm, gui/adopt_confirm, sec/node_identity_store, gui/app_isolation, hv/app_vm, gui/app_remove, gui/app_install, gui/app_ingress, gui/app_launch_flow, hv/app_transport, gui/app_launcher, boot/native_driver_preload, boot/native_driver_report, svc/boot_failure_control, core/crash_identity, core/maintenance_sources, core/boot_maintenance_source, svc/command_memory_consumer, svc/service_progress, svc/recovery_boot, svc/recovery_controller, svc/device_failure_record, hv/warm_lifecycle, svc/lab_return, gui/power_exec, gui/lock_fade, core/mca_poll, core/mca_init, cognition/ai_intent_controller, hv/vmx, hv/hv_ops, sec/airlock, svc/boot_clock, boot/boot_menu, boot/serial, boot/paging, boot/pmod_loader, boot/gdt, boot/gop, boot/boot_v2_health, boot/menu_labels_qemu, bus/acpi, config/keep_config, core/idt, core/diag, core/lib/str, core/lib/fmt, core/lib/strmem_kat, core/log, core/heap, core/memmap, core/time, core/sched, core/dma, net/tls13, gui/console, gui/liveness_panel, sec/job_receipt, svc/hotpatch, svc/command_filmstrip, svc/command_compat, dev/net/e1000e, dev/net/cdc_ecm, dev/net/cdc_ncm, dev/net/ax88179, net/netdev, hv/vtd, hv/amdvi, gui/lock_screen, sec/session, core/reset_wipe, sec/owner_stage_key, sec/app_store_seal, dev/snd/hda_boot_handoff, boot/firmware_logo, boot/indicator, core/deadman_identity, svc/normal_deadman_live, gui/config_prefs, gui/command_idle_service, gui/terminal_consent, gui/account_local
 ;; (boot/header is the boot orchestrator — the upward L0->L1 call to core/idt is
 ;;  the documented modlint exception, like the L3->L4 register() edge)
 ;; CAPS
@@ -602,9 +602,11 @@ efi_entry:
     call owner_stage_key_preebs         ; owner S1b-2c-0: the owner stage key Z (NV|BS, born pre-EBS from EFI_RNG/RDSEED/RDRAND, never from Y)
     call app_install_grants_preebs      ; PaOSAppGrants MAC key: HKDF(Z, own label); owner_store below discards Z
     call app_store_seal_preebs          ; app catalog MAC: separate HKDF(Z) domain before Z discard
+    call terminal_network_record_preebs ; independent provider-policy key before Z discard
     call terminal_grants_store_preebs   ; distinct Terminal consent key domain before Z discard
     call public_documents_seal_preebs   ; independent public Documents key domain before Z discard
     call owner_store_preebs             ; owner S1b-1: PaOSOwner A/B (NV|BS) select + PaOSOwnerStage commit, needs Z above
+    call terminal_network_record_after_owner_preebs ; bind committed owner, preserve principal handoff
     call terminal_grants_store_after_owner_preebs ; bind committed owner without consuming principal's handoff
     call public_documents_seal_after_owner_preebs ; bind public Documents to committed owner handoff
     call replay_floor_preebs            ; SEC-replay-record-mac S1: PaOSReplayFloor (NV|BS) B/F' + RT mirror, needs ows_floor_seeded above
@@ -1354,9 +1356,21 @@ efi_entry:
     ; Task2505 selects presentation only after the shared core, storage, USB,
     ; command/auth registry, and device services above are live. CLI skips the
     ; desktop/window group; it does not select a different kernel or boot path.
-    call bm_face_retire                 ; final GUI/CLI now owns every framebuffer write
+    ; T6-1 R6 (root 120520): the CLI and the lab text face (it draws into fb_base,
+    ; which becomes the GUI back buffer) retire here, before either owns a pixel.
+    ; A public GUI boot keeps the face animating on the scanout while the GUI
+    ; composes privately; gui/window and lock_screen_boot_release retire it before
+    ; the first scanout write or scanout identity change (SEC 120517 B3).
     cmp  byte [rel keep_presentation_target], PRESENTATION_CLI
+%if PAOS_PUBLICITY_LAB_PROFILE
+    je   .cli_presentation_floor
+    call bm_face_retire                 ; lab GUI: the text face never outlives selection
+    jmp  .gui_presentation_floor
+.cli_presentation_floor:
+%else
     jne  .gui_presentation_floor
+%endif
+    call bm_face_retire                 ; CLI now owns every framebuffer write
     call ps2_input_selftest
     call session_shell_init
     call headless_cli_declare
@@ -1372,6 +1386,7 @@ efi_entry:
     ;     bg + fb primitives + double-buffer/dirty-rect present + taskbar clock +
     ;     the two verify_gui-sampled windows (w/ open animation) + DPMS tickle +
     ;     flicker sample. Emits the M6 GUI markers; degrades cleanly with no GOP. ---
+    call fb_boot_surface_prepare        ; T5-9: no private back buffer -> park; no desktop pixel before sign-in
     BOOT_SELFTEST ST_GUI_COMPOSITOR
     call filmstrip_capture_desktop       ; checkpoint 3: first complete P7 desktop paint
     BOOT_SELFTEST ST_FILMSTRIP            ; synthetic capture -> chunk reassembly -> shared crc32 KAT
@@ -1480,6 +1495,9 @@ efi_entry:
     call f1_ladder_activate
     call form_loader_declare
     call netmon_form_declare
+%if !PAOS_PUBLIC_BUILD
+    call pmod_watchdog_init             ; same boot point as the retired pmod_netmon_start's call (SEC 119690)
+%endif
     BOOT_SELFTEST ST_FORM_LOADER
     call form_cadence_live_init
     call gui_declare

@@ -581,11 +581,13 @@ cmd_verb_reinit:
 ;   clobbers: caller-saved
 cmd_verb_reinitwork:
     call cmd_handler_prologue
+    push rbx
+    mov  rbx, rsi                        ; response, for the refusal code
     push rdi
     call reinit_power_ram_gate
     pop rdi
     test rax, rax
-    jnz reinit_power_reply_busy
+    jnz  .busy
     mov  rdi, [rdi + REQ_ARG]
     call reinit_tokenize
     call reinit_out_reset
@@ -605,7 +607,7 @@ cmd_verb_reinitwork:
 .enqueue:
     call reinit_power_ram_work_gate
     test rax, rax
-    jnz reinit_power_reply_busy
+    jnz  .busy
     lea  rax, [rel reinit_tok]
     mov  rsi, [rax + 16]                 ; tok2 = nonce
     test rsi, rsi
@@ -628,6 +630,7 @@ cmd_verb_reinitwork:
 .werr:
     lea  rdi, [rel str_ri_work_err]
     call reinit_out_str
+    mov  qword [rbx + RSP_CODE], CMDE_BADARG ; ROOT 122100 (SEC 122037): a refusal reports CMDE_BADARG, not the dispatch OK
     jmp  .done
 .status:
     lea  rdi, [rel str_ri_work_pre]
@@ -648,7 +651,11 @@ cmd_verb_reinitwork:
     call reinit_out_str
 .done:
     mov  byte [rel reinit_out_ready], 1
+    pop  rbx
     ret
+.busy:
+    pop  rbx
+    jmp  reinit_power_reply_busy
 
 ; REINITSTATE <drv> resettable | live — inspect the resettable partition / liveness.
 ;   clobbers: caller-saved

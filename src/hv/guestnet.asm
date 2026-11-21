@@ -1,5 +1,6 @@
 ;; MODULE hv/guestnet
 %include "hv/guest_power.inc"
+%include "hv/guest_destination.inc"
 
 ;; LAYER 5
 ;; EXPORTS guestnet_out_buf, guestnet_out_ready, guestnet_register_verbs, guestnet_status_line, guestnet_state_zero, guestnet_detach, guestnet_device_reset, guestnet_mmio_write, guestnet_try_inject_irq, guestnet_pump, guestnet_console_byte, guestnet_nat_rx_frame, guestnet_physical_dataplane_step, guestnet_domain_bind, guestnet_mmio_writes, guestnet_guest_tx_packets, guestnet_tx_used_advance, guestnet_tx_backpressure
@@ -29,6 +30,7 @@ GN_FRAME_MAX     equ 1514
 GN_NAT_SLOTS     equ 16
 GN_NAT_PORT_BASE equ 40000
 GN_NAT_PORT_END  equ 49152                 ; exclusive; native clients use 49152+
+GN_TCP_CLOSE_US  equ 120000000             ; first accepted FIN, never extended
 GN_TCP_IDLE_US   equ 432000000000          ; 5 days; conservative conntrack idle policy
 GN_UDP_IDLE_US   equ 30000000              ; 30 seconds of accepted-forward inactivity
 GN_TTL_INTERVAL  equ 100000                ; at most ten local error attempts/second
@@ -455,6 +457,9 @@ guestnet_reset_session:
     mov  ecx, GN_NAT_SLOTS
     rep  stosq
     lea  rdi, [rel guestnet_nat_tcp_reserved]
+    mov  ecx, GN_NAT_SLOTS
+    rep  stosq
+    lea  rdi, [rel guestnet_nat_tcp_fin]
     mov  ecx, GN_NAT_SLOTS
     rep  stosq
     lea  rdi, [rel guestnet_icmp_table]
@@ -2579,6 +2584,8 @@ guestnet_ingress_clear:
     mov  qword [rax + rcx * 8], 0
     lea  rax, [rel guestnet_nat_tcp_reserved]
     mov  qword [rax + rcx * 8], 0
+    lea  rax, [rel guestnet_nat_tcp_fin]
+    mov  qword [rax + rcx * 8], 0
 .metadata:
     mov  dword [rel guestnet_ingress_slot], 0
 .done:
@@ -3233,6 +3240,7 @@ guestnet_nat_udp_sweep:
     lea  rdx, [rel guestnet_nat_table]
     lea  r8, [rel guestnet_nat_udp_last]
     lea  rsi, [rel guestnet_nat_tcp_reserved]
+    lea  rdi, [rel guestnet_nat_tcp_fin]
     mov  ecx, GN_NAT_SLOTS
 .validate:
     cmp  byte [rdx + GN_N_VALID], 1
@@ -3243,6 +3251,8 @@ guestnet_nat_udp_sweep:
     jne  .validated_next
     jmp  .validate_last
 .validate_tcp:
+    cmp [rdi],rax
+    ja .bad
     cmp  [rsi], rax
     ja   .bad
     cmp  qword [r8], 0
@@ -3256,6 +3266,7 @@ guestnet_nat_udp_sweep:
     add  rdx, GN_N_SIZE
     add  r8, 8
     add  rsi, 8
+    add  rdi, 8
     dec  ecx
     jnz  .validate
     mov  [rel guestnet_nat_clock_seen], rax
@@ -3263,6 +3274,7 @@ guestnet_nat_udp_sweep:
     lea  rdx, [rel guestnet_nat_table]
     lea  r8, [rel guestnet_nat_udp_last]
     lea  rsi, [rel guestnet_nat_tcp_reserved]
+    lea  rdi, [rel guestnet_nat_tcp_fin]
     mov  ecx, GN_NAT_SLOTS
 .scan:
     cmp  byte [rdx + GN_N_VALID], 1
@@ -3280,6 +3292,14 @@ guestnet_nat_udp_sweep:
 .tcp_scan:
     cmp  byte [rdx + GN_N_PROTO], 6
     jne  .next
+    mov r9,[rdi]
+    test r9,r9
+    jz .tcp_idle
+    mov r10,rax
+    sub r10,r9
+    cmp r10,GN_TCP_CLOSE_US
+    jae .expire
+.tcp_idle:
     mov  r9, [r8]                       ; only accepted forwarding refreshes this
     test r9, r9
     jnz  .tcp_age
@@ -3294,10 +3314,12 @@ guestnet_nat_udp_sweep:
     mov  byte [rdx + GN_N_VALID], 0
     mov  qword [r8], 0
     mov  qword [rsi], 0
+    mov qword [rdi],0
 .next:
     add  rdx, GN_N_SIZE
     add  r8, 8
     add  rsi, 8
+    add  rdi, 8
     dec  ecx
     jnz  .scan
     ret
@@ -3317,7 +3339,173 @@ guestnet_nat_udp_touch:
     div  rcx
     lea  rdx, [rel guestnet_nat_udp_last]
     mov  [rdx + rax * 8], r8
+    cmp byte [rbx+GN_N_PROTO],6
+    jne .out
+    lea rcx,[rel guestnet_nat_tcp_fin]
+    test byte [r12+47],4
+    jnz .reset
+    test byte [r12+47],1
+    jz .out
+    cmp qword [rcx+rax*8],0
+    jne .out
+    mov [rcx+rax*8],r8
+    ret
+.reset:
+    mov byte [rbx+GN_N_VALID],0
+    mov qword [rdx+rax*8],0
+    mov qword [rcx+rax*8],0
+    lea rcx,[rel guestnet_nat_tcp_reserved]
+    mov qword [rcx+rax*8],0
 .out:
+    ret
+
+; Read-only existing owner SSH return exception; never authorizes a new flow.
+; R12=validated original packet. No tuple/rate/ARP/scratch publication.
+guestnet_nat_owner_return:
+    sub rsp,8
+    call time_monotonic_now_us
+    add rsp,8
+    test rax,rax
+    jz .bad
+    cmp rax,[rel guestnet_nat_clock_seen]
+    jb .bad
+    cmp rax,[rel guestnet_ingress_deadline]
+    jae .bad
+    cmp  byte [rel guestnet_active], 1
+    jne  .bad
+    cmp  byte [rel guestnet_nat_up], 1
+    jne  .bad
+    cmp  byte [rel guestnet_net_up], 1
+    jne  .bad
+    cmp  byte [rel hv_linux_running], 1
+    jne  .bad
+    cmp  byte [rel hv_linux_stop_req], 0
+    jne  .bad
+    cmp  byte [rel hv_linux_run_req], 0
+    jne  .bad
+    cmp  byte [rel hv_linux_start_active], 1
+    jne  .bad
+    cmp  byte [rel hv_linux_kboot], 1
+    jne  .bad
+    cmp  byte [rel hv_vcon_ready], 1
+    jne  .bad
+    cmp  qword [rel guestnet_domain_ctx], 0
+    jne  .bad
+    mov  ecx, [rel guestnet_ingress_gen]
+    cmp  ecx, [rel guestnet_launch_gen]
+    jne  .bad
+    cmp  ecx, [rel hv_linux_start_gen]
+    jne  .bad
+    cmp  ecx, [rel hv_linux_start_consumed]
+    jne  .bad
+    mov  rcx, [rel guestnet_ring_epoch]
+    cmp  rcx, [rel guestnet_ingress_ring]
+    jne  .bad
+    mov  rcx, [rel hv_vcon_epoch]
+    cmp  rcx, [rel guestnet_ingress_console]
+    jne  .bad
+    mov  rcx, [rel session_authority_epoch]
+    cmp  rcx, [rel guestnet_ingress_owner]
+    jne  .bad
+    mov  ecx, [rel udp_our_ip3]
+    test ecx, ecx
+    jnz  .host
+    mov  ecx, [rel udp_our_ip2]
+.host:
+    cmp  ecx, [rel guestnet_ingress_host]
+    jne  .bad
+    cmp byte [r12+23],6
+    jne .bad
+    cmp word [r12+34],0x1600
+    jne .bad
+    mov eax,[r12+30]
+    cmp eax,[rel guestnet_ingress_peer]
+    jne .bad
+    mov ax,[r12+36]
+    cmp ax,[rel guestnet_ingress_peerport]
+    jne .bad
+    mov ecx,[rel guestnet_ingress_slot]
+    test ecx,ecx
+    jz .bad
+    cmp ecx,GN_NAT_SLOTS
+    ja .bad
+    dec ecx
+    imul ecx,GN_N_SIZE
+    lea rdx,[rel guestnet_nat_table]
+    add rdx,rcx
+    cmp byte [rdx+GN_N_VALID],1
+    jne .bad
+    cmp byte [rdx+GN_N_PROTO],6
+    jne .bad
+    cmp dword [rdx+GN_N_GIP],GN_GUEST_IP
+    jne .bad
+    cmp word [rdx+GN_N_GPORT],0x1600
+    jne .bad
+    mov ax,[rel guestnet_ingress_peerport]
+    cmp ax,[rdx+GN_N_RPORT]
+    jne .bad
+    mov eax,[rel guestnet_ingress_peer]
+    cmp eax,[rdx+GN_N_RIP]
+    jne .bad
+    mov ax,[rel guestnet_ingress_port]
+    cmp ax,[rdx+GN_N_NPORT]
+    jne .bad
+    mov eax,1
+    ret
+.bad:
+    xor eax,eax
+    ret
+
+guestnet_nat_public_ip:
+    HV_GUEST_PUBLIC_IP
+
+; Packet admission before any NAT state mutation, including expiry/TTL errors.
+; Snapshot-only route read on static profiles; saved-register packet state stays.
+guestnet_nat_destination_admit:
+    push rbx
+    sub rsp,32
+    mov ebx,[r12+30]
+    mov edx,[rel udp_our_ip3]
+    mov ecx,[rel dhcp_ack_mask_v]
+    test edx,edx
+    jnz .classify
+    mov rdi,rsp
+    call dns_wire_route_snapshot
+    test eax,eax
+    jnz .unrouted
+    mov edx,[rsp+dns_route_snapshot.source_ip]
+    cmp edx,[rel udp_our_ip2]
+    jne .unrouted
+    mov eax,[rel udp_our_mac]
+    cmp eax,[rsp+dns_route_snapshot.source_mac]
+    jne .unrouted
+    mov ax,[rel udp_our_mac+4]
+    cmp ax,[rsp+dns_route_snapshot.source_mac+4]
+    jne .unrouted
+    mov ecx,[rsp+dns_route_snapshot.mask_ip]
+.classify:
+    test ecx,ecx
+    jnz .subnet
+    ; A maskless public attempt retains its old reservation-only behavior;
+    ; the existing route check refuses before ARP/wire. No LAN is authorized.
+    xor edx,edx
+.subnet:
+    mov eax,ebx
+    call guestnet_nat_public_ip
+    test eax,eax
+    jnz .out
+    call guestnet_nat_owner_return
+    jmp .out
+.unrouted:
+    ; Preserve public no-route reservation semantics; the downstream route check
+    ; still refuses transmission. Private classes need no route to be refused.
+    xor edx,edx
+    xor ecx,ecx
+    mov eax,ebx
+    call guestnet_nat_public_ip
+.out:
+    add rsp,32
+    pop rbx
     ret
 
 guestnet_nat_tx_frame:
@@ -3345,6 +3533,9 @@ guestnet_nat_tx_frame:
     cmp  dword [r12 + 26], GN_GUEST_IP
     jne  .out
     mov  r13d, eax
+    call guestnet_nat_destination_admit
+    test eax,eax
+    jz .out
     ; A forwarded hop must survive before tuple reservation, route/ARP or
     ; shared scratch access. Only the admitted copy is decremented below.
     cmp  byte [r12 + 22], 1
@@ -3374,8 +3565,8 @@ guestnet_nat_tx_frame:
     test rax, rax
     jz   .out
 .find:
-    ; Search past holes: an existing full tuple keeps its port. TCP has no
-    ; FIN/RST close inference; only the conservative inactivity interval.
+    ; Search past holes: an existing full tuple keeps its port. Accepted
+    ; RST retires it; accepted FIN has a bounded non-refreshing close grace.
     ; New UDP reservations roll back on any send failure; the consumed host
     ; port stays retired even on rollback.
     lea  rbx, [rel guestnet_nat_table]
@@ -3410,6 +3601,11 @@ guestnet_nat_tx_frame:
     inc  r14d
     jmp  .scan
 .allocate:
+    cmp byte [r12+23],6
+    jne .capacity
+    test byte [r12+47],5                 ; stray FIN/RST creates no authority
+    jnz .out
+.capacity:
     cmp  r15, -1
     je   .out                           ; session owns all slots; never evict a live tuple
 .use_free:
@@ -3438,6 +3634,14 @@ guestnet_nat_tx_frame:
     ; same-owner check. A reset during the callback cannot strand it live.
     mov  byte [rbx + GN_N_VALID], 0
 .reservation_ready:
+    mov rax,rbx
+    lea rcx,[rel guestnet_nat_table]
+    sub rax,rcx
+    xor edx,edx
+    mov ecx,GN_N_SIZE
+    div rcx
+    lea rcx,[rel guestnet_nat_tcp_fin]
+    mov qword [rcx+rax*8],0
     mov  al, [r12 + 23]
     mov  [rbx + GN_N_PROTO], al
     mov  ax, [r12 + 34]
@@ -3633,6 +3837,9 @@ guestnet_ttl_error:
     jne  .out
     cmp  word [r12 + 10], 0x4F61
     jne  .out
+    call guestnet_nat_destination_admit
+    test eax,eax
+    jz .out
     ; Finite destination policy: ordinary host addresses only. Local private
     ; subnet is not forwarded; zero/loopback/group/reserved and host .0/.255
     ; are suppressed, including private and conventional directed broadcasts.
@@ -4391,6 +4598,7 @@ guestnet_error_live:
     je   .echo
     lea  rdi, [rel guestnet_nat_table]
     lea  rsi, [rel guestnet_nat_udp_last]
+    lea  r14, [rel guestnet_nat_tcp_fin]
     mov  ecx, GN_NAT_SLOTS
 .flow:
     cmp  byte [rdi + GN_N_VALID], 1
@@ -4417,11 +4625,22 @@ guestnet_error_live:
     mov  rdx, GN_UDP_IDLE_US
     cmp  byte [r12 + 9], 17
     je   .stamp
+    mov rdx,[r14]
+    test rdx,rdx
+    jz .tcp_live
+    cmp rdx,r15
+    ja .bad
+    mov rcx,r15
+    sub rcx,rdx
+    cmp rcx,GN_TCP_CLOSE_US
+    jae .bad
+.tcp_live:
     mov  rdx, GN_TCP_IDLE_US
     jmp  .stamp
 .next:
     add  rdi, GN_N_SIZE
     add  rsi, 8
+    add r14,8
     dec  ecx
     jnz  .flow
     jmp  .bad
@@ -5169,6 +5388,7 @@ guestnet_nat_clock_seen: dq 0
 ; Legacy private name: accepted-forward timestamp for both TCP and UDP.
 guestnet_nat_udp_last: times GN_NAT_SLOTS dq 0
 guestnet_nat_tcp_reserved: times GN_NAT_SLOTS dq 0
+guestnet_nat_tcp_fin: times GN_NAT_SLOTS dq 0
 guestnet_launch_gen:   dd 0
 guestnet_q_lastav:     times 2 dw 0
 guestnet_q_usedidx:    times 2 dw 0

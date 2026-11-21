@@ -47,6 +47,10 @@ app_vm_dispatch:
     je .xsetbv
     cmp eax,15
     je .gp
+%ifdef PAOS_TOOLS_DEVICES_INSTANCE
+    cmp eax,48                     ; tools register window only (hv/tools_vm_mmio)
+    je .tools_mmio
+%endif
     jmp .fault
 .cpuid:
     mov edi,0x6804
@@ -238,6 +242,12 @@ app_vm_dispatch:
     xor esi,esi
     call app_vm_field_write
     jmp .done
+%ifdef PAOS_TOOLS_DEVICES_INSTANCE
+.tools_mmio:
+    call tools_vm_mmio_exit        ; 1: handled, decoded length in the exit record
+    cmp eax,1
+    jne .fault
+%endif
 .skip:
     mov ebx,[rel avm_exit+16]
     lea eax,[rbx-1]
@@ -510,9 +520,12 @@ avmd_msr_write:                   ; ECX id,RAX value ->EAX1/0
     ret
 avmd_gpr_map: db 0,16,24,8,0xff,48,32,40,56,64,72,80,88,96,104,112
 avmd_msr_ids: dd 0xc0000081,0xc0000082,0xc0000083,0xc0000084,0xc0000102,0xc0000103
+; Tools binds this code to its own literal storage (hv/tools_vm_devices).
+%ifndef PAOS_TOOLS_DEVICES_INSTANCE
 %include "core/abi/wdata.inc"
 %macro WDATA_hv_app_vm_dispatch 0
 avm_halted: db 0
 avm_dispatch_fault: db 0
 %endmacro
 WDATA_DEFER WDATA_hv_app_vm_dispatch
+%endif

@@ -1,7 +1,7 @@
 ;; MODULE gui/form_events
 ;; LAYER 6
-;; EXPORTS form_events_observe, form_events_observe_begin, form_events_declare, form_events_name_valid, form_events_bind, form_events_reset, form_events_click, form_events_wait, form_events_cmd, form_events_configure_guest, form_events_lifetime, form_events_slot_lifetime, form_events_first_begin
-;; IMPORTS gui/wm_pointer, gui/widget, gui/window, gui/window_mgmt, gui/chat_app, sec/session, sec/principal, hv/guest_request, svc/command, core/time, core/lib/str, core/lib/mem
+;; EXPORTS form_events_observe, form_events_observe_begin, form_events_declare, form_events_signal, form_events_name_valid, form_events_bind, form_events_reset, form_events_click, form_events_wait, form_events_cmd, form_events_configure_guest, form_events_lifetime, form_events_slot_lifetime, form_events_first_begin
+;; IMPORTS gui/wm_pointer, gui/widget, gui/widget_listview, gui/widget_tabstrip, gui/input_route, gui/window, gui/window_mgmt, gui/chat_app, sec/session, sec/principal, hv/guest_request, svc/command, core/time, core/lib/str, core/lib/mem
 ;; CAPS
 ;; OWNER saga:gui_foundation_ladder
 ;
@@ -34,10 +34,13 @@ FE_OVERRUN equ 5
 FE_BUSY equ 6
 FE_MAX_MS equ 5000
 FE_KEY_SZ equ 136                    ; subject[120], policy generation, token
+FE_ORIGIN_KEY_HAND equ 0x101         ; fe_origins for a native-hand key, never a pointer value
 
 form_events_declare:
     lea  rax, [rel form_events_click]
     mov  [rel wgt_form_event_hook], rax
+    lea  rax, [rel form_events_signal]
+    mov  [rel wgt_form_signal_hook], rax
     lea  rax, [rel form_events_reset]
     mov  [rel wmx_owner_reset_op], rax
     lea  rdi, [rel fe_verb]
@@ -167,16 +170,20 @@ fe_context_start:
     pop  rbx
     ret
 
-; EDI widget, RSI optional on_click. Called on EVERY form allocation after the
-; stable WGI_ID is installed; null clears a recycled binding. Fields are copied
-; out of parser scratch. Binding grants nothing and does not invoke the name.
+; EDI widget, RSI optional event name, EDX key (FE_BIND_*). Called on EVERY form
+; allocation after the stable WGI_ID is installed; null clears a recycled
+; binding. Fields are copied out of parser scratch. Binding grants nothing and
+; does not invoke the name. on_click binds a button, tabstrip or menu;
+; on_select a listview; on_submit a textfield. Any other pair stays unbound.
 form_events_bind:
     push rbx
     push r12
     push r13
     push r14
+    push r15
     mov  r12d, edi
     mov  r13, rsi
+    mov  r15d, edx
     cmp  r12d, WGT_MAX
     jae  .out
     mov  ebx, r12d
@@ -195,8 +202,32 @@ form_events_bind:
     jnz  .out
     mov  edi, r12d
     call wgt_slot_ptr
-    cmp  dword [rax + WGI_TYPE], WGT_TYPE_BUTTON
+    mov  ecx, [rax + WGI_TYPE]
+    cmp  r15d, FE_BIND_CLICK
+    jne  .typed_key
+    cmp  ecx, WGT_TYPE_BUTTON
+    je   .type_ok
+    mov  edx, [rel wgt_tabstrip_type]
+    call fe_type_is
+    je   .plain_ok
+    mov  edx, [rel wgt_menu_type]
+    jmp  .type_check
+.typed_key:
+    mov  edx, [rel wgt_listview_type]
+    cmp  r15d, FE_BIND_SELECT
+    je   .type_check
+    cmp  r15d, FE_BIND_SUBMIT
     jne  .out
+    mov  edx, WGT_TYPE_TEXTFIELD - 1
+.type_check:
+    call fe_type_is
+    jne  .out
+.plain_ok:
+    test dword [rax + WGI_EDIT], WGT_EDIT_SECTEXT
+    jnz  .out
+    cmp  dword [rax + WGI_BIND], 0       ; native live source owns the widget
+    jne  .out
+.type_ok:
     mov  r14, [rax + WGI_ID]
     test r14, r14
     jz   .out
@@ -214,10 +245,22 @@ form_events_bind:
     mov  rsi, r13
     call fe_copy_name
 .out:
+    pop  r15
     pop  r14
     pop  r13
     pop  r12
     pop  rbx
+    ret
+
+; ECX WGI_TYPE, EDX registered type index (-1 unregistered) -> ZF=1 on match.
+fe_type_is:
+    cmp  edx, -1
+    je   .no
+    inc  edx
+    cmp  ecx, edx
+    ret
+.no:
+    cmp  edx, 0                         ; -1 != 0: ZF=0
     ret
 
 ; Zero-fill first: the canonical bounded copy does not clear a prior tail.
@@ -430,6 +473,8 @@ form_events_click:
     mov  r14, rax
     cmp  dword [r14 + WGI_TYPE], WGT_TYPE_BUTTON
     jne  .out
+    mov  qword [rel fe_signal_src], 0   ; a pointer click, never a key
+.typed:
     test dword [r14 + WGI_FLAGS], 1
     jz   .out
     test dword [r14 + WGI_EDIT], WGT_EDIT_DISABLED
@@ -488,6 +533,11 @@ form_events_click:
     mov [rdi],rax
     movzx eax,byte [rel wm_pointer_gesture_origin]
     mov [rdi+8],rax
+    test qword [rel fe_signal_src],WGT_SIG_KEY
+    jz .origin_done
+    mov qword [rdi],FE_ORIGIN_KEY_HAND   ; checked hand key: no pointer claim
+    mov qword [rdi+8],FE_ORIGIN_KEY_HAND
+.origin_done:
     mov  [rbx + FE_SEQ], r15            ; publish only after the row is complete
 .out:
     pop  r15
@@ -496,6 +546,63 @@ form_events_click:
     pop  r12
     pop  rbx
     ret
+
+; EDI widget, ESI source (WGT_SIG_SELECT/SUBMIT/TAB/MENU, | WGT_SIG_KEY when a
+; key drove it). Reached only through wgt_form_signal_hook, after the widget's
+; own input path changed its value (never a setter, app op or form load). A key
+; must be the native hand with human modifiers. The widget type must match the
+; source; then the click's own checks and publication run unchanged.
+form_events_signal:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    cmp  edi, WGT_MAX
+    jae  form_events_click.out
+    mov  r12d, edi
+    mov  r15d, esi
+    test r15d, WGT_SIG_KEY
+    jz   .origin_ok
+    call input_key_is_hand
+    jne  form_events_click.out
+    call input_modifiers_are_human
+    test eax, eax
+    jz   form_events_click.out
+    mov  eax, r15d
+    and  eax, WGT_SIG_KEY - 1
+    cmp  eax, WGT_SIG_SUBMIT
+    je   .enter_press
+    cmp  eax, WGT_SIG_MENU
+    jne  .origin_ok
+.enter_press:                           ; INPUT 120628 I2: Enter drove it; a held
+    call input_enter_is_typematic       ; press raises one record, never per repeat
+    test eax, eax
+    jnz  form_events_click.out
+.origin_ok:
+    mov  edi, r12d
+    call wgt_slot_ptr
+    mov  r14, rax
+    mov  ecx, [r14 + WGI_TYPE]
+    mov  eax, r15d
+    and  eax, WGT_SIG_KEY - 1
+    mov  edx, [rel wgt_listview_type]
+    cmp  eax, WGT_SIG_SELECT
+    je   .type
+    mov  edx, WGT_TYPE_TEXTFIELD - 1
+    cmp  eax, WGT_SIG_SUBMIT
+    je   .type
+    mov  edx, [rel wgt_tabstrip_type]
+    cmp  eax, WGT_SIG_TAB
+    je   .type
+    mov  edx, [rel wgt_menu_type]
+    cmp  eax, WGT_SIG_MENU
+    jne  form_events_click.out
+.type:
+    call fe_type_is
+    jne  form_events_click.out
+    mov  [rel fe_signal_src], r15
+    jmp  form_events_click.typed
 
 ; Native core: EDI op(0 STATUS,1 BEGIN,2 POLL,3 CANCEL), ESI exact window-id,
 ; RDX cursor/token, RCX timeout-ms, R8 full verified request principal.
@@ -1186,5 +1293,6 @@ fe_receipt: resb 176
 fe_receipt_digest: resb 32
 fe_windows: resb (WM_MAX * FE_SZ)
 fe_bindings: resb (WGT_MAX * 64)
+fe_signal_src: resq 1                 ; current publication's WGT_SIG_* source, 0 = click
 %endmacro
 WDATA_BSS_DEFER WDATA_form_events

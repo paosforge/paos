@@ -43,6 +43,9 @@ org 0
 %include "boot/boot_v2_contract.inc" ; data-only Manager/PaOS/Rescue state + LoadOptions ABI (emits no bytes)
 %include "version-identity.inc" ; generated once per build; shared by all wire identities
 %include "boot-v2-owner-key.inc" ; generated from BOOT_V2_OWNER_PUBLIC_KEY: owner trust-root %define byte lists only (no bytes)
+%ifdef PAOS_LAB_CHANNEL ; lab builds only; the lab command channel is not in the public source
+%include "svc/command_auth_lab.inc" ; W2 lab command channel: equates + hook macros only (no bytes); empty unless make PAOS_LAB_CHANNEL=on
+%endif
 ; Contract 2306's single boot-selftest classification table. It is a macro
 ; because boot/header expands the same data once for stable ids and once for
 ; rel32 callbacks/classes; no runtime pointer relocation is required.
@@ -234,6 +237,7 @@ BOOT_BUDGET_ALWAYS ST_VERDICT_BIJECTION,    selftest_verdict_kat
 %undef chainload_linux_arm_bootnext
 %include "boot/early_trap.asm" ; 1273a PRE-EBS FAULT TRAP: hook the FIRMWARE IDT fault gates before the first risky boot-services call so a pre-EBS #GP reaches PaOS (demote + CF9) instead of EDK2 CpuDeadLoop. Closes the 2026-08-06 F12 gap; the PCH-TCO watchdog alternative was refuted on this board (TCO_LOCK set, countdown gated)
 %include "boot/indicator.asm" ; bounded BSP-timed normal boot dots
+%include "boot/boot_face.asm" ; T6-1 public loading face renderer (GOP only, B4-checked)
 %include "boot/boot_menu.asm" ; 1015 boot-canon 3-OS MENU (pre-EBS): PaOS/Windows/Linux/Diagnostics with 2s countdown + ConIn keys + one-shot CMOS override (BOOT verb) -> chainload via boot/chainload; emits the 4 boot-menu markers
 
 ; ---- L1  core ----
@@ -394,6 +398,9 @@ boot_gdt_percpu_load equ gdt_percpu_load
 %define command_guestcpu_public_observation command_acpi_public_observation
 %include "sec/platform_key_health.asm" ; read-only pre-EBS PK warning; never a trust verdict
 %include "svc/command_auth.asm" ; Task2020: one owner-signed, exact-capability, bounded-expiry, durable anti-replay boundary for every remote mutator/intercept
+%ifdef PAOS_LAB_CHANNEL ; lab builds only; the lab command channel is not in the public source
+%include "svc/command_auth_lab.asm" ; W2: LAB1 envelope (separate lab key, node + boot bound, no seq/TTL), lab builds only
+%endif
 %include "bootmgr/recovery_grant.asm" ; R5 shared strict signed grant/request contract
 %include "bootmgr/recovery_route.asm" ; exact same-medium pre-EBS route admission
 %include "svc/recovery_controller.asm" ; explicitly owner-armed finite policy
@@ -704,6 +711,7 @@ command_display_public_observation:
 %include "hv/a1_reset_rtl8161.asm" ; A1: Lenovo RTL8161 read-only discovery
 %include "hv/a1_reset_rtl8168h.asm" ; A1: Beelink RTL8168H read-only discovery
 %include "hv/a1_reset_e5000b.asm" ; A1: MSI E5000B PCI config-only discovery
+%include "hv/a1_reset_rtl8125.asm" ; A1: Reatan RTL8125B read-only discovery
 %include "hv/a1_reset_dispatch.asm" ; A1: explicit observation routes; mutating routes refuse
 %include "hv/driver_domain_a1probe.asm" ; A1: original START R2 op1 caller, reads only
 %include "hv/a1_pci_census.asm" ; A1: bounded explicit eight-function config observation
@@ -909,6 +917,7 @@ command_display_public_observation:
 ; ---- L6 gui (1016, qemu rung): GUI substrate floor — framebuffer/compositor/WM + vitals ----
 %include "gui/theme_tokens.inc" ; F1/D1: the single chrome/taskbar/widget token table (0x00RRGGBB)
 %include "gui/cadence_mark.asm" ; 2131: ONE fixed paint-damage/TSC ring + CADMARK/CADSTAT projection
+%include "gui/clock_paint.asm" ; T1-3 C5b bounded native scanout record, CLOCK PAINT
 %include "gui/window.asm"     ; M6 (1016): GOP fb primitives + double-buffer/dirty-rect + desktop bg + taskbar clock + window manager w/ open-animation + DPMS tickle + flicker detector (content-graded: verify_gui pixel-checks the two title bars)
 %include "gui/shared_surface_portal.asm" ; Task3456: shared surface/portal widget type + slot-14 handle ABI + KAT
 ; 2122: retain C17's token-only implementation as reference; the public erase
@@ -929,6 +938,8 @@ command_display_public_observation:
 %include "sec/app_store_intent.asm" ; synchronous fixed original GUI effect scope
 %include "svc/app_store.asm" ; authenticated installed inventory and snapshot
 %include "sec/app_install_grants.asm" ; owner consent; current instance proof still required
+%include "sec/terminal_network_record.asm" ; provider-policy identity/MAC; DATA/Settings enforce Save
+%include "sec/terminal_network_store.asm" ; native read/enforcement cache; no Save or tools caller yet
 %include "sec/terminal_grants_store.asm" ; separate authenticated read selections; SEC owns live policy
 %include "sec/app_binding.asm" ; actual VM/signed snapshot/full window identity
 %include "sec/session.asm" ; SS-1: sole login-bound lock/unlock owner; consumes authenticate_bind output and gates session_restore
@@ -1134,6 +1145,9 @@ command_display_public_observation:
 %include "gui/app_confirm.asm" ; native human one-invocation approval
 %include "gui/terminal_consent.asm" ; distinct Terminal physical consent/continuous notice
 %include "sec/terminal_policy.asm" ; SEC-owned native Terminal policy and callback composition
+%include "sec/terminal_network_gate.asm" ; pure native hostname/ClientHello leaves; tools broker composition follows
+%include "sec/terminal_network_session.asm"
+%include "hv/terminal_network.asm" ; native-only staging core; callbacks default NULL, no endpoint
 %include "gui/terminal_provider.asm" ; native GUI provider; SEC registers its table
 %include "gui/app_launcher.asm" ; checked bundle desktop entry, native exact-attempt callback
 %include "gui/chat_send.asm" ; native human exact-question confirmation for paos.chat
@@ -1151,6 +1165,8 @@ command_display_public_observation:
 %define SETTINGS_UPDATE_DAILY_POLICY_BUILT 1
 %include "gui/settings_updates.asm" ; native Updates front door, trusted backend seam
 %include "gui/settings_update_policy.asm" ; exact local-owner signed DATA consent, no restart
+%include "gui/settings_terminal_network_consent.asm" ; private native Save custody
+%include "gui/settings_terminal_network.asm" ; actual Settings pane, deferred Save
 %include "gui/settings_update_daily_policy.asm" ; separate signed daily choice, real original consent
 %include "svc/settings_update_app_source.asm" ; fixed signed source readiness, unconfigured refuses
 %include "gui/settings_update_backend.asm" ; bounded native updater coordinator, independent FS completion
