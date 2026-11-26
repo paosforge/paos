@@ -6,7 +6,7 @@ This is the plan, not a promise. Things move between versions as we learn. There
 
 ## 0.1 Preview: a solid base you can try
 
-**Done** (14 of 47 required items when this snapshot was made), as tested on our current hardware:
+**Done** (14 of 48 required items when this snapshot was made), as tested on our current hardware:
 - One PaOS image that starts on all six reference machines
 - The core Secure Boot chain: tampered boot files are refused (the full try-and-install journey isn't checked yet)
 - Recovery from a bad start
@@ -19,6 +19,7 @@ This is the plan, not a promise. Things move between versions as we learn. There
 - System information, including the measured device name, checked on all six machines
 
 **In progress for 0.1:**
+- Headless boot and operation, with no display attached (new requirement; still open)
 - Try from USB, approve the PaOS key, install to free space or a second disk
 - Owner password, lock screen and sign-in
 - Desktop, windows, Start menu and taskbar; Settings; Terminal; Explorer; wallpaper; clock
