@@ -11,6 +11,7 @@
 ; vCPU1 never consumes LAPIC startup requests on its physical AP: the one
 ; selected-vCPU executor on the BSP applies them after clear + exact GO ACK.
 %include "hv/vcpu_ap_xstate.inc"
+%include "hv/vmx_cache.inc"
 
 ; Return1 when a virtual INIT/SIPI invalidated the deferred exit, else0.
 ; Existing wait-for-SIPI remains inactive; a SIPI is the only wake from it.
@@ -256,7 +257,7 @@ vcl_reset:
 .dynamic:
     mov  rsi, [rel vcs_ap_caps + 40]
     and  esi, 0x7FFFFFFE
-    or   esi, 0x60000010
+    or   esi, 0x10                     ; physical CD/NW clear; reset shadow is separate
     mov  edi, 0x6800
     call vcl_write
     mov  rsi, [rel vst_ap_controls + 9*8]

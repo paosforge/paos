@@ -4,6 +4,7 @@
 ;; IMPORTS fs/fs_identify, fs/guest_volume, fs/update_esp, fs/data_config_provider, core/lib/crc32, fs/ext4_copy, fs/blockdev, fs/storage_access, fs/vfs, fs/vol_owner, core/lib/mem, core/unicode_edit, core/cadence, core/time, boot/serial, boot/boot_esp_guid
 ;; CAPS
 ;; OWNER saga:fs_wave
+%include "fs/image_read_idle.inc"
 ; ============================================================================
 ; Physical FAT32 backend. Media is reachable ONLY through the struct dev*
 ; supplied in the backend context and blk_* class dispatch. No AHCI/NVMe symbol
@@ -10259,6 +10260,7 @@ fd_read_sectors:
     FD_RO_STEP 805
     ja   .fail
 .loop:
+    FD_IMAGE_READ_STEP                 ; previous block call has completed and custody was rechecked
     test r14, r14
     jz   .ok
     mov  rbx, r14
@@ -10266,6 +10268,7 @@ fd_read_sectors:
     jbe  .chunk
     mov  ebx, 8
 .chunk:
+    FD_IMAGE_READ_COUNT rbx             ; private cold reader: one device command per turn
     call fd_read_custody
     test rax, rax
     FD_RO_STEP 806
@@ -10283,6 +10286,7 @@ fd_read_sectors:
     pop  rax
     FD_RO_STEP 807
     jnz  .fail                            ; changed even when the original read failed
+    FD_IMAGE_READ_COMPLETE              ; completed DMA, verified custody, now yield
     test rax, rax
     jnz  .read_refused
     add  r13, rbx
@@ -10313,6 +10317,7 @@ fd_read_sectors:
     pop  rax
     FD_RO_STEP 810
     jnz  .fail
+    FD_IMAGE_READ_COMPLETE
     test rax, rax
     FD_RO_STEP 811
     jnz  .fail
@@ -10337,6 +10342,7 @@ fd_read_sectors:
     ret
 
 fd_next_cluster:
+    FD_IMAGE_READ_STEP                 ; before entering native block IO or its cache
     push rbx
     push r12
     push r13
@@ -10568,6 +10574,7 @@ fd_lookup:
     jnz  .fail
     xor  r11d, r11d
 .entry:
+    FD_IMAGE_READ_STEP                 ; one alias row; private read scratch survives an idle return
     cmp  r11d, 16
     jae  .sector_next
     mov  eax, r11d
@@ -11330,6 +11337,7 @@ fd_find_in_dir:
     jnz  .fail
     xor  r15d, r15d
 .entry:
+    FD_IMAGE_READ_STEP                 ; one complete directory row between turns
     cmp  r15d, 16
     jae  .sector_next
     cmp  byte [rel fd_dir_end_seen], 1

@@ -1,7 +1,7 @@
 ;; MODULE gui/start_programs
 ;; LAYER 6
 ;; EXPORTS start_programs_open_update_restart, start_programs_init, start_programs_open_help, start_programs_tick, start_programs_cmd_formload, start_programs_click, start_programs_key_filter, sp_arm_holds, sp_disarm, sp_disarm_settings, sp_arm_card_wid, sp_ptr_up_x, sp_ptr_up_y, sp_ptr_up_seq, sp_ptr_inj_seq, sp_form_widgets_n
-;; IMPORTS gui/settings_terminal_network, gui/settings_updates, gui/settings_update_backend, gui/app_reader, gui/form_loader, gui/widget, gui/window_mgmt, gui/terminal_app, gui/power_exec, gui/settings_prefs, gui/help_view, gui/wifi_local, gui/wm_pointer, dev/input/ps2, boot/gop, svc/command, svc/command_cons, boot/serial
+;; IMPORTS gui/settings_terminal_network, gui/settings_updates, gui/settings_update_backend, gui/app_reader, gui/form_loader, gui/widget, gui/window_mgmt, gui/terminal_app, gui/power_exec, gui/settings_prefs, gui/help_view, gui/wifi_local, gui/wm_pointer, dev/input/ps2, boot/gop, svc/command, svc/command_cons, boot/serial, sec/keyprov, svc/command_auth_lab, sec/principal
 ;; CAPS CAP_GUI
 ;; OWNER saga:msi_start_programs_settings
 ; ============================================================================
@@ -30,6 +30,7 @@
 ; wm_pointer_origin is HUMAN, and Y or Enter on Yes only when input_key_origin is
 ; KO_HUMAN. Injected ones (MOUSEINJ, PTRINJ, KBINJ) are ignored, not taken as a
 ; cancel; an injected Cancel, N or Esc still cancels.
+; Track D lab builds additionally accept a boot-bound LAB1 Y for Restart only.
 ; SEC R1 F1 (srcreview 20:37:58, the guardian_indicator arm): MOUSEINJ also moves
 ; the cursor, so a physical click that never moved could land on a Yes an
 ; injection parked it on. Yes, and Settings' Apply and Reset, count a HUMAN press
@@ -991,7 +992,8 @@ sp_arm_note:
 
 ;; start_programs_key_filter(EDI = focused widget id, EAX = key) -> EAX 1
 ;; handled. Only a key for the confirmation is taken; the owner's Tab stays
-;; the kit's. SEC R1 K2: a key that is not KO_HUMAN may only cancel.
+;; the kit's. Production SEC R1 K2 stays HUMAN-only; lab Restart also accepts
+;; Y with a boot-local LAB1 OWNER key context (never Enter or pointer clicks).
 start_programs_key_filter:
     push rdi
     push rax
@@ -1031,9 +1033,42 @@ start_programs_key_filter:
     mov  byte [rel sp_pending], SP_PEND_CANCEL
     jmp  .taken
 .confirm:
+%ifdef PAOS_LAB_CHANNEL
+    cmp  byte [rel input_key_origin], KO_HUMAN
+    je   .human_confirm
+    ; Track D: only LAB1-provenance Y may confirm Restart in the lab build.
+    ; LAB1 unwrap rejects another boot before KBINJ can enqueue a key. The
+    ; boot-local key context retains its lab mask; never call it HUMAN.
+    ; Enter, pointer clicks and every other power action keep SEC R1.
+    cmp  dword [rel sp_kind], POWER_RESTART
+    jne  .taken
+    cmp  eax, 'y'
+    je   .lab_y
+    cmp  eax, 'Y'
+    jne  .taken
+.lab_y:
+    movzx eax, byte [rel input_key_origin]
+    sub  eax, KO_INJECTED
+    cmp  eax, KP_SLOTS
+    jae  .taken                         ; HUMAN/internal/untethered are not lab slots
+    imul eax, KC_SIZE
+    lea  rdx, [rel keyprov_ctx]
+    add  rdx, rax
+    cmp  qword [rdx + KC_VALID], 1
+    jne  .taken
+    cmp  qword [rdx + KC_PRINCIPAL], PRIN_OWNER
+    jne  .taken
+    cmp  qword [rdx + KC_SOURCE], CMD_SOURCE_UDP
+    jne  .taken
+    mov  rax, LAB_INJECT_MASK
+    cmp  [rdx + KC_MASK], rax
+    jne  .taken
+    jmp  .confirmed
+%endif
+.human_confirm:
     cmp  byte [rel input_key_origin], KO_HUMAN
     jne  .taken                         ; SEC R1: an injected Y / Enter is taken and ignored
-    mov  byte [rel sp_pending], SP_PEND_CONFIRM
+.confirmed: mov byte [rel sp_pending], SP_PEND_CONFIRM
 .taken:
     mov  eax, 1
     ret

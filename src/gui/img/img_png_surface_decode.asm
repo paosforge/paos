@@ -27,6 +27,8 @@
 ; Private wiped32B frame+56B saves;callees additional. Full64 nonvolatiles,
 ; flags/DF and FP controls preserved. No FP/SIMD.
 
+%include "gui/img/img_cold_hooks.inc"
+
 img_png_decode_surface_into:
     pushfq
     push rbx
@@ -110,6 +112,7 @@ img_png_decode_surface_into:
     cmp  rax, r14
     ja   .bounds
     mov  [rsp + 8], rax
+    IMG_COLD_BUSY_JUMP .busy
     cmp  qword [rel img_active_out], 0
     jne  .busy
     mov  rdi, rbx

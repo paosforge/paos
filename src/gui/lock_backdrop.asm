@@ -2,7 +2,7 @@
 ;; LAYER 6
 ;; PURPOSE Local photograph shadow for primary sign-in; contained expanded states.
 ;; EXPORTS lock_backdrop_register, lock_backdrop_draw, lock_card_contrast_set
-;; IMPORTS gui/lock_screen, gui/widget, gui/widget_containers, boot/gop, sec/principal
+;; IMPORTS gui/compose_idle, gui/lock_screen, gui/widget, gui/widget_containers, boot/gop, sec/principal
 ;; CAPS
 ;; OWNER saga:login_surfaces
 
@@ -61,6 +61,7 @@ lock_backdrop_draw:
     push r13
     push r14
     push r15
+    sub rsp,16
     push rdi
     call lock_backdrop_contained
     pop  rdi
@@ -87,6 +88,25 @@ lock_backdrop_draw:
     add  eax, 286
     cmp  eax, [rel fb_height]
     ja   .out
+    ; Admit the intersected RAM work BEFORE the radial row/pixel loops.
+    ; Keep the original local x/y for the ellipse; clipping its destination
+    ; must not rescale or move the photograph shadow.
+    mov r8d,[r12 + WGI_X]
+    mov r9d,[r12 + WGI_Y]
+    mov r10d,360
+    mov r11d,286
+    call fb_compose_intersect
+    jc .out
+    call fb_compose_take
+    jc .out
+    sub r8d,[r12 + WGI_X]
+    sub r9d,[r12 + WGI_Y]
+    mov [rsp],r8d                    ; first local column
+    add r10d,r8d
+    mov [rsp+4],r10d                 ; exclusive local column
+    mov [rsp+8],r9d                  ; first local row
+    add r11d,r9d
+    mov [rsp+12],r11d                ; exclusive local row
     mov  eax, [rel fb_stride]
     cmp  eax, [rel fb_width]
     jb   .out
@@ -97,7 +117,10 @@ lock_backdrop_draw:
     add  r13, rax
     mov  eax, [r12 + WGI_X]
     lea  r13, [r13 + rax*4]
-    xor  r15d, r15d
+    mov r15d,[rsp+8]
+    mov eax,r15d
+    imul rax,r14
+    add r13,rax
 .row:
     ; Squared normalized radius: x/180 and y/143 in signed 8-bit fraction.
     mov  eax, r15d
@@ -108,7 +131,7 @@ lock_backdrop_draw:
     idiv ecx
     imul eax, eax
     mov  ebp, eax
-    xor  ebx, ebx
+    mov ebx,[rsp]
 .pixel:
     mov  eax, ebx
     sub  eax, 180
@@ -142,16 +165,17 @@ lock_backdrop_draw:
     mov  [r13 + rbx*4], eax
 .next:
     inc  ebx
-    cmp  ebx, 360
+    cmp  ebx, [rsp+4]
     jb   .pixel
     add  r13, r14
     inc  r15d
-    cmp  r15d, 286
+    cmp  r15d, [rsp+12]
     jb   .row
     jmp  .out
 .panel:
     call wgt_container_draw
 .out:
+    add rsp,16
     pop  r15
     pop  r14
     pop  r13

@@ -1,7 +1,7 @@
 ;; MODULE gui/window
 ;; LAYER 6
-;; EXPORTS calendar_paint, lock_notice_paint, bat_crit_left_s, taskbar_battery_paint, taskbar_ime_paint, taskbar_ime_cell, ime_glyph, ime_popup_rect, ime_popup_overlaps, ime_popup_hit, ime_popup_paint, taskbar_battery_stale, taskbar_battery_text, gui_compositor_selftest, fb_fill_rect, fb_fill_rect_ref, fb_perf_med, fb_fill_rect_declare, taskbar_clock_tick, taskbar_clock_cadence_arm, fb_blit_rgba, fb_blit_rgba_ref, fb_blit_perf_med, fb_blit_rgba_declare, fb_shadow_attach, fb_damage_rect, fb_present_flush, fb_present_rect, fb_present_all, fb_scanout_base, fb_shadow_base, fb_present_count, fb_present_px, fb_present_tsc_last, fb_cursor_presents, taskbar_read_wall, clock_tz_min, clock_hh, clock_mm, clock_last_hhmm, clock_wall_valid, fb_present_tsc_max, fb_shadow_src, gui_cursor_shape, tray_clock_rearm_if_covered, dpms_force, dpms_blanked, dpms_last_activity_ms, display_probe, fb_present_lock_suppressed, fb_present_input_held, fb_present_boot_hold, fb_surface_epoch, fb_shadow_cap, fb_present_valid, clock_local_offset, fb_boot_surface_prepare, fb_boot_surface_restore
-;; IMPORTS gui/clock_paint, boot/boot_menu, gui/calendar, gui/lock_ssh_notice, gui/lock_fade, boot/serial, boot/gop, core/heap, core/time, gui/cadence_mark, gui/widget_image, dev/input/ps2, boot/paging, gui/lock_screen, sec/session, dev/power/ec_power, core/lib/fmt, svc/command_udp, gui/input_route, gui/l10n_paint, gui/widget, gui/summon_palette
+;; EXPORTS dpms_fill_black, fb_present_damage, fb_present_damage_active, fb_present_defer_op, fb_present_pending, calendar_paint, lock_notice_paint, bat_crit_left_s, taskbar_battery_paint, taskbar_ime_paint, taskbar_ime_cell, ime_glyph, ime_popup_rect, ime_popup_overlaps, ime_popup_hit, ime_popup_paint, taskbar_battery_stale, taskbar_battery_text, gui_compositor_selftest, fb_fill_rect, fb_fill_rect_ref, fb_perf_med, fb_fill_rect_declare, taskbar_clock_tick, taskbar_clock_cadence_arm, fb_blit_rgba, fb_blit_rgba_ref, fb_blit_perf_med, fb_blit_rgba_declare, fb_shadow_attach, fb_damage_rect, fb_present_flush, fb_present_rect, fb_present_all, fb_scanout_base, fb_shadow_base, fb_present_count, fb_present_px, fb_present_tsc_last, fb_cursor_presents, taskbar_read_wall, clock_tz_min, clock_hh, clock_mm, clock_last_hhmm, clock_wall_valid, fb_present_tsc_max, fb_shadow_src, gui_cursor_shape, tray_clock_rearm_if_covered, dpms_force, dpms_blanked, dpms_last_activity_ms, display_probe, fb_present_lock_suppressed, fb_present_input_held, fb_present_boot_hold, fb_surface_epoch, fb_shadow_cap, fb_present_valid, clock_local_offset, fb_boot_surface_prepare, fb_boot_surface_restore
+;; IMPORTS gui/present_idle, gui/compose_job, gui/compose_idle, gui/clock_paint, boot/boot_menu, gui/calendar, gui/lock_ssh_notice, gui/lock_fade, boot/serial, boot/gop, core/heap, core/time, gui/cadence_mark, gui/widget_image, dev/input/ps2, boot/paging, gui/lock_screen, sec/session, dev/power/ec_power, core/lib/fmt, svc/command_udp, gui/input_route, gui/l10n_paint, gui/widget, gui/summon_palette
 ;; CAPS
 ;; OWNER saga:gui
 ; ============================================================================
@@ -133,6 +133,15 @@ fb_fill_rect:
     mov  r10d, r14d
     mov  r11d, r13d
     sub  r11d, r12d
+    call fb_compose_intersect
+    jc   .ret
+    call fb_compose_take
+    jc   .ret
+    mov  r15d,r8d
+    mov  r12d,r9d
+    mov  r14d,r10d
+    mov  r13d,r9d
+    add  r13d,r11d
     CADENCE_DRAW_CURRENT r8d, r9d, r10d, r11d
     cld
 .rowloop:
@@ -226,6 +235,15 @@ fb_fill_rect_ref:
     mov  r10d, r14d
     mov  r11d, r13d
     sub  r11d, r12d
+    call fb_compose_intersect
+    jc   .ret
+    call fb_compose_take
+    jc   .ret
+    mov  r15d,r8d
+    mov  r12d,r9d
+    mov  r14d,r10d
+    mov  r13d,r9d
+    add  r13d,r11d
     ; Keep the reference as independent per-pixel stores, with the corrected
     ; same clipping contract. Historical tournament timings are not remeasured.
 .rowloop:
@@ -271,6 +289,42 @@ fb_fill_rect_ref:
 ; edges and repack [R,G,B,A] to the GOP's [B,G,R,X] bytes. The elected path
 ; unrolls four pixels; the reference retains one branch per pixel. Signed
 ; nonpositive extents are empty; only composed intersections enter damage.
+; Apply the idle clip to the already screen-clipped blitter's private
+; rectangle. The original source pixel remains tied to its original x/y.
+; No source or widget pointer is retained when this helper returns.
+fb_compose_blit_clip:
+    push r8
+    push r9
+    push r10
+    push r11
+    mov r8d,r12d
+    mov r9d,r13d
+    mov r10d,r14d
+    mov r11d,r15d
+    call fb_compose_intersect
+    jc .out
+    call fb_compose_take
+    jc .out
+    mov eax,r9d
+    sub eax,r13d
+    mov ecx,ebx
+    imul rax,rcx
+    mov edx,r8d
+    sub edx,r12d
+    add rax,rdx
+    lea rbp,[rbp+rax*4]
+    mov r12d,r8d
+    mov r13d,r9d
+    mov r14d,r10d
+    mov r15d,r11d
+    clc
+.out:
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    ret
+
 fb_blit_rgba:
     push rax
     push rbx
@@ -329,6 +383,8 @@ fb_blit_rgba:
     jle  .out
     cmp  r15d, eax
     cmova r15d, eax
+    call fb_compose_blit_clip
+    jc   .out
     xor  ecx, ecx
 .row:
     cmp  ecx, r15d
@@ -462,6 +518,8 @@ fb_blit_rgba_ref:
     jle  .out
     cmp  r15d, eax
     cmova r15d, eax
+    call fb_compose_blit_clip
+    jc   .out
     xor  ecx, ecx
 .row:
     cmp  ecx, r15d
@@ -591,6 +649,8 @@ fb_blit_rgba_over:
     jle  .out
     cmp  r15d, eax
     cmova r15d, eax
+    call fb_compose_blit_clip
+    jc   .out
     xor  ecx, ecx
 .row:
     cmp  ecx, r15d
@@ -740,6 +800,8 @@ fb_blit_rgba_over_ref:
     jle  .out
     cmp  r15d, eax
     cmova r15d, eax
+    call fb_compose_blit_clip
+    jc   .out
     xor  ecx, ecx
 .row:
     cmp  ecx, r15d
@@ -1393,7 +1455,7 @@ fb_damage_rect:
     mov  [rel fb_present_y2], r11d
     jmp  .out
 .now:
-    call fb_present_rect
+    call fb_present_damage
 .out:
     pop  r11
     pop  r10
@@ -1422,7 +1484,7 @@ fb_present_flush:
     sub  r10d, r8d
     mov  r11d, [rel fb_present_y2]
     sub  r11d, r9d
-    call fb_present_rect
+    call fb_present_damage
 .out:
     pop  r11
     pop  r10
@@ -1434,6 +1496,10 @@ fb_present_flush:
 ; fb_present_all — copy the whole composed frame to the scanout (boot glue after a
 ; boot-layer writer such as the beacon badge). Preserves all registers.
 fb_present_all:
+    call fb_compose_defer_scene
+    jnc .compose
+    ret
+.compose:
     call lock_ssh_notice_draw          ; public remote notice after every lock repaint
     call fb_surface_changed            ; boot/lock whole-frame writers finish here
     push r8
@@ -1452,10 +1518,30 @@ fb_present_all:
     pop  r8
     ret
 
+; Raster damage has no authority or immediate-visibility receipt. Queue its
+; clipped rectangle once live, including partial window/clock/image damage.
+; Keep fb_present_rect explicit: consent and snapshot must still complete their
+; exact small indicator copy before authorizing a read. No yield/dispatch occurs
+; in the presenter, so this scoped marker cannot leak into another request.
+fb_present_damage:
+    push rax
+    movzx eax, byte [rel fb_present_damage_active]
+    push rax
+    mov byte [rel fb_present_damage_active], 1
+    call fb_present_rect
+    pop rax
+    mov [rel fb_present_damage_active], al
+    pop rax
+    ret
+
 ; fb_present_rect(r8d=x, r9d=y, r10d=w, r11d=h) — clip, copy the shadow rows to the
 ; scanout (rep movsd per row), overlay the cursor where it intersects, sfence.
 ; Preserves all registers. fb_present_tsc_last = cycles spent in this present.
 fb_present_rect:
+    cmp byte [rel fb_compose_clip_active],0
+    je .not_composing
+    ret                                 ; the shadow is incomplete, no receipt
+.not_composing:
     ; Task3477 DPMS idle-blank: while blanked, suppress every cadence repaint so the
     ; scanout stays black until wake-on-input. dpms_wake clears the flag before it
     ; repaints, so the restore itself is never suppressed.
@@ -1510,10 +1596,6 @@ fb_present_rect:
     jle  .out
     test r11d, r11d
     jle  .out
-    rdtsc
-    shl  rdx, 32
-    or   rax, rdx
-    mov  [rel fb_present_tsc_last], rax  ; start stamp (replaced by the cost below)
     ; Intersect signed32 origins/extents in 64 bits, as the raster primitives
     ; do. A positive endpoint must not wrap into an empty copy, and negative
     ; extents cannot wrap into a positive scanout rectangle.
@@ -1550,6 +1632,38 @@ fb_present_rect:
     mov  r10d, r12d
     mov  r11d, r13d
     sub  r11d, ebx
+    ; Whole-frame live publications are idle work after clipping and every
+    ; existing display gate. Explicit rectangles stay synchronous: consent and
+    ; other security UI acknowledge their own exact region after this returns.
+    ; Idle slices cannot enqueue recursively.
+    cmp byte [rel fb_present_damage_active], 0
+    jne .defer_live
+    cmp  r11d, 8
+    ja   .whole_frame
+    mov  eax, r10d
+    imul rax, r11
+    cmp  rax, 800
+    jbe  .copy_now
+.whole_frame:
+    test r8d, r8d
+    jnz  .copy_now
+    test r9d, r9d
+    jnz  .copy_now
+    cmp  r10d, [rel fb_width]
+    jne  .copy_now
+    cmp  r11d, [rel fb_height]
+    jne  .copy_now
+.defer_live:
+    mov  rax, [rel fb_present_defer_op]
+    test rax, rax
+    jz   .copy_now
+    call rax
+    jmp  .out
+.copy_now:
+    rdtsc
+    shl  rdx, 32
+    or   rax, rdx
+    mov  [rel fb_present_tsc_last], rax  ; start stamp (replaced by the cost below)
     cld
     cmp  byte [rel fb_scale], 2
     je   .scaled
@@ -2027,6 +2141,13 @@ fb_boot_surface_restore:
 
 ; gui_compositor_selftest — render the M6 visual floor and emit serial markers.
 gui_compositor_selftest:
+    ; RESSET also calls this boot compositor floor after changing the live
+    ; geometry. Its diagnostic swatches and off-screen copies must not run
+    ; inside that command; the canonical scene uses the new mode instead.
+    call fb_compose_defer_scene
+    jnc .boot
+    ret
+.boot:
     push rbx
     push r12
     push r13
@@ -2762,6 +2883,12 @@ LOCK_NOTICE_H       equ 32
 LOCK_NOTICE_BOTTOM  equ 48              ; top edge = fb_height - 48
 LOCK_GROUP_H        equ 480             ; the sign-in kit group lock_screen_init centres
 lock_notice_paint:
+    ; The countdown also enters directly from lock_screen_notice. Keep its
+    ; stored kind/seconds, but let the owned scene paint them in clipped turns.
+    call fb_compose_defer_scene
+    jnc .compose
+    ret
+.compose:
     cmp  edi, LOCK_NOTICE_BATTERY
     jne  .out
     cmp  qword [rel fb_base], 0
@@ -3045,10 +3172,48 @@ tray_clock_rearm_if_covered:
 ;   8x16 glyphs (fg=CLOCK_DIGIT on bg=TASKBAR_ACCENT). Reuses the proven fb_draw_str_n.
 ;   fb-absent -> fb_fill_rect/fb_draw_char both self-skip. Clobbers rax,rbx,rcx,rdx,r8-r11,rdi.
 taskbar_draw_clock_glyphs:
+    cmp byte [rel fb_compose_clip_active],0
+    jne .owned
     cmp  byte [rel clock_repaint_pending], 1
     jne  .done                          ; attention redraw preserves the tray
+    call fb_compose_defer_periodic
+    jc .done
     cmp  byte [rel clock_wall_valid], 1
     jne  .done
+    jmp .surface
+.owned:
+    ; The tray is part of every canonical workspace scene, even after the
+    ; old dirty bit was consumed on an earlier tile. Sample once per owner
+    ; serial, not once per pixel tile or wall-clock edge.
+    mov rax,[rel fb_compose_serial]
+    cmp rax,[rel tray_sample_serial]
+    je .sampled
+    mov [rel tray_sample_serial],rax
+    push rsi
+    call taskbar_read_wall
+    mov al,[rel clock_wall_valid]
+    mov [rel tray_sample_valid],al
+    cmp al,1
+    jne .sample_done
+    call taskbar_format_clock
+    mov rax,[rel clock_str]
+    mov [rel tray_sample_time],rax
+    mov al,[rel clock_str+8]
+    mov [rel tray_sample_time+8],al
+    mov rax,[rel clock_date_str]
+    mov [rel tray_sample_date],rax
+    mov ax,[rel clock_date_str+8]
+    mov [rel tray_sample_date+8],ax
+    mov al,[rel clock_date_str+10]
+    mov [rel tray_sample_date+10],al
+    mov al,[rel time_wall_source]
+    mov [rel tray_sample_source],al
+.sample_done:
+    pop rsi
+.sampled:
+    cmp byte [rel tray_sample_valid],1
+    jne .done
+.surface:
     cmp  qword [rel fb_base], 0
     je   .done
     cmp  dword [rel fb_width], 104
@@ -3073,8 +3238,13 @@ taskbar_draw_clock_glyphs:
     ; RTC is an estimate until a real NTP sample has set the canonical wall.
     ; The spare left glyph cell stays inside the existing80px reservation.
     mov  esi, '_'
-    cmp  byte [rel time_wall_source], TIME_SRC_NTP
-    je   .prefix
+    mov al,[rel time_wall_source]
+    cmp byte [rel fb_compose_clip_active],0
+    je .source
+    mov al,[rel tray_sample_source]
+.source:
+    cmp al,TIME_SRC_NTP
+    je .prefix
     mov  esi, '~'
 .prefix:
     xor  edi, edi                      ; tray site
@@ -3102,6 +3272,10 @@ taskbar_draw_clock_glyphs:
     mov  ecx, TASKBAR_ACCENT
     mov  r11d, 8
     lea  rdi, [rel clock_str]
+    cmp byte [rel fb_compose_clip_active],0
+    je .time_text
+    lea rdi,[rel tray_sample_time]
+.time_text:
     call fb_draw_str_n
     mov  r8d, [rel fb_width]
     sub  r8d, CLOCK_TRAY_XOFF
@@ -3112,6 +3286,10 @@ taskbar_draw_clock_glyphs:
     mov  ecx, TASKBAR_ACCENT
     mov  r11d, 10
     lea  rdi, [rel clock_date_str]
+    cmp byte [rel fb_compose_clip_active],0
+    je .date_text
+    lea rdi,[rel tray_sample_date]
+.date_text:
     call fb_draw_str_n
     CADENCE_BATCH_END
     pop  rax
@@ -3794,6 +3972,8 @@ dpms_blank:
     lea  rdi, [rel str_dpms_blank_verb]
 .marker:
     call serial_string                   ; RCQ-27 L3: every blank names its source
+    call fb_blank_request
+    jc .ret                             ; live black scanout is an idle owner
     mov  rdi, [rel fb_scanout_base]
     test rdi, rdi
     jz   .ret                            ; direct mode / no scanout attached
@@ -4625,6 +4805,9 @@ fb_present_x2:       dd 0
 fb_present_y2:       dd 0
 fb_cursor_last_x:    dd 0                ; sprite bbox origin as last presented
 fb_cursor_last_y:    dd 0
+fb_present_defer_op: dq 0
+fb_present_pending: db 0
+fb_present_damage_active: db 0
 fb_present_valid:    db 0
 fb_shadow_src:       db 0                ; 1 pre-EBS region <4 GiB, 2 general heap, 3 cognition region
 fb_cursor_visible:   db 0
@@ -4823,6 +5006,12 @@ clock_cadence_armed: db 0               ; shared-registry registration succeeded
 clock_glyph_armed: db 0                 ; visible time/date draw path has run
 clock_repaint_pending: db 0             ; initial/date/minute/source or covered-tray paths arm the painter
 clock_wall_marker_emitted: db 0         ; earned conjunction marker is one-shot
+align 8
+tray_sample_serial: dq -1
+tray_sample_valid: db 0
+tray_sample_source: db 0
+tray_sample_time: times 9 db 0
+tray_sample_date: times 11 db 0
 clock_str:        db "00:00 AM", 0      ; eight time glyphs
 clock_date_str:   db "1970-01-01", 0    ; ten date glyphs
 clock_unsynced_str: db "~", 0          ; approximate time until an NTP sample is applied

@@ -27,6 +27,16 @@
 ;
 ; Frame (PBKDF2_FRAME bytes; 6 pushes + return + frame keep RSP 16-aligned at
 ; every call):
+%include "core/abi/login_trace.inc"
+%assign PBKDF2_LOGIN_HEARTBEAT 0
+%if PAOS_PUBLIC_BUILD = 0
+%ifdef PAOS_PUBLICITY_LAB_PROFILE
+%if PAOS_PUBLICITY_LAB_PROFILE = 1
+%assign PBKDF2_LOGIN_HEARTBEAT 1
+%endif
+%endif
+%endif
+
 PBKDF2_ICTX     equ 0                          ; SHA-256 state after K0^ipad
 PBKDF2_OCTX     equ PBKDF2_ICTX + S256_CTX_SZ  ; SHA-256 state after K0^opad
 PBKDF2_WCTX     equ PBKDF2_OCTX + S256_CTX_SZ  ; working state of one hash
@@ -210,7 +220,28 @@ pbkdf2_sha256:
     mov  rax, [rsp + PBKDF2_U + 24]
     xor  [rsp + PBKDF2_T + 24], rax
     dec  dword [rsp + PBKDF2_ITER]
+%if PBKDF2_LOGIN_HEARTBEAT
+    jz   .derived
+    ; Public progress only, one observation per 32768 remaining rounds.
+    ; No receive, scheduler yield or nested command dispatch. Scrub volatile
+    ; hash scratch before the trace saves registers; the frame remains private.
+    test dword [rsp + PBKDF2_ITER], 0x7FFF
     jnz  .iterate
+    xor  eax, eax
+    xor  ecx, ecx
+    xor  edx, edx
+    xor  esi, esi
+    xor  edi, edi
+    xor  r8d, r8d
+    xor  r9d, r9d
+    xor  r10d, r10d
+    xor  r11d, r11d
+    LOGIN_TRACE 60
+    jmp  .iterate
+.derived:
+%else
+    jnz  .iterate
+%endif
 
     mov  rdi, r12
     lea  rsi, [rsp + PBKDF2_T]

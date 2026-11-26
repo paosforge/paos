@@ -264,6 +264,9 @@ vst_seal:
     mov  qword [rel vst_manifest + 8], 23
     mov  [rel vst_manifest], r15
     mov  [rel vst_sealed], r15          ; all records complete, never READY
+    lea  rdi, [rel vst_manifest]
+    mov  rsi, r15
+    call vcpu_ap_frozen_shadow          ; 0 only keeps every check on full SHA-256
     mov  eax, 1
     jmp  .out
 .bad:

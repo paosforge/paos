@@ -149,6 +149,22 @@ r26_csi_write:
 
 ; RDI=table, callee-saved registers preserved. No optional-error early return.
 r26_run_table:
+    push r12
+    mov r12, rdi
+.next:
+    cmp dword [r12], 0
+    je .out
+    mov rdi, r12
+    call r26_run_table_entry
+    add r12, 16
+    jmp .next
+.out:
+    pop r12
+    ret
+
+; One immutable table record; the idle recovery owner yields after this return.
+; Boot still traverses the same records in the same order via r26_run_table.
+r26_run_table_entry:
     push rbx
     push rbp
     push r12
@@ -281,8 +297,6 @@ r26_run_table:
     mov esi, ebx
     mov edx, r15d
     call r26_record
-    add r12, 16
-    jmp .next
 .out:
     pop r15
     pop r14

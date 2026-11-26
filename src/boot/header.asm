@@ -2,7 +2,7 @@
 %include "core/abi/build_profile.inc"
 ;; LAYER 0
 ;; EXPORTS boot_guest_foundation_init, efi_entry, boot_services, runtime_services, image_handle, system_table, boot_ms_now, boot_idle_compositor_ticks, boot_bg4_ebs_tsc, boot_bg5_ready_tsc, boot_bg5b_ack_tsc, boot_bg6_pixel_tsc, boot_p7_tsc, boot_prepixel_tsc, boot_device_cuts_tsc, boot_p1_ckpt_tsc, boot_native_cost_tsc, boot_native_cost_done, boot_nic_ready_tsc, boot_nic_ready_observed, boot_hv_foundation_ready_tsc, boot_hv_foundation_ready_ms, boot_hv_foundation_ready, boot_budget_run_full, boot_budget_gated, boot_budget_class, boot_budget_full_failures, boot_settle_tsc, boot_settle_state
-;; IMPORTS sec/terminal_network_record, gui/format_confirm, gui/adopt_confirm, sec/node_identity_store, gui/app_isolation, hv/app_vm, gui/app_remove, gui/app_install, gui/app_ingress, gui/app_launch_flow, hv/app_transport, gui/app_launcher, boot/native_driver_preload, boot/native_driver_report, svc/boot_failure_control, core/crash_identity, core/maintenance_sources, core/boot_maintenance_source, svc/command_memory_consumer, svc/service_progress, svc/recovery_boot, svc/recovery_controller, svc/device_failure_record, hv/warm_lifecycle, svc/lab_return, gui/power_exec, gui/lock_fade, core/mca_poll, core/mca_init, cognition/ai_intent_controller, hv/vmx, hv/hv_ops, sec/airlock, svc/boot_clock, boot/boot_menu, boot/serial, boot/paging, boot/pmod_loader, boot/gdt, boot/gop, boot/boot_v2_health, boot/menu_labels_qemu, bus/acpi, config/keep_config, core/idt, core/diag, core/lib/str, core/lib/fmt, core/lib/strmem_kat, core/log, core/heap, core/memmap, core/time, core/sched, core/dma, net/tls13, gui/console, gui/liveness_panel, sec/job_receipt, svc/hotpatch, svc/command_filmstrip, svc/command_compat, dev/net/e1000e, dev/net/cdc_ecm, dev/net/cdc_ncm, dev/net/ax88179, net/netdev, hv/vtd, hv/amdvi, gui/lock_screen, sec/session, core/reset_wipe, sec/owner_stage_key, sec/app_store_seal, dev/snd/hda_boot_handoff, boot/firmware_logo, boot/indicator, core/deadman_identity, svc/normal_deadman_live, gui/config_prefs, gui/command_idle_service, gui/terminal_consent, gui/account_local
+;; IMPORTS gui/compose_job, dev/net/rtl8126, gui/present_idle, sec/terminal_network_record, gui/format_confirm, gui/adopt_confirm, sec/node_identity_store, gui/app_isolation, hv/app_vm, gui/app_remove, gui/app_install, gui/app_ingress, gui/app_launch_flow, hv/app_transport, gui/app_launcher, boot/native_driver_preload, boot/native_driver_report, svc/boot_failure_control, core/crash_identity, core/maintenance_sources, core/boot_maintenance_source, svc/command_memory_consumer, svc/service_progress, svc/recovery_boot, svc/recovery_controller, svc/device_failure_record, hv/warm_lifecycle, svc/lab_return, gui/power_exec, gui/lock_fade, core/mca_poll, core/mca_init, cognition/ai_intent_controller, hv/vmx, hv/hv_ops, sec/airlock, svc/boot_clock, boot/boot_menu, boot/serial, boot/paging, boot/pmod_loader, boot/gdt, boot/gop, boot/boot_v2_health, boot/menu_labels_qemu, bus/acpi, config/keep_config, core/idt, core/diag, core/lib/str, core/lib/fmt, core/lib/strmem_kat, core/log, core/heap, core/memmap, core/time, core/sched, core/dma, net/tls13, gui/console, gui/liveness_panel, sec/job_receipt, svc/hotpatch, svc/command_filmstrip, svc/command_compat, dev/net/e1000e, dev/net/cdc_ecm, dev/net/cdc_ncm, dev/net/ax88179, net/netdev, hv/vtd, hv/amdvi, gui/lock_screen, sec/session, core/reset_wipe, sec/owner_stage_key, sec/app_store_seal, dev/snd/hda_boot_handoff, boot/firmware_logo, boot/indicator, core/deadman_identity, svc/normal_deadman_live, gui/config_prefs, gui/command_idle_service, gui/terminal_consent, gui/account_local, hv/a1_service_selection
 ;; (boot/header is the boot orchestrator — the upward L0->L1 call to core/idt is
 ;;  the documented modlint exception, like the L3->L4 register() edge)
 ;; CAPS
@@ -611,6 +611,7 @@ efi_entry:
     call public_documents_seal_after_owner_preebs ; bind public Documents to committed owner handoff
     call replay_floor_preebs            ; SEC-replay-record-mac S1: PaOSReplayFloor (NV|BS) B/F' + RT mirror, needs ows_floor_seeded above
     call secureboot_snapshot           ; SB-sense: capture SecureBoot/SetupMode/MokListRT pre-EBS (firmware runtime live)
+    call a1_service_select            ; signed guest-only reservation before any native PCI NIC bind
     call node_identity_store_preebs    ; read-only authenticated identity before SYSTEM Y is taken
     call recovery_boot_preload          ; after Secure Boot + SMBIOS snapshot; optional owner-RSA grant stays OFF absent
     call usb_boot_media_snapshot        ; HUB0: read-only LoadedImage DevicePath -> USB boot-media port chain (hub policy)
@@ -1527,6 +1528,7 @@ efi_entry:
     call lang_prefs_load                ; RCQ-38 R0: the saved language (same machine secret; English on any failure)
     call kbd_prefs_load                 ; RCQ-38 L2: the saved keyboard layout, in force before the sign-in form (en-US on any failure)
     call config_prefs_load              ; T5-14: valid provisioned DATA preferences override legacy NVRAM, before locale/sign-in
+    call wallpaper_stock_prepare        ; read-only GUID scan before command acceptance, never login
     call idle_prefs_load                ; RC-lock-screen: the owner's saved IDLELOCK value (the 600 s default on any failure)
     call history_cfg_load               ; RC-history H1: the saved history settings (same machine secret; off on any failure)
     call wm_pointer_init
@@ -1748,6 +1750,18 @@ efi_entry:
     call netreturn_boot_publish
 %endif
 
+    ; Both presentations accept commands in the first idle turn. Queue RAM
+    ; composition before that acceptance, independently of the GUI's first
+    ; keyboard-live scanout hold. An early owner login must not re-enter the
+    ; synchronous boot painter while that hold is still set.
+    call fb_compose_live_start
+    ; CLI has no GUI input edge; its completed boot frame may also release
+    ; scanout here. GUI scanout still waits for its ordinary input-live edge.
+    cmp byte [rel keep_presentation_target], PRESENTATION_CLI
+    jne .presentation_live_handoff_done
+    call fb_present_live_start
+    call fb_compose_live_start
+.presentation_live_handoff_done:
     call lab_return_init                 ; once, at live handoff; explicit lab opt-in only
     call recovery_boot_init              ; signed NEXT grant only; no implicit healthy-use timer
     call diag_service_failure_begin     ; exclude initial boot tests; report prior service record
@@ -1775,6 +1789,9 @@ IDLE_PROF_OWNERS equ 48
 %endif
     IDLE_PROF_MARK 0                     ; no telemetry/report calls after a completed wipe
     IDLE_PROF_MARK 1
+    ; A guest slice ends at this sweep boundary. Service commands before the
+    ; next lock repaint, rather than adding both owners' latency together.
+    call command_udp_poll
     call sched_interactive_begin         ; snapshot before any input consumer
     cmp  byte [rel keep_presentation_target], PRESENTATION_CLI
     je   .presentation_synced
@@ -1847,6 +1864,10 @@ IDLE_PROF_OWNERS equ 48
     call ps2_pointer_pump                ; 2026-09-08: the ONE GUI context drains physical pointer input
     call lock_fade_tick                  ; bounded presentation after both input consumers
 .presentation_idle_done:
+    ; CLI has no GUI input/fade handoff; both presentations share the same
+    ; live continuation after their boot frame and health have completed.
+    call fb_present_live_start
+    call fb_compose_live_start
     call command_idle_service_tick
     IDLE_PROF_MARK 19
     call ps2_input_pending
@@ -1922,6 +1943,20 @@ IDLE_PROF_OWNERS equ 48
     IDLE_PROF_MARK 40
     call cadence_poll                    ; one registry drives clock + attention + netmon live edges
     IDLE_PROF_MARK 41
+    ; The completed GUI publication is a safe boundary (no painter/transport
+    ; frame is active). Do not concatenate it with the guest startup quantum.
+    call command_udp_poll
+    call img_cold_service                ; one owned decode/cleanup turn, fully unwound
+    call command_udp_poll
+    call fb_compose_idle_poll            ; one clipped scene turn, fully unwound
+    call command_udp_poll
+    call fb_present_idle_poll            ; bounded scanout; network on each side
+    call command_udp_poll
+    call fb_blank_idle_poll              ; bounded physical black fill, no receipt
+    call command_udp_poll
+    ; The chip-reset owner also unwinds between transport turns.
+    call rtl8126_recovery_poll
+    call command_udp_poll
     call boot_settle_tick                ; settled: storage replay / deferred checks, observed after the sweep step
     call hvw_idle_tick                   ; observe BOOT/session idle before any warm START, no launch
     call diag_service_failure_poll      ; BSP task context; <=1 service failure variable write/boot
@@ -1941,6 +1976,9 @@ IDLE_PROF_OWNERS equ 48
     call app_vm_runnable                ; bounded app work gets another full desktop sweep
     test eax,eax
     jnz .halt                           ; preserve input/session/recovery service each pass
+    call fb_present_idle_progress       ; finite copied scanout needs another full service sweep
+    test eax,eax
+    jnz .halt                           ; withheld/blanked jobs still reach ordinary idle
     IDLE_PROF_MARK 43
     call smp_bsp_idle_hlt                ; RCQ-27 B1: hlt with residency accounting (STATUS BSP_HLT_*)
     jmp .halt

@@ -264,7 +264,7 @@ hp_tcr_observe:
     mov [r13+88], rbp
     lea rdi, [rbp+0x40]
     and rdi, -0x200000
-    call pci_mmio_resource_page
+    call pci_mmio_nonram_chunk
     test eax, eax
     jz .map
     lea rdi, [rbp+0x40]

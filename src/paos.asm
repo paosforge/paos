@@ -14,6 +14,7 @@ org 0
 ; Native drivers remain compiled into this one image. Admission is selected
 ; before hardware probes; standalone module fixtures may omit this boot graph.
 %define PAOS_NATIVE_DRIVER_POLICY_LINKED 1
+%define PAOS_A1_SERVICE_LINKED 1
 %define PAOS_DRIVER_DOMAIN_EVERYBOOT 1
 %define WIFI_LOCAL_GUI_BUILT 1 ; local private editor, never a public credential command
 
@@ -33,6 +34,15 @@ org 0
 %if RCQ37_MEDIA_PROFILE
 %define PAOS_CRC32_UPDATE ; PMH's DATA CRC uses the streaming form
 %endif
+%endif
+; Ordinary product wallpaper work is incremental on every profile, independent
+; of the guest-media or lab build switches.
+%define PAOS_IMG_COLD_WORK 1
+%define PAOS_IMG_COLD_FAT 1
+%define PAOS_IMG_COLD_LIVE 1
+%define PAOS_IMG_COLD_LOCK 1
+%ifndef PAOS_CRC32_UPDATE
+%define PAOS_CRC32_UPDATE ; incremental image CRC uses the streaming primitive
 %endif
 
 ; ---- headers (.inc — emit no bytes; the device-class ABI seam, DRIVER_MODEL.md) ----
@@ -597,6 +607,8 @@ command_display_public_observation:
 %include "svc/cpu_policy_report.asm" ; read-only cached per-CPU policy/execution pages
 %include "hv/vmx.asm"        ; L5 hv (1011): proven REAL Intel VMX/VMCS/EPT backend + GUEST* verbs
 %include "hv/vm_profile.asm" ; RCQ-18: typed VM profiles (thin-cli), fail-closed parse + cost plan
+%include "hv/a1_service_selection.asm" ; signed pre-bind guest reservation, no DMA authority
+%include "hv/a1_transaction.asm" ; original START custody only, no effects
 %include "hv/a1_policy.asm" ; A1: separate signed policy and complete network profile binding
 %include "hv/app_runtime.asm" ; signed candidate's separate bash runtime pair; absent pins refuse
 %include "hv/guest_surface.asm" ; 2716: completed guest flips over the existing console split ring
@@ -681,6 +693,7 @@ command_display_public_observation:
 %include "hv/amdvi_dma_probe.asm" ; T1-4: signed actual AMD fault/canary Identify diagnostic
 %include "hv/device_assignment.asm" ; Task3250: read-only PCIe/IOMMU isolation topology classifier + content KAT (iommu.isolation.topology.kat)
 %include "hv/a1_topology.asm" ; separate trusted-peer topology predicate, no START/attach grant
+%include "hv/a1_dma_tree.asm" ; unpublished A1 table construction/readback only, no install or START
 %include "hv/nic_selection.asm" ; common selected NIC/group identity
 %include "hv/a1_nic_selection.asm" ; signed A1 observation, original shared facts; no START grant
 %include "hv/driver_domain.asm" ; exact native Linux NIC lifecycle
@@ -918,6 +931,11 @@ command_display_public_observation:
 %include "gui/theme_tokens.inc" ; F1/D1: the single chrome/taskbar/widget token table (0x00RRGGBB)
 %include "gui/cadence_mark.asm" ; 2131: ONE fixed paint-damage/TSC ring + CADMARK/CADSTAT projection
 %include "gui/clock_paint.asm" ; T1-3 C5b bounded native scanout record, CLOCK PAINT
+%include "gui/present_idle.asm"
+%include "gui/compose_idle.asm"
+%include "gui/compose_job.asm"
+%include "gui/compose_scene.asm"
+%include "gui/compose_glyph.asm"
 %include "gui/window.asm"     ; M6 (1016): GOP fb primitives + double-buffer/dirty-rect + desktop bg + taskbar clock + window manager w/ open-animation + DPMS tickle + flicker detector (content-graded: verify_gui pixel-checks the two title bars)
 %include "gui/shared_surface_portal.asm" ; Task3456: shared surface/portal widget type + slot-14 handle ABI + KAT
 ; 2122: retain C17's token-only implementation as reference; the public erase
@@ -1091,6 +1109,13 @@ command_display_public_observation:
 %include "gui/img/img_cache.asm" ; 2121: 24 MiB bounded decode/scale-once LRU cache + IMGCACHE
 %include "gui/widget_image.asm" ; 2121: stock image vtable type; paint is cache lookup + blit only
 %include "gui/img/img_source.asm" ; RCQ-16: bounded native VFS wallpaper snapshots
+%include "gui/img/img_cold_idle.asm"
+%include "gui/img/img_cold_work.asm"
+%include "gui/img/img_cold_cache.asm"
+%include "gui/img/img_cold_heap.asm"
+%include "gui/img/img_cold_fat.asm"
+%include "gui/img/img_cold_job.asm"
+%include "gui/img/img_cold_lock.asm"
 %include "gui/image_viewer.asm" ; view-only native snapshot window, Explorer caller owns dispatch
 %define taskbar_draw_registry taskbar_draw_registry_workspace
 %define taskbar_attention_tick taskbar_attention_tick_workspace

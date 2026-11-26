@@ -99,7 +99,7 @@ vap_control_fields:                     ; encoding, sole mutable-bit allowance
     dd 0x201A, 0                        ; EPTP
     dd 0x6000, 0                        ; CR0 mask
     dd 0x6002, 0                        ; CR4 mask
-    dd 0x6004, 0                        ; CR0 shadow
+    dd 0x6004, (1 << 29) | (1 << 30)    ; only guest CD/NW shadow may change
     dd 0x6006, 0                        ; CR4 shadow
 ; E3 independently mutable fields, intentionally outside START comparison:
 ; 4016 entry intr info; 4018 entry errcode; 401A entry insn length;

@@ -1,7 +1,7 @@
 ;; MODULE gui/font_aa
 ;; LAYER 6
 ;; EXPORTS fb_draw_glyph_aa, fb_draw_str_aa_n, font_aa_kat
-;; IMPORTS gui/window, boot/serial
+;; IMPORTS gui/compose_idle, gui/compose_glyph, gui/window, boot/serial
 ;; CAPS
 ;; OWNER saga:gui
 ; ============================================================================
@@ -119,6 +119,14 @@ fb_draw_glyph_aa:
     cmp  eax, [rel fb_height]
     ja   .done
     call font_aa_glyph_ptr              ; rsi = coverage
+    cmp byte [rel fb_compose_clip_active],0
+    je .whole_cell
+    xor edx,edx
+    mov r10d,FONT_AA_W
+    mov r11d,FONT_AA_H
+    call fb_compose_glyph
+    jmp .done
+.whole_cell:
     ; Coordinates and pitch are 32-bit inputs; retain the full pixel index.
     mov  eax, [rel fb_stride]
     mov  r10d, r9d

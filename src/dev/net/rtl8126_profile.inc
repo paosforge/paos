@@ -6,6 +6,9 @@
 %error PAOS_LAB_RTL8126_204 must be 0 or 1
 %endif
 %if PAOS_LAB_RTL8126_204
+    %ifdef PAOS_A1_SERVICE_SELECTION_INC
+        %error signed A1 selection requires the maintained candidate-level PCI fences
+    %endif
     %ifndef PAOS_PUBLIC_BUILD
         %error lab RTL8126 selection requires explicit non-public build
     %elif PAOS_PUBLIC_BUILD != 0

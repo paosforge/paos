@@ -4,6 +4,8 @@
 ;; IMPORTS core/heap, core/lib/sha256
 ;; CAPS
 ;; OWNER saga:gui_image_pipeline
+
+%include "gui/img/img_cold_hooks.inc"
 ;
 ; Native GIF87a/89a still slice: one image, global/local RGB
 ; table, GCE transparency, sequential/interlaced LZW (2..8 initial bits).
@@ -22,6 +24,7 @@
 GIF_MAX_SOURCE equ 33554432
 
 img_gif_clear:
+    IMG_COLD_OWNER_ONLY
     push rax
     push rdi
     push rcx
@@ -29,13 +32,14 @@ img_gif_clear:
     lea  rdi, [rel img_gif_state_begin]
     mov  ecx, img_gif_state_end - img_gif_state_begin
     xor  eax, eax
-    rep  stosb
+    IMG_COLD_MEMORY stosb
     pop  rcx
     pop  rdi
     pop  rax
     ret
 
 img_gif_probe:
+    IMG_COLD_PUBLIC_GUARD
     xor  edx, edx
     call img_gif_parse
     test eax, eax
@@ -50,6 +54,7 @@ img_gif_probe:
     jmp  img_refusal_clear
 
 img_gif_decode:
+    IMG_COLD_PUBLIC_GUARD
     push r12
     push r13
     push r14
@@ -76,7 +81,7 @@ img_gif_decode:
     mov  rdi, rsp
     mov  rsi, r12
     mov  rdx, r13
-    call sha256_hash
+    IMG_COLD_DIGEST
     mov  rdi, [rsp + 72]
     add  rdi, r13
     call img_output_alloc
@@ -87,11 +92,11 @@ img_gif_decode:
     mov  rdi, r14
     mov  rsi, r12
     mov  rcx, r13
-    rep  movsb
+    IMG_COLD_MEMORY movsb
     lea  rdi, [rsp + 32]
     mov  rsi, r14
     mov  rdx, r13
-    call sha256_hash
+    IMG_COLD_DIGEST
     mov  rdi, rsp
     lea  rsi, [rsp + 32]
     mov  ecx, 32
@@ -263,6 +268,7 @@ img_gif_parse:
 .gce_done:
     mov  dword [rel img_gif_gce], 1
     add  r12, 6
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .block
 .application:
     ; A loop count has no observable effect for a single still image. Accept
@@ -304,6 +310,7 @@ img_gif_parse:
     jne  .corrupt
     mov  dword [rel img_gif_loop], 1
     add  r12, 17
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .block
 .comment:
     cmp  r12, r13
@@ -311,10 +318,12 @@ img_gif_parse:
     movzx eax, byte [r12]
     inc  r12
     test eax, eax
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jz   .block
     add  r12, rax
     cmp  r12, r13
     ja   .truncated
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .comment
 .image:
     cmp  dword [rel img_gif_frames], 0
@@ -380,7 +389,7 @@ img_gif_parse:
     je   .background_ready
     mov  rdi, r15
     mov  eax, [rel img_gif_background]
-    rep  stosd
+    IMG_COLD_MEMORY stosd
 .background_ready:
     cmp  r12, r13
     jae  .truncated
@@ -413,6 +422,7 @@ img_gif_parse:
     call img_gif_code
     jc   .truncated
     cmp  eax, [rel img_gif_clearcode]
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     je   .reset
     cmp  eax, [rel img_gif_endcode]
     je   .endcode
@@ -448,6 +458,7 @@ img_gif_parse:
     cmp  eax, r10d                    ; constructed prefixes always precede entry
     jae  .corrupt
     mov  r10d, eax
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .chain
 .literal:
     mov  [rel img_gif_first], r10d
@@ -509,9 +520,11 @@ img_gif_parse:
     lea  rsi, [rel img_gif_starts]
     movzx ecx, byte [rsi + rax]
     mov  [rel img_gif_y], ecx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .pass
 .next_pixel:
     test r9d, r9d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jnz  .emit
     cmp  dword [rel img_gif_old], -1
     je   .old
@@ -537,6 +550,7 @@ img_gif_parse:
 .old:
     mov  eax, [rel img_gif_in]
     mov  [rel img_gif_old], eax
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .code
 .endcode:
     mov  eax, [rel img_gif_count]
@@ -550,6 +564,7 @@ img_gif_parse:
     jne  .corrupt
     inc  r12
     mov  dword [rel img_gif_frames], 1
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .block
 .trailer:
     cmp  r12, r13
@@ -628,6 +643,7 @@ img_gif_code:
     shl  eax, cl
     or   [rel img_gif_bitbuf], eax
     add  dword [rel img_gif_nbits], 8
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .fill
 .ready:
     mov  ecx, [rel img_gif_bitsize]

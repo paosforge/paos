@@ -1,6 +1,6 @@
 ;; MODULE hv/vcpu_bsp_state
 ;; LAYER 5
-;; EXPORTS vcb_dr, vcb_debug, vcb_cr, vcb_msr, vcb_xsetbv, vcb_lapic_msr, vcb_lapic_pick, vcb_cpuid, vcb_guest_msrs, vcb_efer_mask, vcb_entry_ctls, vcb_xcr0_allowed
+;; EXPORTS vcb_dr, vcb_debug, vcb_cr, vcb_cr0_cache, vcb_msr, vcb_xsetbv, vcb_lapic_msr, vcb_lapic_pick, vcb_cpuid, vcb_guest_msrs, vcb_efer_mask, vcb_entry_ctls, vcb_xcr0_allowed
 ;; IMPORTS hv/vcpu_svm_run, hv/vcpu_svm_dispatch, hv/vcpu_bsp, hv/vcpu_ap, hv/vcpu_ap_run, hv/vcpu_ap_mode, hv/vcpu_ap_efer, hv/vmx, hv/guest_lapic, hv/vcpu_cpuid
 ;; CAPS
 ;; OWNER saga:hv
@@ -9,8 +9,10 @@
 ; closed executors, IF0, and the selected vCPU's VMCS current on the BSP.
 ; START must freeze the three vCPU0 policy words, CPUID (48-bit linear
 ; addresses, no LA57), MSR list IDs/addresses and PAT/EFER swap controls.
-; There is no READY publisher here. No host MSR or XCR0 instruction occurs.
+; There is no READY publisher here. Only the CR0 fixed-bit MSRs are read;
+; no host MSR or XCR0 write occurs.
 %include "hv/vcpu_ap_xstate.inc"
+%include "hv/vmx_cache.inc"
 
 ; MOV-DR exit qualification from the current selected VMCS. EAX1 done,
 ;2 #GP,3 #UD,4 GD #DB (no RIP advance). No physical debug instruction here.
@@ -170,10 +172,10 @@ vcb_dr:
     pop  rbx
     ret
 
-; S7 CR exits: START keeps CR0 mask zero, CR3 load/store exiting off,
+; S7 CR exits: START masks only CR0.CD/NW, CR3 load/store exiting off,
 ; and CR4 mask exactly these unadvertised features, with read shadow zero.
-; Ordinary CR0/PAE changes run in hardware; VMX_MISC[5] saves LMA/entry bit9.
-; No mutable CR shadow or additional frozen-control exception is introduced.
+; Other CR0 changes normally run in hardware; a combined cache/mode write
+; is emulated below. Only CD/NW may change in the frozen read-shadow record.
 ; START must hide LA57, VMX, KL, PKE and CET in the frozen guest CPUID.
 VCB_CR4_DENIED equ (1 << 12) | (1 << 13) | (1 << 19) | (1 << 22) | (1 << 23)
 
@@ -195,6 +197,8 @@ vcb_cr:
     mov  r12d, edi
     mov  ebx, edi
     and  ebx, 0xF
+    test ebx, ebx
+    jz   .cr0
     cmp  ebx, 8
     je   .cr8_mode
     cmp  ebx, 4
@@ -202,6 +206,12 @@ vcb_cr:
     test r12d, 0x30                  ; CR4 read never traps with this mask
     jnz  vcb_fail_stop
     jmp  .cpl
+.cr0:
+    mov  rdi, r12
+    call vcb_cr0_cache
+    test eax, eax
+    jz   vcb_fail_stop
+    jmp  .out
 .cr8_mode:
     test r12d, 0x20                  ; no CLTS/LMSW for CR8
     jnz  vcb_fail_stop
@@ -295,6 +305,171 @@ vcb_cr:
 .ud:
     mov  eax, 3
 .out:
+    pop  r13
+    pop  r12
+    pop  rbx
+    ret
+
+; MOV CR0 exit, either selected vCPU or legacy VMCS. RDI qualification.
+; 1 committed /2 guest #GP /0 internal refusal (caller must never resume).
+; Architectural CR0 checks happen before any VMCS write. Physical CR0 is
+; never written here; VM entry ignores CD/NW and LAND clears them explicitly.
+; CR0 fixed bits are sampled on this CPU; unrestricted guest relaxes PE/PG.
+vcb_cr0_cache:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    test rdi, ~0xF00                   ; exactly MOV-to-CR0, one of16 source GPRs
+    jnz  .bad
+    mov  ebx, edi
+    shr  ebx, 8
+    mov  edi, 0x6000
+    vmread rax, rdi
+    jc   .bad
+    jz   .bad
+    cmp  rax, HV_CR0_CACHE_BITS
+    jne  .bad
+    mov  edi, 0x4818                   ; SS access rights: current privilege
+    vmread rax, rdi
+    jc   .bad
+    jz   .bad
+    test eax, 0x60
+    jnz  .gp
+    lea  rax, [rel hv_linux_cr_gpr_map]
+    movzx eax, byte [rax + rbx]
+    cmp  eax, 0xFF
+    je   .rsp
+    lea  rdx, [rel hv_linux_gpr]
+    mov  r12, [rdx + rax]
+    jmp  .value
+.rsp:
+    mov  edi, 0x681C
+    vmread r12, rdi
+    jc   .bad
+    jz   .bad
+.value:
+    mov  rax, r12
+    shr  rax, 32
+    jnz  .gp                           ; CR0[63:32] are reserved
+    and  r12d, 0xE005003F              ; lower reserved bits ignored, ET always1
+    or   r12d, 1 << 4
+    test r12d, 1 << 30
+    jnz  .paging
+    test r12d, 1 << 29
+    jnz  .gp                           ; NW1/CD0 is illegal
+.paging:
+    bt   r12d, 31
+    jnc  .fixed
+    test r12b, 1
+    jz   .gp                           ; PG requires PE
+.fixed:
+    mov  ecx, 0x486                   ; IA32_VMX_CR0_FIXED0
+    rdmsr
+    shl  rdx, 32
+    or   rax, rdx
+    mov  edx, 0x80000001
+    not  rdx
+    and  rax, rdx                    ; unrestricted guest allows PE/PG clear
+    mov  rdx, r12
+    not  rdx
+    test rax, rdx
+    jnz  .gp
+    mov  ecx, 0x487                   ; IA32_VMX_CR0_FIXED1
+    rdmsr
+    shl  rdx, 32
+    or   rax, rdx
+    not  rax
+    test r12, rax
+    jnz  .gp
+    mov  edi, 0x6804
+    vmread r13, rdi
+    jc   .bad
+    jz   .bad
+    mov  edi, 0x2806
+    vmread r14, rdi
+    jc   .bad
+    jz   .bad
+    mov  edi, 0x4012
+    vmread r15, rdi
+    jc   .bad
+    jz   .bad
+    bt   r12d, 31
+    jc   .pg_on
+    test r13d, 1 << 17                ; PCIDE requires paging
+    jnz  .gp
+    mov  edi, 0x4816
+    vmread rax, rdi
+    jc   .bad
+    jz   .bad
+    test eax, 1 << 13                 ; cannot leave paging from a64-bit CS
+    jnz  .gp
+    jmp  .legacy_mode
+.pg_on:
+    test r14d, 1 << 8                 ; LME
+    jz   .legacy_mode
+    test r13d, 1 << 5                 ; IA32e activation requires PAE
+    jz   .gp
+    test r14d, 1 << 10
+    jnz  .long_mode                    ; already active:64-bit CS is fine
+    mov  edi, 0x4816
+    vmread rax, rdi
+    jc   .bad
+    jz   .bad
+    test eax, 1 << 13
+    jnz  .gp
+    mov  edi, 0x4822                  ; 16-bit TSS cannot activate IA32e
+    vmread rax, rdi
+    jc   .bad
+    jz   .bad
+    test eax, 8
+    jz   .gp
+.long_mode:
+    or   r14d, 1 << 10
+    or   r15d, 1 << 9
+    jmp  .commit
+.legacy_mode:
+    and  r14, ~(1 << 10)
+    and  r15, ~(1 << 9)
+.commit:
+    mov  edi, 0x6800
+    mov  rsi, r12
+    and  rsi, ~HV_CR0_CACHE_BITS
+    vmwrite rdi, rsi
+    jc   .bad
+    jz   .bad
+    mov  edi, 0x6004
+    vmread rax, rdi
+    jc   .bad
+    jz   .bad
+    and  rax, ~HV_CR0_CACHE_BITS
+    mov  rsi, r12
+    and  esi, HV_CR0_CACHE_BITS
+    or   rsi, rax                      ; every non-cache shadow bit unchanged
+    vmwrite rdi, rsi
+    jc   .bad
+    jz   .bad
+    mov  edi, 0x2806
+    mov  rsi, r14
+    vmwrite rdi, rsi
+    jc   .bad
+    jz   .bad
+    mov  edi, 0x4012
+    mov  rsi, r15
+    vmwrite rdi, rsi
+    jc   .bad
+    jz   .bad
+    mov  eax, 1
+    jmp  .out
+.gp:
+    mov  eax, 2
+    jmp  .out
+.bad:
+    xor  eax, eax
+.out:
+    pop  r15
+    pop  r14
     pop  r13
     pop  r12
     pop  rbx

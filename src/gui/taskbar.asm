@@ -2,7 +2,7 @@
 %include "core/abi/build_profile.inc"
 ;; LAYER 6
 ;; EXPORTS taskbar_cluster_rect, taskbar_draw_registry, taskbar_pointer_press, f1_cmd_verb_taskbar, f1_cmd_verb_winattn, taskbar_attention_tick, f1_out_reset, f1_put_str, f1_put_dec, f1_put_hex6, f1_put_escaped, f1_out_buf, f1_out_ready
-;; IMPORTS gui/calendar, gui/window, gui/input_route, gui/chat_app, gui/window_mgmt, gui/wm_pointer, gui/cadence_mark, gui/guardian_indicator, core/lib/fmt, dev/power/ec_power, gui/terminal_consent
+;; IMPORTS gui/compose_job, gui/calendar, gui/window, gui/input_route, gui/chat_app, gui/window_mgmt, gui/wm_pointer, gui/cadence_mark, gui/guardian_indicator, core/lib/fmt, dev/power/ec_power, gui/terminal_consent
 ;; CAPS
 ;; OWNER saga:gui_foundation_ladder
 
@@ -411,6 +411,17 @@ taskbar_ime_append:
 taskbar_attention_tick:
     cmp  byte [rel dpms_blanked], 1
     je   .out
+    ; Do not change the attention phase or invalidate an unfinished frame.
+    ; The canonical owner samples the new phase after this one completes.
+    cmp byte [rel fb_compose_live],0
+    je .paint
+    cmp byte [rel fb_compose_clip_active],0
+    jne .paint
+    cmp byte [rel fb_compose_pending],0
+    jne .out
+    cmp byte [rel fb_present_pending],0
+    jne .out
+.paint:
     xor  byte [rel taskbar_pulse_phase], 1
     call taskbar_draw_registry
 .out:

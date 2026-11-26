@@ -1,7 +1,7 @@
 ;; MODULE hv/vcpu_start_close
 ;; LAYER 5
 ;; EXPORTS vst_close, vst_finish, vst_native_restore
-;; IMPORTS hv/vmx, hv/vcpu_ap, hv/vcpu_ap_run, hv/vcpu_bsp, hv/vcpu_bsp_context, hv/vcpu_start_resources, hv/vcpu_start_vmcs, hv/boundary
+;; IMPORTS hv/vmx, hv/vcpu_ap, hv/vcpu_ap_run, hv/vcpu_ap_frozen, hv/vcpu_bsp, hv/vcpu_bsp_context, hv/vcpu_start_resources, hv/vcpu_start_vmcs, hv/boundary
 ;; CAPS
 ;; OWNER saga:hv
 ;; CONTEXT: bsp_only
@@ -110,6 +110,7 @@ vst_close:
     jz   vcb_fail_stop
 .retire:
     mov  qword [rel vca_ready], 0        ; thaw after AP VMXOFF and VMCS1 clear
+    mov  qword [rel vafs_valid], 0       ; shadow dies with the epoch; reseal rebuilds it
     mov  dword [rel vcg_ap], -1
     mov  qword [rel vcg_token], 0
     mov  dword [rel vcg_go], 0

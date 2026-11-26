@@ -20,7 +20,17 @@
 ;; us = segment length in microseconds, ms = its start in boot ms (boot_ms_now's clock). Without a TSC rate the
 ;; profile is skipped and says so. Preserves flags and every register, so a mark may sit anywhere in the loop.
 
-IDLE_PROF_WINDOW_MS equ 5000
+; The ordinary image retains its five-second profile. A diagnostic build may
+; keep the same owner measurement open through guest startup (Lenovo P2).
+; This changes only the measurement window, never an owner's execution policy.
+%ifndef PAOS_IDLE_PROF_WINDOW_MS
+%define PAOS_IDLE_PROF_WINDOW_MS 5000
+%endif
+%if PAOS_IDLE_PROF_WINDOW_MS < 1 || PAOS_IDLE_PROF_WINDOW_MS > 120000
+%error "PAOS_IDLE_PROF_WINDOW_MS must be 1..120000"
+%endif
+IDLE_PROF_WINDOW_MS equ PAOS_IDLE_PROF_WINDOW_MS
+%defstr IDLE_PROF_WINDOW_TEXT PAOS_IDLE_PROF_WINDOW_MS
 IDLE_PROF_TOP       equ 4
 
 idle_prof_mark:
@@ -190,7 +200,7 @@ idle_prof_dec:
     add  rsp, 24
     ret
 
-str_idle_prof_pre:   db "[PAOS64] idle pass profile 5000ms passes=", 0
+str_idle_prof_pre:   db "[PAOS64] idle pass profile ", IDLE_PROF_WINDOW_TEXT, "ms passes=", 0
 str_idle_prof_top:   db " top id:us@ms", 0
 str_idle_prof_sp:    db " ", 0
 str_idle_prof_colon: db ":", 0

@@ -5,6 +5,8 @@
 ;; CAPS
 ;; OWNER saga:gui_image_pipeline
 
+%include "gui/img/img_cold_hooks.inc"
+
 ; Baseline/extended-sequential/progressive Huffman8 JPEG: gray or YCbCr444/420/422/440/411.
 ; SOF1 keeps 8-bit samples/quantizers and permits four DC/AC destinations.
 ; Every SOF1 scan uses the SHA-owned complete coefficient frame, sequential
@@ -45,6 +47,7 @@ JPG_FRAME_CAP equ 67108864             ; <=64MiB, derived padded 4Mpixel frame b
 JPG_QT_COUNT equ 4
 
 img_jpeg_probe:
+    IMG_COLD_PUBLIC_GUARD
     cld
     push r12
     push r13
@@ -64,6 +67,7 @@ img_jpeg_probe:
 
 ; Exact-span adapter entry: the parser's actual scan EOI, not a suffix search.
 img_jpeg_probe_exact:
+    IMG_COLD_PUBLIC_GUARD
     cld
     mov  rax, rdi
     add  rax, rsi
@@ -120,7 +124,7 @@ img_jpeg_parse_coeff:
     lea  rdi, [rel img_jpg_progress_bits]
     mov  ecx, 4 * 64
     mov  al, 255
-    rep  stosb
+    IMG_COLD_MEMORY stosb
     add  r12, 2
 .marker:
     cmp  r12, r13
@@ -132,6 +136,7 @@ img_jpeg_parse_coeff:
     cmp  r12, r13
     jae  .truncated
     cmp  byte [r12], 0xFF
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     je   .ff
     movzx ebp, byte [r12]
     inc  r12
@@ -140,6 +145,7 @@ img_jpeg_parse_coeff:
     cmp  ebp, 0xD8
     je   .corrupt                     ; one SOI/frame; no inherited interval state
     cmp  ebp, 0x01
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     je   .marker
     cmp  ebp, 0xD0
     jb   .has_len
@@ -193,6 +199,7 @@ img_jpeg_parse_coeff:
     jne  .unsupported
 .skip_unknown:
     mov  r12, r14
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .marker
 
 .app1:
@@ -218,10 +225,13 @@ img_jpeg_parse_coeff:
 
 .app0:
     cmp  ebx, 7
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jb   .skip_unknown
     cmp  dword [r15], 0x4649464A       ; JFIF implies YCbCr, conflicts with device RGB/CMYK
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jne  .skip_unknown
     cmp  byte [r15 + 4], 0
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jne  .skip_unknown
     mov  byte [rel img_jpg_jfif_seen], 1
     jmp  .seg_done
@@ -233,21 +243,28 @@ img_jpeg_parse_coeff:
     ; Three/four-component explicit color must fail shut on malformed metadata.
     mov  byte [rel img_jpg_adobe_attempt], 1
     cmp  byte [rel img_jpg_adobe_seen], 0
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jne  .profile
     cmp  qword [rel img_jpg_scan_ptr], 0
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jne  .profile
     cmp  ebx, 14                      ; 12-byte Adobe payload
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jne  .profile
     cmp  dword [r15], 0x626F6441       ; Adobe
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jne  .profile
     cmp  byte [r15 + 4], 'e'
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jne  .profile
     cmp  word [r15 + 5], 0x6400       ; version100 BE
     je   .adobe_version
     cmp  word [r15 + 5], 0x6500       ; version101 BE
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jne  .profile
 .adobe_version:
     cmp  dword [r15 + 7], 0           ; unsupported flags are not a profile
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jne  .profile
     mov  al, [r15 + 11]
     mov  [rel img_jpg_adobe_transform], al
@@ -356,6 +373,7 @@ img_jpeg_parse_coeff:
     lea  rsi, [rel img_jpg_comp_qt]
     mov  [rsi + rdx], al
     inc  edx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .sof_comp_loop
 .sof_sampling:
     cmp  ecx, 1
@@ -437,6 +455,7 @@ img_jpeg_parse_coeff:
     jnz  .bounds
     mov  byte [rel img_jpg_sof_seen], 1
     mov  r12, r14
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .marker
 
 .dqt:
@@ -469,9 +488,11 @@ img_jpeg_parse_coeff:
     test al, al
     jz   .corrupt                      ; T.81 quantizer values are 1..255
     stosb
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     loop .quant_copy
     lea  rax, [rel img_jpg_qpresent]
     mov  byte [rax + r8], 1
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .dqt_loop
 
 .dht:
@@ -509,6 +530,7 @@ img_jpeg_parse_coeff:
     jle  .corrupt                      ; oversubscribed or reserved all-ones code
     inc  edx
     cmp  edx, 16
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jb   .dht_sum
     test ebp, ebp
     jz   .corrupt
@@ -524,7 +546,7 @@ img_jpeg_parse_coeff:
     push rsi
     inc  rsi
     mov  ecx, 16
-    rep  movsb
+    IMG_COLD_MEMORY movsb
     pop  rsi
     lea  rdi, [rel img_jpg_hsymbols]
     mov  eax, r8d
@@ -551,9 +573,11 @@ img_jpeg_parse_coeff:
     ja   .corrupt
 .symbol_ok:
     stosb
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     loop .symbol_copy
     lea  rax, [rel img_jpg_hpresent]
     mov  byte [rax + r8], 1
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .dht_loop
 
 .sos:
@@ -609,6 +633,7 @@ img_jpeg_parse_coeff:
     cmp  al, [rsi + rdi]
     je   .found_comp
     inc  edi
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .find_comp
 .found_comp:
     ; Complete interleaved scans follow SOF order. Since SOF IDs are unique,
@@ -632,6 +657,7 @@ img_jpeg_parse_coeff:
     lea  r8, [rel img_jpg_comp_ac]
     mov  [r8 + rdi], al
     inc  edx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .sos_comp
 .sos_tail:
     lea  rsi, [r15 + 1 + rcx * 2]
@@ -685,6 +711,7 @@ img_jpeg_parse_coeff:
     movzx eax, byte [rcx]
     inc  rcx
     cmp  eax, 0xFF
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     je   .scan_fill                    ; marker fill bytes are not coded data
     cmp  eax, 0xD9
     je   .scan_eoi
@@ -702,6 +729,7 @@ img_jpeg_parse_coeff:
     mov  [rel img_jpg_restart_next], eax
     dec  dword [rel img_jpg_restart_count]
     mov  r12, rcx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .scan
 .scan_other:
     test eax, eax
@@ -714,18 +742,23 @@ img_jpeg_parse_coeff:
     jne  .corrupt                     ; missing restart(s), even if pixels fit
     mov  [rel img_jpg_scan_end], r12
     cmp  byte [rel img_jpg_buffered], 1
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jne  .marker
     cmp  qword [rel img_jpg_frame], 0
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     je   .marker
     call img_jpeg_progressive_scan
     test eax, eax
     jnz  .corrupt
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .marker
 .scan_stuffed:
     add  r12, 2
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .scan
 .scan_next:
     inc  r12
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .scan
 .progressive_sos:
     call img_jpeg_progressive_header
@@ -733,9 +766,11 @@ img_jpeg_parse_coeff:
     jnz  .corrupt
     mov  [rel img_jpg_scan_ptr], r14
     mov  r12, r14
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .scan
 .seg_done:
     mov  r12, r14
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .marker
 .eoi:
     call img_jpeg_four_metadata
@@ -854,6 +889,7 @@ img_jpeg_four_metadata:
     je   .bad
     inc  ecx
     cmp  ecx, 3
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jb   .unmarked_id
     jmp  .out
 .three_adobe:
@@ -862,6 +898,7 @@ img_jpeg_four_metadata:
     cmp  byte [rel img_jpg_adobe_seen], 1
     jne  .bad
     cmp  byte [rel img_jpg_adobe_transform], 1
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     je   .three_ycc
     cmp  byte [rel img_jpg_adobe_transform], 0
     jne  .bad
@@ -964,6 +1001,7 @@ img_jpeg_exif:
 .next:
     add  rsi, 12
     dec  r11d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .entry
 .ok:
     xor  eax, eax
@@ -978,6 +1016,7 @@ img_jpeg_exif:
 .u32:
     mov  eax, [rdi]
     test r8d, r8d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jz   .read
     bswap eax
     ret
@@ -992,14 +1031,16 @@ img_jpeg_exif:
     ret
 
 img_jpeg_clear:
+    IMG_COLD_OWNER_ONLY
     lea  rdi, [rel img_jpg_state_begin]
     lea  rcx, [rel img_jpg_state_end]
     sub  rcx, rdi
     xor  eax, eax
-    rep  stosb
+    IMG_COLD_MEMORY stosb
     ret
 
 img_jpeg_decode:
+    IMG_COLD_PUBLIC_GUARD
     push r12
     push r13
     push r14
@@ -1054,7 +1095,7 @@ img_jpeg_decode:
     lea  rdi, [rsp]
     mov  rsi, r12
     mov  rdx, r13
-    call sha256_hash
+    IMG_COLD_DIGEST
     mov  rdi, [rsp + 80]
     add  rdi, r13                     ; RGBA <=16MiB, source <=32MiB
     add  rdi, 15
@@ -1072,11 +1113,11 @@ img_jpeg_decode:
     mov  rdi, r14
     mov  rsi, r12
     mov  rcx, r13
-    rep  movsb
+    IMG_COLD_MEMORY movsb
     lea  rdi, [rsp + 32]
     mov  rsi, r14
     mov  rdx, r13
-    call sha256_hash
+    IMG_COLD_DIGEST
     lea  rdi, [rsp]
     lea  rsi, [rsp + 32]
     mov  ecx, 32
@@ -1091,7 +1132,7 @@ img_jpeg_decode:
     mov  rcx, [rel img_jpg_frame_bytes]
     shr  rcx, 2
     xor  eax, eax
-    rep  stosd                        ; untransmitted coefficients are zero
+    IMG_COLD_MEMORY stosd                        ; untransmitted coefficients are zero
 .snapshot_parse:
     mov  rdi, r14
     mov  rsi, r13
@@ -1188,9 +1229,11 @@ img_jpeg_decode:
     dec  dword [rel img_jpg_restart_left]
 .advance_mcu:
     inc  r15d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .mcu_x
 .next_mcu_y:
     inc  ebp
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .mcu_y
 .progressive_render:
     call img_jpeg_progressive_render
@@ -1270,6 +1313,7 @@ img_jpeg_validate_tables:
     test eax, eax
     jnz  .bad
     inc  ecx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .comp
 .ok:
     xor  eax, eax
@@ -1308,9 +1352,11 @@ img_jpeg_decode_mcu:
     call img_jpeg_idct
     inc  r13d
     dec  ebx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .block
 .next_comp:
     inc  r12d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .comp
 .ok:
     xor  eax, eax
@@ -1333,7 +1379,7 @@ img_jpeg_decode_block:
     lea  rdi, [rel img_jpg_coeff]
     xor  eax, eax
     mov  ecx, 64
-    rep  stosd
+    IMG_COLD_MEMORY stosd
     lea  rdi, [rel img_jpg_comp_dc]
     movzx edi, byte [rdi + r14]
     call img_jpeg_huff
@@ -1400,11 +1446,13 @@ img_jpeg_decode_block:
     lea  rdi, [rel img_jpg_coeff]
     mov  [rdi + rdx * 4], eax
     inc  r12d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .ac
 .zrl:
     add  r12d, 16
     cmp  r12d, 64
     ja   .bad
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .ac
 .ok:
     xor  eax, eax
@@ -1447,6 +1495,7 @@ img_jpeg_restart:
     cmp  rdx, [rel img_jpg_bs_end]
     jae  .bad
     cmp  byte [rdx], 0xFF
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     je   .fill
     movzx eax, byte [rdx]
     sub  eax, 0xD0
@@ -1517,6 +1566,7 @@ img_jpeg_bits:
     jc   .bad
     or   ebx, eax
     dec  ecx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .loop
 .ok:
     mov  eax, ebx
@@ -1561,6 +1611,7 @@ img_jpeg_huff:
     add  esi, eax
     shl  esi, 1
     inc  ecx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .len
 .found:
     add  r13d, edx
@@ -1648,9 +1699,11 @@ img_jpeg_idct:
     add  rbp, rax
     inc  ecx
     cmp  ecx, 8
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jb   .u
     inc  ebx
     cmp  ebx, 8
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jb   .v
     sar  rbp, 26                       ; / (4 * 4096 * 4096)
     add  ebp, 128
@@ -1668,9 +1721,11 @@ img_jpeg_idct:
     mov  [r13 + rax], bpl
     inc  r15d
     cmp  r15d, 8
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jb   .x
     inc  r14d
     cmp  r14d, 8
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jb   .y
     pop  rbp
     pop  r15
@@ -1857,9 +1912,11 @@ img_jpeg_write_mcu:
     mov  [rsi + rdi + 2], dl
     mov  byte [rsi + rdi + 3], 0xFF
     inc  r12d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .dx
 .next_y:
     inc  ebp
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .dy
 .out:
     pop  rbp
@@ -1904,6 +1961,7 @@ img_jpeg_sample:
     imul eax, edx
     add  edi, eax
     inc  ecx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .base
 .base_done:
     mov  eax, ebx
@@ -1968,6 +2026,7 @@ img_jpeg_baseline_ac_table:
     add  edx, eax
     inc  ecx
     cmp  ecx, 16
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jb   .count
     lea  r8, [rel img_jpg_hsymbols]
     shl  edi, 8
@@ -1985,6 +2044,7 @@ img_jpeg_baseline_ac_table:
     jz   .bad
 .next:
     inc  ecx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .symbol
 .ok:
     xor  eax, eax
@@ -2013,9 +2073,11 @@ img_jpeg_frame_geometry:
     cmp  al, [rdi + rcx]
     je   .bad
     inc  ecx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .unique
 .next_id:
     inc  ebx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .ids
 .geometry:
     movzx ecx, byte [rel img_jpg_max_h]
@@ -2076,6 +2138,7 @@ img_jpeg_frame_geometry:
     lea  rdi, [rel img_jpg_block_rows]
     mov  [rdi + rbx * 4], eax
     inc  ebx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .comp
 .done:
     cmp  qword [rel img_jpg_frame], 0
@@ -2124,9 +2187,11 @@ img_jpeg_quant_change:
     jne  .bad
     inc  edx
     cmp  edx, 64
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jb   .compare
 .next:
     inc  ecx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .comp
 .ok:
     xor  eax, eax
@@ -2215,6 +2280,7 @@ img_jpeg_progressive_header:
     cmp  al, [rdi + rbx]
     je   .found
     inc  ebx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .find
 .found:
     bts  r15d, ebx
@@ -2314,7 +2380,7 @@ img_jpeg_progressive_header:
     lea  rdi, [rel img_jpg_component_quant]
     add  rdi, rax
     mov  ecx, 64
-    rep  movsb
+    IMG_COLD_MEMORY movsb
 .history:
     cmp  byte [rel img_jpg_sequential], 1
     je   .component_done              ; sequential uses whole-component coverage
@@ -2343,9 +2409,11 @@ img_jpeg_progressive_header:
     mov  [rdi + rcx], al
     inc  ecx
     cmp  ecx, [rel img_jpg_se]
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jbe  .coefficient
 .component_done:
     inc  r14d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .comp
 .scan_geometry:
     mov  eax, [rel img_jpg_mcu_cols]
@@ -2396,6 +2464,7 @@ img_jpeg_progressive_complete:
     cmp  byte [rdi + rax], 255          ; every component requires initial DC
     je   .bad
     inc  ecx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .comp
 .ok:
     xor  eax, eax
@@ -2433,6 +2502,7 @@ img_jpeg_frame_mcu_block:
     imul edx, r9d
     add  edx, eax
     mov  esi, r10d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  img_jpeg_frame_block
 
 ; Decode one scan immediately when the private parser reaches its terminal marker.
@@ -2517,9 +2587,11 @@ img_jpeg_progressive_scan:
     test eax, eax
     jnz  .bad
     inc  r13d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .block
 .next_comp:
     inc  r14d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .comp
 .advance:
     cmp  dword [rel img_jpg_restart_interval], 0
@@ -2527,9 +2599,11 @@ img_jpeg_progressive_scan:
     dec  dword [rel img_jpg_restart_left]
 .next_col:
     inc  r15d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .col
 .next_row:
     inc  ebp
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .row
 .finish:
     cmp  dword [rel img_jpg_eobrun], 0
@@ -2613,11 +2687,13 @@ img_jpeg_sequential_block:
     jc   .bad
     mov  [r12 + r14 * 4], eax
     inc  r14d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .ac
 .zrl:
     add  r14d, 16
     cmp  r14d, 64
     ja   .bad
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .ac
 .ok:
     xor  eax, eax
@@ -2714,6 +2790,7 @@ img_jpeg_progressive_block:
     jg   .bad
     mov  [r12 + r14 * 4], eax
     inc  r14d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .ac_initial
 .initial_zero:
     cmp  ebx, 15
@@ -2723,6 +2800,7 @@ img_jpeg_progressive_block:
     inc  eax
     cmp  r14d, eax
     ja   .bad
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .ac_initial
 .initial_eob:
     call .read_eob
@@ -2775,6 +2853,7 @@ img_jpeg_progressive_block:
     js   .target
 .walk_next:
     inc  r14d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .walk
 .target:
     test r15d, r15d
@@ -2786,9 +2865,11 @@ img_jpeg_progressive_block:
     mov  [r12 + r14 * 4], r15d
 .target_next:
     inc  r14d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .refine_symbol
 .eob_refine:
     cmp  r14d, [rel img_jpg_se]
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     ja   .eob_done
     cmp  dword [r12 + r14 * 4], 0
     je   .eob_next
@@ -2799,11 +2880,13 @@ img_jpeg_progressive_block:
     jnz  .bad
 .eob_next:
     inc  r14d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .eob_refine
 .ac_symbol:
     lea  rdi, [rel img_jpg_comp_ac]
     movzx edi, byte [rdi + r13]
     add  edi, 2
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  img_jpeg_huff
 .read_eob:
     mov  edi, ebx
@@ -2922,6 +3005,7 @@ img_jpeg_progressive_render:
     mov  [rdi + rdx * 4], eax
     inc  ecx
     cmp  ecx, 64
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jb   .dequant
     lea  rdi, [rel img_jpg_coeff]
     lea  rsi, [rel img_jpg_samples]
@@ -2931,18 +3015,22 @@ img_jpeg_progressive_render:
     call img_jpeg_idct
     inc  ebx
     inc  r13d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .block
 .next_comp:
     inc  r12d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .comp
 .write:
     mov  edi, r15d
     mov  esi, ebp
     call img_jpeg_write_mcu
     inc  r15d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .col
 .next_row:
     inc  ebp
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .row
 .ok:
     xor  eax, eax

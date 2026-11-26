@@ -1,8 +1,9 @@
 ;; MODULE sec/session
+%include "core/abi/login_trace.inc"
 ;; LAYER 5
 ;; PURPOSE Sole owner of the login-bound session gate and workspace policy.
 ;; EXPORTS session_shell_prepare_local_request, session_shell_try_request_admit, session_shell_try_launch_arm, session_shell_try_launch_disarm, session_shell_init, session_shell_register_workspace_ops, session_shell_register_local_wipe, session_shell_register_account_wipe, session_shell_register_adopt_wipe, session_shell_register_format_wipe, session_shell_local_wipe, session_shell_register_terminal_retire, session_shell_terminal_retire, session_shell_offer_bind, session_shell_unlock, session_shell_lock, session_shell_require_unlocked, session_shell_observer_reset, session_shell_request_principal, session_shell_local_authority, session_shell_authority_validate, session_shell_arm_explicit_unlock, session_shell_audit_unlock, session_idle_tick, session_injected_input, session_out_buf, session_out_ready
-;; IMPORTS boot/boot_v2_handoff, core/time, core/lib/fmt, core/lib/str, sec/principal, sec/idle_prefs, svc/command, svc/command_auth, svc/command_audit, boot/serial, dev/input/ps2, svc/history, sec/wifi_profile, sec/wifi_store, core/smp, fs/fs_format
+;; IMPORTS svc/command_udp, boot/boot_v2_handoff, core/time, core/lib/fmt, core/lib/str, sec/principal, sec/idle_prefs, svc/command, svc/command_auth, svc/command_audit, boot/serial, dev/input/ps2, svc/history, sec/wifi_profile, sec/wifi_store, core/smp, fs/fs_format
 ;; OWNER saga:session_shell
 ; ============================================================================
 ; OWNER/SYSTEM sessions consume the output-only {principal, key-handle} from
@@ -207,8 +208,13 @@ session_shell_unlock_core:
     mov  rax, [rel session_authority_epoch]
     mov  [rel session_authority], rax
     call session_shell_local_wipe ; synchronous before authority/store/workspace callbacks
+    LOGIN_TRACE 39
+    LOGIN_TRACE 40
     call wifi_profile_cancel
+    LOGIN_TRACE 41
+    LOGIN_TRACE 42
     call wifi_store_wipe
+    LOGIN_TRACE 43
     call session_shell_classify_unlock
     xor  eax, eax
     ret
@@ -866,24 +872,33 @@ session_shell_local_wipe:
     mov rax,[rel session_account_wipe_op]
     test rax,rax
     jz .adopt
+    LOGIN_TRACE 30
     call rax
+    LOGIN_TRACE 31
 .adopt:
     mov rax,[rel session_adopt_wipe_op]
     test rax,rax
     jz .format
+    LOGIN_TRACE 32
     call rax
+    LOGIN_TRACE 33
 .format:
     mov rax,[rel session_format_wipe_op]
     test rax,rax
     jz .format_slot
+    LOGIN_TRACE 34
     call rax
+    LOGIN_TRACE 35
 .format_slot:
+    LOGIN_TRACE 36
     call fs_format_cancel              ; Format F1 (SEC 108221 C6): the slot ends on lock/session change
+    LOGIN_TRACE 37
 .wifi:
     pop rbx
     mov rax, [rel session_local_wipe_op]
     test rax, rax
     jz .done
+    LOGIN_TRACE 38                ; tail callback; next core stage brackets its return
     jmp rax
 .done:
     ret
@@ -927,7 +942,9 @@ session_shell_restore_workspace:
     mov  rax, [rel session_workspace_restore_op]
     test rax, rax
     jz   .done
+    LOGIN_TRACE 44
     call rax
+    LOGIN_TRACE 45
     cmp  eax, SESSION_RESTORE_RAM
     je   .record
     cmp  eax, SESSION_RESTORE_DOC

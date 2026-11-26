@@ -156,6 +156,7 @@ reset_wipe_all:
     RW_CLEAR ig_key_ready
     RW_WIPE_RANGE acp_scratch, acp_scratch_end ; original private account consume; floor/busy excluded
     RW_WIPE_RANGE tgs_private_begin, tgs_private_end ; Terminal consent keys, readiness, scopes and interrupted IO
+    RW_CLEAR tc_page_credit_pending ; revoke an interrupted deferred consent-page receipt
     RW_WIPE  osk_key, 32
     RW_WIPE  osk_blob, OSK_SIZE
     RW_WIPE  osk_verify, OSK_SIZE

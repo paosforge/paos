@@ -1,7 +1,7 @@
 ;; MODULE gui/widget_image
 ;; LAYER 6
 ;; EXPORTS widget_image_refused_state, widget_image_bound_state, widget_image_register, widget_image_bind, widget_image_rebind_window, widget_image_state_ptr, image_type_id, wallpaper_paint_rect, wallpaper_perf_stage, wallpaper_tree, widget_image_contain_size
-;; IMPORTS gui/app_launcher, gui/lock_screen, gui/widget, gui/window, gui/window_mgmt, gui/wintree, gui/img/img_core, gui/img/img_cache, gui/img/img_cover, gui/img/img_source, boot/serial, core/time, svc/command, svc/command_auth
+;; IMPORTS gui/compose_job, gui/compose_idle, gui/app_launcher, gui/lock_screen, gui/widget, gui/window, gui/window_mgmt, gui/wintree, gui/img/img_core, gui/img/img_cache, gui/img/img_cover, gui/img/img_source, boot/serial, core/time, svc/command, svc/command_auth
 ;; CAPS
 ;; OWNER saga:gui_image_pipeline
 
@@ -540,6 +540,19 @@ widget_image_draw:
     jns  .tile_x0
     xor  eax, eax
 .tile_x0:
+    ; Bound tile enumeration itself before entering either loop. Primitive
+    ; clipping alone still visited every tiny source tile on the full screen
+    ; while an idle replay owned only one short row. Keep the original widget
+    ; origin below for modulo phase; only the visible interval is narrowed.
+    cmp  byte [rel fb_compose_clip_active], 0
+    je   .tile_x_visible
+    mov  esi, [rel fb_compose_x0]
+    cmp  rax, rsi
+    cmovl rax, rsi
+    mov  esi, [rel fb_compose_x1]
+    cmp  rcx, rsi
+    cmovg rcx, rsi
+.tile_x_visible:
     cmp  rax, rcx
     jge  .out
     mov  r14d, eax                     ; visible left, widget-relative phase below
@@ -555,6 +568,15 @@ widget_image_draw:
     jns  .tile_y0
     xor  eax, eax
 .tile_y0:
+    cmp  byte [rel fb_compose_clip_active], 0
+    je   .tile_y_visible
+    mov  esi, [rel fb_compose_y0]
+    cmp  rax, rsi
+    cmovl rax, rsi
+    mov  esi, [rel fb_compose_y1]
+    cmp  rdx, rsi
+    cmovg rdx, rsi
+.tile_y_visible:
     cmp  rax, rdx
     jge  .out
     mov  r12d, eax                     ; current visible row
@@ -713,6 +735,10 @@ wallpaper_declare:
 ; R8D/R9D/R10D/R11D = damage rectangle. Preserve all registers, as the old
 ; fill seam did. No allocation, decode, scale or full-screen repaint here.
 wallpaper_paint_rect:
+    call fb_compose_defer_scene
+    jnc .compose
+    ret
+.compose:
     push rbp
     push rax
     push rbx
@@ -757,6 +783,9 @@ wallpaper_paint_rect:
     jle  .out
     test r11d, r11d
     jle  .out
+    ; Bound tile/repeat traversal itself, before lookup and source expansion.
+    call fb_compose_intersect
+    jc .out
     mov  r12d, r8d
     mov  r13d, r9d
     mov  r14d, r10d
@@ -1097,11 +1126,22 @@ cmd_verb_wallpaper:
     inc  edx
     jmp  .path_len
 .acquire:
+%ifdef PAOS_IMG_COLD_LIVE
+    mov ecx,255
+    call img_cold_queue_file
+    test eax,eax
+    jnz .source_refused
+    call img_out_reset
+    lea rdi,[rel str_wallpaper_queued]
+    call img_out_str
+    jmp .ok                             ; admission only; old frame is still live
+%else
     call img_source_acquire
     test rax, rax
     jz   .source_refused
     mov  rbp, rax
     jmp  .bind
+%endif
 .asset:
     mov  rdi, r14
     call img_asset_find
@@ -1482,6 +1522,7 @@ str_wallpaper_none: db "none",0
 str_wallpaper_default: db "default",0
 str_wallpaper_desktop: db "desktop",0
 str_wallpaper_plain: db "taskbar_normal",0
+str_wallpaper_queued: db "QUEUED; current wallpaper kept until ready",0
 str_wallpaper_ok: db " wallpaper=ok",0
 str_wallpaper_read: db " WALLPAPER",0
 str_wallpaper_mode_token: db " mode=token",0

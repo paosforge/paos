@@ -1,7 +1,7 @@
 ;; MODULE hv/driver_domain_boot
 ;; LAYER 5
 ;; EXPORTS nd_boot_start, nd_boot_record_tick
-;; IMPORTS hv/driver_domain, hv/nd_isolation, hv/nic_selection, hv/a1_nic_selection, hv/vm_profile, hv/amdvi, hv/vtd, bus/pci, bus/pci_bdf, bus/pci_claim, core/csprng
+;; IMPORTS hv/driver_domain, hv/nd_isolation, hv/nic_selection, hv/a1_nic_selection, hv/vm_profile, hv/amdvi, hv/vtd, bus/pci, bus/pci_bdf, bus/pci_claim, core/csprng, hv/a1_service_selection
 ;; CAPS extension
 ;; OWNER saga:hv
 ;; CONTEXT: bsp_only
@@ -50,6 +50,15 @@ nd_boot_start:
 .profile_class:
     mov [rel nd_boot_class],edx
     mov dword [rel nd_boot_mode],0
+%ifdef PAOS_A1_SERVICE_SELECTION_INC
+    mov rdi,r12
+    mov esi,[rel a1_service_guest]
+    call a1_service_match
+    test eax,eax
+    jz .bad
+    mov dword [rel nd_boot_mode],1
+    jmp .mode_ready
+%endif
 %ifdef PAOS_DRIVER_DOMAIN_PROFILE_INC
     ; Immutable build policy selects the actual observation schema. nd_begin
     ; independently rechecks the signed policy before original START custody.
@@ -286,6 +295,10 @@ nd_boot_pci_cb:
     or edi,esi
     or edi,edx
     mov ebx,edi
+%ifdef PAOS_A1_SERVICE_SELECTION_INC
+    cmp ebx,[rel a1_service_guest]
+    jne .out                         ; no first-spare guess or control fallback
+%endif
     mov esi,8
     call pci_bdf_read
     shr eax,8

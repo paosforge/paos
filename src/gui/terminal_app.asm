@@ -1,7 +1,7 @@
 ;; MODULE gui/terminal_app
 ;; LAYER 6
 ;; EXPORTS terminal_terminal_launch_op, terminal_app_init, terminal_ui_launch, terminal_app_tick, terminal_key_hook, terminal_find_window, terminal_termfeed, terminal_ssh_sink, terminal_wheel, terminal_key_filter, terminal_wheel_hook, terminal_cmd_launch, terminal_cmd_termfeed, terminal_power_refusal
-;; IMPORTS svc/clipboard, svc/command_shutdown, gui/interpreter_feed, hv/context_execution, gui/calendar, hv/vmx, sec/session, net/dns, svc/ssh_client, boot/serial, gui/window, gui/vt/vt_engine, core/heap, gui/widget, gui/window_mgmt, gui/wm_pointer, gui/input_route, gui/form_loader, gui/cadence_mark, svc/command, svc/command_auth, svc/command_cons, dev/input/ps2, core/time, gui/power_exec, core/lib/fmt, sec/keyprov
+;; IMPORTS gui/compose_idle, gui/compose_job, svc/clipboard, svc/command_shutdown, gui/interpreter_feed, hv/context_execution, gui/calendar, hv/vmx, sec/session, net/dns, svc/ssh_client, boot/serial, gui/window, gui/vt/vt_engine, core/heap, gui/widget, gui/window_mgmt, gui/wm_pointer, gui/input_route, gui/form_loader, gui/cadence_mark, svc/command, svc/command_auth, svc/command_cons, dev/input/ps2, core/time, gui/power_exec, core/lib/fmt, sec/keyprov
 ;; CAPS CAP_GUI
 ;; OWNER saga:msi_terminal_input_ux
 ;
@@ -801,7 +801,9 @@ terminal_view_draw:
     mov  edi, eax
     call term_inst_ptr
     mov  r12, rax
-    call term_refit
+    ; The ordinary terminal tick owns resize/reflow. A composition replay must
+    ; only paint its already-owned grid: reflow here would repeat unsliced VT
+    ; work inside a tile, before the next command-service turn.
     mov  esi, 1
     call term_paint
 .out:
@@ -1015,6 +1017,12 @@ term_reflow_finish:
 
 ;; term_paint(R12 = instance, ESI = 1 whole view / 0 dirty rows + cursor)
 term_paint:
+    ; Output/blink callbacks may enter here without the widget dispatcher.
+    ; Retain the current VT and dirty rows until the owned clipped replay.
+    call fb_compose_defer_scene
+    jnc .compose
+    ret
+.compose:
     mov  rax, [r12 + TI_VT]
     cmp  dword [rax + VT.rf_pending], 0
     je   .ready
@@ -1072,9 +1080,30 @@ term_paint:
     pop  rbx
 .rows:
     xor  r14d, r14d
+    ; A clipped replay must not walk a whole 200x80 VT before reaching its
+    ; handful of pixels. Select intersecting rows before looking up cells.
+    cmp  byte [rel fb_compose_clip_active], 0
+    je   .row
+    mov  eax, [rel fb_compose_y0]
+    movsxd rcx, dword [rbx + WGI_Y]
+    sub  rax, rcx
+    sar  rax, 4
+    test rax, rax
+    jle  .row
+    mov  r14d, eax
 .row:
     cmp  r14d, [r13 + VT.rows]
     jge  .rows_done
+    cmp  byte [rel fb_compose_clip_active], 0
+    je   .row_visible
+    mov  eax, r14d
+    shl  rax, 4
+    movsxd rcx, dword [rbx + WGI_Y]
+    add  rax, rcx
+    mov  ecx, [rel fb_compose_y1]
+    cmp  rax, rcx
+    jge  .rows_done
+.row_visible:
     test r15d, r15d
     jnz  .paint_row
     cmp  r14d, 128
@@ -1227,9 +1256,31 @@ term_paint_row:
     mov  rbp, rax
 .live:
     xor  r15d, r15d
+    ; Include the preceding column because a wide glyph's lead cell can
+    ; overlap this tile while its right-half cell deliberately has no ink.
+    cmp  byte [rel fb_compose_clip_active], 0
+    je   .col
+    mov  eax, [rel fb_compose_x0]
+    movsxd rcx, dword [rbx + WGI_X]
+    sub  rax, rcx
+    sar  rax, 3
+    dec  rax
+    test rax, rax
+    jle  .col
+    mov  r15d, eax
 .col:
     cmp  r15d, [r13 + VT.cols]
     jge  .done
+    cmp  byte [rel fb_compose_clip_active], 0
+    je   .col_visible
+    mov  eax, r15d
+    shl  rax, 3
+    movsxd rcx, dword [rbx + WGI_X]
+    add  rax, rcx
+    mov  ecx, [rel fb_compose_x1]
+    cmp  rax, rcx
+    jge  .done
+.col_visible:
     test rbp, rbp
     jz   .screen_cell
     mov  eax, r15d
@@ -7981,7 +8032,25 @@ term_blit_mono8x16:
     mov  r15d, r9d
     mov  r11d, 1
     xor  r12d, r12d                     ; row
+    cmp  byte [rel fb_compose_clip_active], 0
+    je   .row
+    mov  eax, [rel fb_compose_y0]
+    movsxd rdi, r15d
+    sub  rax, rdi
+    test rax, rax
+    jle  .row
+    cmp  rax, 16
+    jae  .done
+    mov  r12d, eax
 .row:
+    cmp  byte [rel fb_compose_clip_active], 0
+    je   .row_visible
+    movsxd rax, r15d
+    add  rax, r12
+    mov  edi, [rel fb_compose_y1]
+    cmp  rax, rdi
+    jge  .done
+.row_visible:
     movzx eax, byte [rsi + r12]
     test edx, 4
     jz   .no_ital
@@ -8083,7 +8152,25 @@ term_blit_mono16x16:
     mov  r15d, r9d
     mov  r11d, 1
     xor  r12d, r12d
+    cmp  byte [rel fb_compose_clip_active], 0
+    je   .row
+    mov  eax, [rel fb_compose_y0]
+    movsxd rdi, r15d
+    sub  rax, rdi
+    test rax, rax
+    jle  .row
+    cmp  rax, 16
+    jae  .done
+    mov  r12d, eax
 .row:
+    cmp  byte [rel fb_compose_clip_active], 0
+    je   .row_visible
+    movsxd rax, r15d
+    add  rax, r12
+    mov  edi, [rel fb_compose_y1]
+    cmp  rax, rdi
+    jge  .done
+.row_visible:
     movzx eax, byte [rsi + r12*2]
     shl  eax, 8
     movzx edi, byte [rsi + r12*2 + 1]

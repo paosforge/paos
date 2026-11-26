@@ -317,6 +317,8 @@ power_execute_desktop:
     call power_restart_refusal_reason
     jmp .refused
 .terminal_uncertain:
+    cmp ebx,POWER_SHUTDOWN
+    jne power_restart_uncertain        ; a confirmed restart must attempt platform reset
     call reset_wipe_all
     jmp reset_wipe_halt
 .domain_refused:
@@ -613,8 +615,7 @@ power_warm_reset:
     lea rax,[rel power_r_restart_nic]
     jmp power_restart_refusal_reason
 .nic_uncertain:
-    call reset_wipe_all
-    jmp reset_wipe_halt                 ; IF0, keep USB fenced; never reset/resume
+    jmp power_restart_uncertain        ; IF0, keep USB fenced; never resume
 .domain_refused:
     ; Actual supported refusal, before CLI/storage/key wipe/reset. Retirement
     ; itself may have progressed: this is not an unchanged-domain assertion.
@@ -644,6 +645,31 @@ power_warm_reset:
 .storage_reason:
     popfq                              ; restore original flags after choosing actual reason
     jmp power_restart_refusal_reason
+
+; Terminal restart after an irreversible controller stop. Halting the CPU
+; neither resets the machine nor stops an uncertain bus master. Keep the USB
+; fence and DMA isolation installed, wipe keys, then request PLTRST# through
+; the same edge-sensitive CF9 sequence as the contained restart above. Never
+; enter firmware or resume PaOS with uncertain devices. If reset is ignored,
+; wait a bounded interval and retain the original terminal halt. Shutdown and
+; pre-effect refusals do not enter here.
+power_restart_uncertain:
+    call reset_wipe_all
+    mov dx,0x0cf9
+    in al,dx
+    test al,4
+    jz .fire
+    mov al,0x02
+    out dx,al
+.fire:
+    mov al,0x06
+    out dx,al
+    mov ecx,65536
+.wait:
+    pause
+    dec ecx
+    jnz .wait
+    jmp reset_wipe_halt
 
 ; Owner-grant R5 only, called at BSP depth zero after an irreversible one-time
 ; policy claim. Existing quiesce/key wipe and ResetSystem paths are retained.

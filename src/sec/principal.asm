@@ -1,4 +1,5 @@
 ;; MODULE sec/principal
+%include "core/abi/login_trace.inc"
 %include "core/abi/build_profile.inc"
 ;; LAYER 5
 ;; EXPORTS prin_stage_disclosure, prin_stage_not_applied, principal_owner_change_ready, principal_try_local_begin, principal_first_owner_available, principal_first_owner_stage, principal_selftest, principal_authorization_selftest, principal_declare, principal_switch, principal_current, principal_execution_snapshot, principal_restore_execution, principal_restore_active, principal_capabilities, principal_derive, principal_credential, principal_system_auth_credential, principal_credentials_init, principal_enter_system, principal_leave_system, principal_clear_bound, principal_boot_fixture_begin, principal_boot_fixture_end, principal_boot_fixture_close, authenticate_bind, cmd_verb_prinwrite, cmd_verb_prinread, cmd_verb_prinswitch, cmd_verb_prinkdf, principal_local_password, principal_local_password_recheck, principal_push_handle, principal_wipe_owner_boot_key, principal_system_status_append
@@ -639,7 +640,9 @@ authenticate_bind:
     lea  r8, [rel prin_password_salt]
     mov  r9d, PRIN_PASSWORD_SALT_LEN
     mov  byte [rel prin_pw_fail_step], 7
+    LOGIN_TRACE 20
     call pbkdf2_sha256
+    LOGIN_TRACE 21
     add  rsp, 8
     test eax, eax
     jnz  .password_fail
@@ -667,7 +670,9 @@ authenticate_bind:
     mov  qword [rel prin_password_failures], 0
     mov  qword [rel prin_password_backoff_until], 0
     mov  byte [rel prin_pw_fail_step], 10
+    LOGIN_TRACE 22
     call principal_record_persist
+    LOGIN_TRACE 23
     test eax, eax
     jnz  .password_fail
     test r14d,r14d
@@ -692,13 +697,17 @@ authenticate_bind:
     test eax, eax
     jnz  .password_fail
     mov  byte [rel prin_pw_fail_step], 14 ; wrapped DATA key open
+    LOGIN_TRACE 24
     call principal_open_data_key
+    LOGIN_TRACE 25
     test eax, eax
     jnz .password_fail
     call principal_wipe_password_scratch
 %if !PAOS_PUBLIC_BUILD
     mov  byte [rel prin_pw_fail_step], 15 ; second-factor policy
+    LOGIN_TRACE 26
     call push_auth_password_gate
+    LOGIN_TRACE 27
     test eax, eax
     jnz .push_pending
 %endif
@@ -3271,6 +3280,7 @@ principal_password_recheck_allowed:
 ; AUTHLOGIN is the EXPLICIT owner unlock over AUTH1 (owner ticket). Over SSH exec
 ; it is refused (spec 21.2.5, root 89528). Every outcome is audit-logged (UNLOCK ...).
 cmd_verb_authlogin:
+    LOGIN_TRACE 3
     call cmd_handler_prologue
     push rbx
     push r12
@@ -3321,7 +3331,9 @@ cmd_verb_authlogin:
     mov  byte [rel prin_pw_fail_step], 0
     mov  edi, AUTH_BIND_PASSWORD
     lea  rsi, [rel prin_wire_auth_ctx]
+    LOGIN_TRACE 4
     call authenticate_bind
+    LOGIN_TRACE 5
     movzx ecx, byte [rel prin_pw_fail_step]
     mov  [rel prin_login_step], cl
     call time_wall_local_issue_end        ; keeps RAX/RDX: no-op on the owner-ticket path
@@ -3336,7 +3348,9 @@ cmd_verb_authlogin:
     ; The password is scrubbed before this pending bind is consumed.
     mov  rdi, rax
     mov  rsi, rdx
+    LOGIN_TRACE 6
     call session_shell_offer_bind
+    LOGIN_TRACE 7
     test eax, eax
     jz   .scrub
     call principal_clear_bound
@@ -3358,7 +3372,9 @@ cmd_verb_authlogin:
     mov  byte [rel prin_login_stage], 5
     mov  edi, SESSION_METHOD_AUTHLOGIN
     call session_shell_arm_explicit_unlock
+    LOGIN_TRACE 8
     call session_shell_unlock
+    LOGIN_TRACE 9
     test eax, eax
     jz   .unlocked
     call session_shell_lock
@@ -3380,6 +3396,7 @@ cmd_verb_authlogin:
     call prin_out_str
 %endif
 .publish_login:
+    LOGIN_TRACE 10
     call principal_publish_wire_reply
     pop  r12
     pop  rbx

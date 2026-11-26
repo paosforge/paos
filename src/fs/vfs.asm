@@ -3852,6 +3852,9 @@ vfs_copy_check_bounded:
 .counted_slashes:
     mov  eax, FS_CHECK_FAT_COMPONENTS    ; less the destination parent's components (slashes - 1), less 1
     sub  eax, ecx
+    jns  .depth_floor                    ; 16 or more slashes leave no level: never a negative limit, which
+    xor  eax, eax                        ; the unsigned descent test would read as no limit at all
+.depth_floor:
     cmp  eax, FS_TREE_DEPTH_MAX
     jle  .depth_fat
     mov  eax, FS_TREE_DEPTH_MAX

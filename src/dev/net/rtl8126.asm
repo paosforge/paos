@@ -1,6 +1,6 @@
 ;; MODULE dev/net/rtl8126
 ;; LAYER 3
-;; EXPORTS rtl8126_link_rearm_counts, rtl8126_witness, e5000b_hw_bringup, e5000b_recover, e5000b_dev, e5000b_mac, e5000b_devid, e5000b_hw_ok, e5000b_mac_ok, e5000b_rings_ok, e5000b_iso_ok, e5000b_link_up, e5000b_link_speed, e5000b_rx_frames, e5000b_tx_frames, e5000b_matches, rtl8126_frame_stats, rtl8126_attach_snapshot, rtl8126_carrier_ready, rtl8126_carrier_read, rtl8126_carrier_write, rtl8126_carrier_link, rtl8126_terminal_quiesce
+;; EXPORTS rtl8126_recovery_poll, rtl8126_link_rearm_counts, rtl8126_witness, e5000b_hw_bringup, e5000b_recover, e5000b_dev, e5000b_mac, e5000b_devid, e5000b_hw_ok, e5000b_mac_ok, e5000b_rings_ok, e5000b_iso_ok, e5000b_link_up, e5000b_link_speed, e5000b_rx_frames, e5000b_tx_frames, e5000b_matches, rtl8126_frame_stats, rtl8126_attach_snapshot, rtl8126_carrier_ready, rtl8126_carrier_read, rtl8126_carrier_write, rtl8126_carrier_link, rtl8126_terminal_quiesce
 ;; IMPORTS boot/native_driver_gate, net/netdev, bus/pci, bus/hal, core/dma, core/time, boot/serial, dev/net/e1000e, bus/pci_claim, hv/nic_assignment, hv/pci_assign
 ;; CAPS mmio dma
 ;; OWNER saga:net
@@ -608,6 +608,7 @@ e5000b_discover_cb:
     cmp  ecx, R26_VENDEV
     jne  .ret
 .match:
+    A1_NATIVE_NIC_SKIP rdi,rsi,rdx,.ret
     inc  dword [rel e5000b_matches]
     cmp  qword [rel e5000b_bdf], -1
     jne  .ret
@@ -1828,8 +1829,13 @@ rtl8126_terminal_latched: db 0
 ; All calls are inside R26_TERMINAL_PRODUCER; never reacquire that gate.
 r26_lr_tick:
     NATIVE_DRIVER_REFUSE 6
+    cmp byte [rel r26_job_active],0
+    jne .pending
     lea rax, [rel rtl8126_link_rearm_state]
     REALTEK_LINK_REARM_BODY r26
+.pending:
+    mov rax,-1
+    ret
 r26_lr_sample:
     cmp byte [rel e5000b_rings_ok], 1
     jne .bad
@@ -1875,14 +1881,42 @@ r26_lr_own:
     jb .loop
     ret
 r26_lr_wake:
+    ; A carrier owner may already have restored BMCR and restarted autoneg. When
+    ; that negotiation is still completing at this physical up edge, restarting
+    ; it again discards its progress. PHYSTAT carrier and BMSR AN-complete are
+    ; separate observations. Preserve an awake, AN-enabled PHY, including one
+    ; whose restart is still outstanding; ordinary phase3 must still read live
+    ; AN-complete before RX/TX can proceed. Read both words through the checked
+    ; OCP transport: unavailable data fails closed. A sleeping or AN-disabled
+    ; PHY retains the checked wake path. DMA recovery below is unchanged.
+    mov edx, (0xa400 << 15)
+    xor eax, eax
+    call rtl8126_carrier_ocp
+    cmp rax, 0xffff
+    jae .bad
+    and eax, 0xdc00                ; reset, loopback, AN, PDOWN, isolate
+    cmp eax, 0x1000                ; awake and AN enabled; preserve pending restart
+    jne .wake
+    mov edx, (0xa402 << 15)
+    xor eax, eax
+    call rtl8126_carrier_ocp
+    cmp rax, 0xffff
+    jae .bad
+    ; Completion is a readiness condition, not a reason to restart training.
+    xor eax, eax
+    ret
+.wake:
     jmp e5000b_phy_wake
+.bad:
+    mov rax, -1
+    ret
 r26_lr_phy_read:
     mov esi, edi
     jmp e5b_phy_read
 r26_lr_ready:
     REALTEK_PHY_READY_BODY r26
 r26_lr_reset:
-    jmp e5000b_recover_active
+    jmp r26_job_begin
 r26_lr_close:
     mov byte [rel e5000b_rings_ok], 0
     mov byte [rel e5000b_link_up], 0
@@ -1913,3 +1947,5 @@ rtl8126_link_rearm_counts:
     ret
 align 8
 rtl8126_link_rearm_state: times REALTEK_LR_SIZE db 0
+
+%include "dev/net/rtl8126_idle_reset.inc"

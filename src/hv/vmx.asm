@@ -4810,11 +4810,13 @@ hv_linux_write_controls:
     ; Retain unspent time on every VM exit. Without this bit and with a
     ; reload on every I/O exit, an I/O-heavy guest can postpone host service
     ; indefinitely. Unsupported save-timer capability refuses guest launch.
-    mov  esi, 0x400200                      ; save timer + 64-bit host; host IRQ pending
+    mov  esi, 0x500200                      ; save timer + guest EFER + 64-bit host
     call hv_adjust_ctls
     test eax, 0x8000                         ; mandatory ACK-on-exit cannot serve host IDT
     jnz  .bad
     test eax, 0x400000
+    jz   .bad
+    test eax, 0x100000                       ; CR0 emulation needs current guest EFER
     jz   .bad
     mov  edi, VMXF_EXIT_CTLS
     mov  esi, eax
@@ -4826,6 +4828,8 @@ hv_linux_write_controls:
     test eax, 0x8000                         ; mandatory ACK-on-exit cannot serve host IDT
     jnz  .bad
     test eax, 0x400000
+    jz   .bad
+    test eax, 0x100000                       ; CR0 emulation needs current guest EFER
     jz   .bad
     mov  edi, 0x484
     mov  esi, 0x200                         ; IA-32e guest
@@ -4848,7 +4852,7 @@ hv_linux_write_controls:
     mov  [rel hv_first_ud_bitmap_readback], eax
     call hv_first_ud_latch_arm
     mov  edi, 0x6000                        ; CR0 guest/host mask
-    xor  esi, esi
+    mov  esi, HV_CR0_CACHE_BITS             ; CD/NW are virtual, never host cache controls
     call hv_w
     mov  edi, 0x6002                        ; CR4 guest/host mask: host-required VMXE
     mov  esi, HV_CR4_HOST_OWNED              ; and the denied PKE/KL (V5); shadow 0
@@ -4954,6 +4958,16 @@ hv_linux_write_state:
     mov  edi, VMXF_G_CR4
     mov  rsi, [rel hv_launch_hcr4]
     and  rsi, ~HV_CR4_GUEST_DENIED           ; V5: coherent with the 0 read shadow
+    call hv_w
+    ; Seed the same field that private BSP/AP setup already initializes.
+    ; Save-EFER on every exit then keeps LME/LMA current for MOV-CR0 exits,
+    ; including untrapped paging changes made since the previous exit.
+    mov  ecx, 0xC0000080
+    rdmsr
+    shl  rdx, 32
+    or   rax, rdx
+    mov  rsi, rax
+    mov  edi, 0x2806                       ; guest IA32_EFER
     call hv_w
     pop  rbx
     ret
@@ -9030,6 +9044,15 @@ hv_linux_exit_dispatch:
     jmp  .pio_done
 
 .pio_in_pitpic:
+    ; Match the BSP's inactive CMOS model: no clock is exposed, but byte
+    ; reads must not claim UIP=1 forever. Zero also keeps VRT clear and
+    ; the calendar invalid. OUT stays ignored; wide IN stays absent.
+    cmp  edx, 0x71
+    jne  .in_pitpic_ports
+    test r8d, 7
+    jnz  .pio_in_ff
+    jmp  .in_zero
+.in_pitpic_ports:
     cmp  edx, 0x21
     je   .in_maskm
     cmp  edx, 0xA1
@@ -9143,6 +9166,8 @@ hv_linux_exit_dispatch:
     call hv_guest_read
     mov  ecx, eax
     and  ecx, 0xF
+    test ecx, ecx
+    jz   .cr0_cache
     cmp  ecx, 4
     je   .cr4
     cmp  ecx, 3                              ; only CR3 is relevant here
@@ -9169,6 +9194,16 @@ hv_linux_exit_dispatch:
 .cr_skip:
     call hv_skip_instr
     jmp  .resume
+.cr0_cache:
+    mov  rdi, rax
+    call vcb_cr0_cache
+    cmp  eax, 2
+    je   .msr_gp
+    cmp  eax, 1
+    je   .cr_skip
+    mov  byte [rel hv_linux_load_err], 7 ; no resume after an internal VMCS failure
+    xor  eax, eax
+    ret
 .cr4:
     ; V5: CR4 exits come only from the host-owned bits. A MOV to CR4 setting
     ; PKE or KL gets #GP(0) with no write and RIP left on the MOV, as on a CPU

@@ -4,6 +4,8 @@
 ;; IMPORTS
 ;; CAPS
 ;; OWNER saga:gui_image_pipeline
+
+%include "gui/img/img_cold_hooks.inc"
 ;
 ; img_rgba_resize(RDI=request64) -> EAX=IMG_OK(0)/IMG_E_BOUNDS(2), RDX=bytes/0.
 ; Immutable little-endian request: src_ptr:u64@0, src_len:u64@8,
@@ -131,7 +133,7 @@ img_rgba_resize:
     mov  r10d, ebx
 .copy_row:
     mov  ecx, ebp
-    rep  movsd
+    IMG_COLD_MEMORY movsd
     dec  r10d
     jz   .ok
     lea  rax, [rbp * 4]
@@ -139,6 +141,7 @@ img_rgba_resize:
     sub  rsi, rax
     add  rdi, [rsp + 8]
     sub  rdi, rax
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .copy_row
 .scaled:
     xor  r10d, r10d                   ; destination y
@@ -160,9 +163,11 @@ img_rgba_resize:
     mov  [rdi + r11 * 4], eax
     inc  r11d
     cmp  r11d, ebp
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jb   .pixel
     inc  r10d
     cmp  r10d, ebx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jb   .row
 .ok:
     xor  eax, eax
@@ -210,4 +215,5 @@ img_rgba_scale_packed:
     mov  [rsp + 8], rax
     imul rax, rbx
     mov  [rsp + 16], rax
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  img_rgba_resize.descriptor_disjoint

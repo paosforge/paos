@@ -1,7 +1,7 @@
 ;; MODULE hv/vcpu_svm_prepare
 ;; LAYER 5
 ;; EXPORTS vsm_prepare, vsm_seal, vsm_npt_prepare
-;; IMPORTS hv/vcpu_svm_run, hv/vcpu_svm_inputs, hv/vcpu_svm_sample, hv/vcpu_svm_reset, hv/vcpu_ap_hash, hv/vcpu_ap, hv/vcpu_ap_run, hv/vcpu_cpuid, hv/vm_profile, hv/vmx, hv/boundary
+;; IMPORTS hv/vcpu_svm_run, hv/vcpu_svm_inputs, hv/vcpu_svm_sample, hv/vcpu_svm_reset, hv/vcpu_ap_hash, hv/vcpu_ap, hv/vcpu_ap_run, hv/vcpu_cpuid, hv/vm_profile, hv/vmx, hv/boundary, hv/vcpu_ap_frozen
 ;; CAPS
 ;; OWNER saga:hv
 ;; CONTEXT: bsp_only
@@ -420,6 +420,9 @@ vsm_seal:
     mov qword [r12 + 8], 24
     mov [r12], r13
     mov [rel vsm_sealed], r13
+    mov rdi, r12
+    mov rsi, r13
+    call vcpu_ap_frozen_shadow          ; 0 only keeps every check on full SHA-256
     mov rdi, r13
     call vsm_inputs_check
     jmp .out

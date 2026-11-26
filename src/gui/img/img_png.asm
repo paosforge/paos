@@ -5,6 +5,8 @@
 ;; CAPS
 ;; OWNER saga:gui_image_pipeline
 
+%include "gui/img/img_cold_hooks.inc"
+
 ; PNG non-interlaced and Adam7 subset: gray1/2/4/8/16, indexed1/2/4/8,
 ; gray-alpha/RGB/RGBA8/16. PNG3 13.12 rounded linear16->8 conversion;
 ; tRNS compares every original sample bit, colors remain unassociated.
@@ -31,6 +33,7 @@ PNG_SURFACE_SOURCE_MAX equ 67141632 ; 64MiB+32KiB: includes max surface PNG expo
 ; Probe uses invocation-local metadata. No borrowed palette pointer is published.
 ; R8D is packed bits/pixel (up to64), not sample depth or output stride.
 img_png_probe_surface:
+    IMG_COLD_PUBLIC_GUARD
     cld
     push r12
     push r13
@@ -42,6 +45,7 @@ img_png_probe_surface:
     mov  qword [rsp + 56], PNG_SURFACE_SOURCE_MAX
     jmp  img_png_probe.admit
 img_png_probe:
+    IMG_COLD_PUBLIC_GUARD
     cld
     push r12
     push r13
@@ -101,12 +105,13 @@ img_png_probe:
     ja   .corrupt
     inc  ecx
     cmp  ecx, 4
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jb   .type_byte
     test byte [r14 + 6], 0x20
     jnz  .corrupt
     lea  rdi, [r14 + 4]
     lea  esi, [r11 + 4]
-    call hotpatch_crc32
+    IMG_COLD_CRC
     mov  edi, [r14 + 8 + r11]
     bswap edi
     cmp  eax, edi
@@ -323,6 +328,7 @@ img_png_probe:
     jmp  .out
 .advance:
     lea  r14, [r14 + 12 + r11]
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .chunk
 .bad_magic:
     mov  eax, IMG_E_BAD_MAGIC
@@ -351,6 +357,7 @@ img_png_probe:
 
 ; Exact-span adapter entry: same native profile/CRC checks, IEND at supplied end.
 img_png_probe_exact:
+    IMG_COLD_PUBLIC_GUARD
     cld
     mov  rax, rdi
     add  rax, rsi
@@ -379,6 +386,7 @@ img_png_probe_exact:
     mov  r11d, [r9 + 4]
     mov  r9, rax
     cmp  r11d, 'IEND'
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jne  .chunk
     xor  eax, eax
     cmp  r9, r10
@@ -461,6 +469,7 @@ img_png_exif:
 .next:
     add  rsi, 12
     dec  r11d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .entry
 .ok:
     mov  edx, ebx
@@ -477,6 +486,7 @@ img_png_exif:
 .u32:
     mov  eax, [rdi]
     test r8d, r8d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jz   .read
     bswap eax
     ret
@@ -559,9 +569,11 @@ img_png_orient:
     add  r12, 4
     inc  r9d
     cmp  r9d, r14d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jb   .pixel
     inc  r8d
     cmp  r8d, r15d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jb   .row
     mov  ecx, r14d
     imul ecx, r15d
@@ -570,7 +582,7 @@ img_png_orient:
     shl  rax, 2
     sub  rdi, rax
     mov  rsi, r13
-    rep  movsd                        ; publish canonical RGBA at allocation base
+    IMG_COLD_MEMORY movsd                        ; publish canonical RGBA at allocation base
     pop  r15
     pop  r14
     pop  r13
@@ -609,12 +621,13 @@ img_png_collect:
     jne  .next
     mov  rdi, r9
     mov  ecx, r11d
-    rep  movsb
+    IMG_COLD_MEMORY movsb
     mov  r9, rdi
 .next:
     cmp  dword [r8 + 4], 'IEND'
     je   .done
     lea  r8, [r8 + 12 + r11]
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .loop
 .done:
     mov  rax, r9
@@ -622,6 +635,7 @@ img_png_collect:
     ret
 
 img_png_decode_surface:
+    IMG_COLD_PUBLIC_GUARD
     cld
     push r12
     push r13
@@ -632,6 +646,7 @@ img_png_decode_surface:
     mov  dword [rsp + 384], 1
     jmp  img_png_decode.admit
 img_png_decode:
+    IMG_COLD_PUBLIC_GUARD
     cld
     push r12
     push r13
@@ -707,6 +722,7 @@ img_png_decode:
     inc  dword [rsp + 96]
     mov  eax, [rsp + 96]
     cmp  eax, [rsp + 92]
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jb   .layout
     mov  r11, [rel img_png_filtered_len]
     mov  eax, r14d
@@ -728,7 +744,7 @@ img_png_decode:
     lea  rdi, [rsp]
     mov  rsi, r12
     mov  rdx, r13
-    call sha256_hash                     ; admission digest before allocator seam
+    IMG_COLD_DIGEST                     ; admission digest before allocator seam
     mov  rdi, [rel img_png_total_alloc]
     call img_output_alloc
     test rax, rax
@@ -737,13 +753,13 @@ img_png_decode:
     add  rdi, [rsp + 64]
     mov  rsi, r12
     mov  rcx, r13
-    rep  movsb
+    IMG_COLD_MEMORY movsb
     mov  r12, [rel img_active_out]
     add  r12, [rsp + 64]
     lea  rdi, [rsp + 32]
     mov  rsi, r12
     mov  rdx, r13
-    call sha256_hash
+    IMG_COLD_DIGEST
     lea  rdi, [rsp]
     lea  rsi, [rsp + 32]
     mov  ecx, 32
@@ -850,6 +866,7 @@ img_png_decode:
     add  [rsi + rcx], al
 .sub_store:
     inc  ecx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .sub_loop
 .up:
     test r8d, r8d
@@ -865,6 +882,7 @@ img_png_decode:
     mov  dl, [rdi]
     add  [rsi + rcx], dl
     inc  ecx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .up_loop
 .avg:
     xor  ecx, ecx
@@ -896,6 +914,7 @@ img_png_decode:
     shr  eax, 1
     add  [rsi + rcx], al
     inc  ecx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .avg_loop
 .paeth:
     xor  ecx, ecx
@@ -961,9 +980,11 @@ img_png_decode:
 .pa_add:
     add  [rsi + rcx], al
     inc  ecx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .paeth_loop
 .filter_next:
     inc  r8d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .filter_row
 
 .convert:
@@ -1039,6 +1060,7 @@ img_png_decode:
     mov  eax, [rsp + 368]
     add  rdi, rax
     inc  ecx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .convert_pixel
 .pixel16:
     mov  byte [rdi + 3], 255
@@ -1086,10 +1108,12 @@ img_png_decode:
     movzx eax, word [rsi + 4]
     call img_png_reduce16
     mov  [rdi + 2], al
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .convert_advance
 .pixel16_gray:
     mov  [rdi + 1], al
     mov  [rdi + 2], al
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .convert_advance
 .indexed_pixel:
     ; MSB-first packed index, independently restarted at each scanline.
@@ -1133,6 +1157,7 @@ img_png_decode:
     mov  eax, [rsp + 368]
     add  rdi, rax
     inc  ecx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .convert_pixel
 .gray_alpha_pixel:
     mov  al, [rsi]
@@ -1141,6 +1166,7 @@ img_png_decode:
     mov  [rdi + 2], al
     mov  al, [rsi + 1]
     mov  [rdi + 3], al                  ; straight alpha, including zero
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .convert_advance
 .gray_pixel:
     ; All supported max samples divide255 exactly (1,3,15,255).
@@ -1155,6 +1181,7 @@ img_png_decode:
     mov  [rdi + 2], al
     mov  byte [rdi + 3], 255
     cmp  dword [rel img_png_alpha_n], 2
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jne  .gray_next
     mov  rax, [rel img_png_alpha]        ; SHA-owned tRNS, never caller bytes
     movzx edx, word [rax]
@@ -1167,11 +1194,14 @@ img_png_decode:
     and  edx, eax
     pop  rcx
     cmp  edx, ebx                       ; compare before sample expansion
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jne  .gray_next
     mov  byte [rdi + 3], 0
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .gray_next
 .convert_next_row:
     inc  r8d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .convert_row
 .pass_done:
     mov  eax, [rsp + 96]
@@ -1179,6 +1209,7 @@ img_png_decode:
     mov  eax, [rsp + 112 + rax + 28]
     add  [rsp + 104], rax
     inc  dword [rsp + 96]
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .pass_begin
 .passes_done:
     mov  rax, [rel img_active_out]
@@ -1375,11 +1406,12 @@ img_zlib_inflate:
     ja   .error
     mov  rsi, r12
     mov  rdi, r14
-    rep  movsb
+    IMG_COLD_MEMORY movsb
     mov  r12, rsi
     mov  r14, rdi
     cmp  dword [rel img_df_final], 1
     je   .finish
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .block
 .fixed:
     mov  dword [rel img_df_lit_n], 288
@@ -1401,6 +1433,7 @@ img_zlib_inflate:
     mov  [rdi + rcx], al
     inc  ecx
     cmp  ecx, 288
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jb   .fx
     lea  rdi, [rel img_df_lens]
     mov  esi, 288
@@ -1412,6 +1445,7 @@ img_zlib_inflate:
     mov  ecx, 32
 .fxd:
     mov  byte [rdi + rcx - 1], 5
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     loop .fxd
     lea  rdi, [rel img_df_lens]
     mov  esi, 32
@@ -1443,7 +1477,7 @@ img_zlib_inflate:
     lea  rdi, [rel img_df_cl_lens]
     xor  eax, eax
     mov  ecx, 19
-    rep  stosb
+    IMG_COLD_MEMORY stosb
     xor  esi, esi
 .read_cl:
     cmp  esi, [rel img_df_hclen]
@@ -1456,6 +1490,7 @@ img_zlib_inflate:
     lea  rdi, [rel img_df_cl_lens]
     mov  [rdi + rdx], al
     inc  esi
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .read_cl
 .build_cl:
     lea  rdi, [rel img_df_cl_lens]
@@ -1516,12 +1551,15 @@ img_zlib_inflate:
 .rep_loop:
     mov  [rdi + rsi], dl
     inc  esi
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     loop .rep_loop
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .read_lens
 .literal_len:
     lea  rdi, [rel img_df_lens]
     mov  [rdi + rsi], al
     inc  esi
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .read_lens
 .build_dyn:
     cmp  byte [rel img_df_lens + 256], 0
@@ -1601,6 +1639,7 @@ img_zlib_inflate:
     jb   .error
 .copy_match:
     test ecx, ecx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jz   .codes
     cmp  r14, r15
     jae  .error
@@ -1609,6 +1648,7 @@ img_zlib_inflate:
     inc  rsi
     inc  r14
     dec  ecx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .copy_match
 .pop_error:
     pop  rax
@@ -1618,9 +1658,11 @@ img_zlib_inflate:
     jae  .error
     mov  [r14], al
     inc  r14
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .codes
 .eob:
     cmp  dword [rel img_df_final], 1
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jne  .block
 .finish:
     cmp  r12, r13                       ; bounded profile: no extra DEFLATE bytes
@@ -1665,6 +1707,7 @@ img_df_bits:
     shl  eax, cl
     or   ebp, eax
     add  ebx, 8
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .fill
 .take:
     mov  eax, 1
@@ -1696,7 +1739,7 @@ img_df_build:
     lea  rdi, [rel img_df_counts]
     xor  eax, eax
     mov  ecx, 16
-    rep  stosw
+    IMG_COLD_MEMORY stosw
     xor  esi, esi
 .count:
     cmp  esi, r13d
@@ -1710,6 +1753,7 @@ img_df_build:
     inc  word [rdi + rax * 2]
 .count_next:
     inc  esi
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .count
 .next:
     mov  eax, 1
@@ -1722,6 +1766,7 @@ img_df_build:
     js   .bad
     inc  edx
     cmp  edx, 16
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jb   .tree_space
     test eax, eax
     jz   .tree_valid
@@ -1752,6 +1797,7 @@ img_df_build:
     lea  rdi, [rel img_df_next]
     mov  [rdi + rdx * 2], ax
     inc  edx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .next_loop
 .assign:
     xor  esi, esi
@@ -1772,6 +1818,7 @@ img_df_build:
     adc  edi, edi
     inc  edx
     cmp  edx, ecx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jb   .reverse
     mov  [r14 + rsi * 2], di
     jmp  .assigned
@@ -1779,6 +1826,7 @@ img_df_build:
     mov  word [r14 + rsi * 2], 0
 .assigned:
     inc  esi
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .assign_loop
 .bad:
     stc
@@ -1824,10 +1872,12 @@ img_df_symbol:
     je   .found
 .scan_next:
     inc  ecx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .scan
 .next_bit:
     inc  esi
     cmp  esi, 15
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jbe  .bit
 .error:
     xor  eax, eax
@@ -1862,6 +1912,7 @@ img_adler32:
 .b_ok:
     inc  rdi
     dec  rsi
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .byte
 .done:
     shl  ebx, 16

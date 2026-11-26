@@ -1740,8 +1740,6 @@ blk_registered_at:
 ; c0,c1,c2,unit,model_n; raw model[48] at32. Kind1 PCI B/D/F; kind2 USB
 ; exact xHCI instance+address; kind3 synthetic. No I/O or controller switching.
 ; Geometry is independently read from this exact dev.info by the projection.
-%include "core/abi/vmd_selected_owner.inc"
-
 blk_storage_identity:
     push rbx
     push r12
@@ -1773,8 +1771,6 @@ blk_storage_identity:
     mov dword [r12],1
     movzx eax,byte [rel ahci_vmd_child]
     mov [r12+4],eax
-    test eax,eax
-    jnz .ahci_vmd
     mov dword [r12+8],1
     mov eax,[rel ahci_busno]
     mov [r12+12],eax
@@ -1782,30 +1778,6 @@ blk_storage_identity:
     mov [r12+16],eax
     mov eax,[rel ahci_fn]
     mov [r12+20],eax
-    jmp .ahci_unit
-.ahci_vmd:
-    ; The legacy PCI scan cells do not describe a VMD child. Project the
-    ; original selected child's ECAM-relative BDF from its live RAM lifetime.
-    ; Missing/stale provenance leaves controller_kind unknown, not PCI 0:0.0.
-    sub rsp,VSO_BYTES
-    mov rdi,rsp
-    call ahci_vmd_owner_snapshot
-    cmp eax,1
-    jne .ahci_vmd_done
-    mov eax,[rsp+VSO_CHILD_BDF]
-    mov edx,eax
-    shr edx,16
-    mov [r12+12],edx
-    mov edx,eax
-    shr edx,8
-    and edx,31
-    mov [r12+16],edx
-    and eax,7
-    mov [r12+20],eax
-    mov dword [r12+8],1
-.ahci_vmd_done:
-    add rsp,VSO_BYTES
-.ahci_unit:
     lea rax,[rel ahci_port]
     mov eax,[rax+r13*4]
     mov [r12+24],eax

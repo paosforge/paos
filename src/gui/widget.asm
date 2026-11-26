@@ -1,7 +1,7 @@
 ;; MODULE gui/widget
 ;; LAYER 6
 ;; EXPORTS wgt_menu_text_ptr, wgt_menu_get, wgt_secret_key, wgt_sensitive_current, wgt_sensitive_plan, wgt_sensitive_set_result, wgt_provider_bind, wgt_provider_plan, wgt_provider_pending, wgt_provider_decision, wgt_provider_set_result, wgt_provider_result, wgt_guard_bind, wgt_guard_provider_refused, wgt_birth_lifetime, wgt_terminal_fill_op, wgt_button_paint_hook, wgt_form_event_hook, wgt_form_signal_hook, wgt_secret_owner, wgt_text_paint_hook, wgt_secret_human, wgt_secret_revision, wgt_secret_hidden, str_wgt_withheld, wgt_focus_visible, wgt_reserve_run, wgt_alloc_next, wgt_library_init, wgt_declare, wgt_type_register, wgt_type_bind_capture, wgt_type_capture_buttons, wgt_type_capture_motion, wgt_pointer_motion, wgt_pointer_capture_press, wgt_pointer_capture_press_button, wgt_pointer_capture_find, wgt_pointer_capture_event, wgt_type_headroom_report, wgt_create, wgt_slot_ptr, wgt_draw_id, wgt_draw_desktop, wgt_desktop_erase_rect, wgt_draw_glyph, wgt_rect_hittest, wgt_focus_window, wgt_focus_at, wgt_textfield_key, wgt_tab_reverse, wgt_textfield_event_hook, wgt_textfield_event_hook2, wgt_textfield_clip_get, wgt_textfield_clip_set, wgt_focus_id, wgt_count, wgt_out_buf, wgt_out_ready, wgt_m_library, wgt_m_registry, wgt_fill_rect, wgt_draw_text, wgt_pointer_hit_dispatch, wgt_type_name_of, wgt_shift_window, wgt_resize_window, wgt_secret_register, wgt_secret_clear, wgt_secret_selftest, wgt_secret_type, wgt_secret_bytes, wgt_secret_len, wgt_key_filter, wgt_click_hook, wgt_button_open_hook, wgt_button_get_hook, wgt_action_hook, wgt_hot_id, wgt_press_id, wgt_state_of, wgt_focus_ring_draw, wgt_hover_at, wgt_press_set, wgt_row_shown, wgt_overlay_host_shown, wgt_flyout_painted, wgt_mark_sectext, wgt_mark_formtext, wgt_mark_ascii, wgt_text_buf, wgt_text_len, wgt_text_refused, wgt_textfield_preedit, wgt_tf_buf, wgt_tf_long_free, wgt_textfield_long
-;; IMPORTS gui/form_events, gui/summon_palette, gui/settings_terminal_network, gui/form_loader, gui/calendar, boot/serial, core/unicode_edit, gui/window, gui/window_mgmt, gui/widget_containers, gui/chat_app, gui/cadence_mark, svc/command, svc/clipboard, core/lib/fmt, core/lib/str, dev/input/ps2, sec/keyprov, sec/session, gui/widget_image, gui/widget_scalar_inputs, gui/lock_screen, gui/input_route
+;; IMPORTS gui/compose_job, gui/form_events, gui/summon_palette, gui/settings_terminal_network, gui/form_loader, gui/calendar, boot/serial, core/unicode_edit, gui/window, gui/window_mgmt, gui/widget_containers, gui/chat_app, gui/cadence_mark, svc/command, svc/clipboard, core/lib/fmt, core/lib/str, dev/input/ps2, sec/keyprov, sec/session, gui/widget_image, gui/widget_scalar_inputs, gui/lock_screen, gui/input_route
 ;; CAPS
 ;; OWNER saga:gui
 ; ============================================================================
@@ -841,6 +841,13 @@ wgt_set_text_cap:
 ;   clobbers: caller-saved.
 ; ---------------------------------------------------------------------------
 wgt_draw_id:
+    ; Direct input/cadence refreshes use the same owned scene as a full redraw.
+    ; Inside its clipped replay this returns CF=0 and the original vtable,
+    ; visibility and host checks execute. No widget pointer survives a turn.
+    call fb_compose_defer_scene
+    jnc .draw
+    ret
+.draw:
     push rbx
     push r12
     cmp  byte [rel wgt_paint_suspended], 0
@@ -1294,6 +1301,10 @@ wgt_has_overlay:
 
 ; Desktop widgets use the ordinary vtable and late-overlay pass without a window slot.
 wgt_draw_desktop:
+    call fb_compose_defer_scene
+    jnc .compose
+    ret
+.compose:
     push r12
     xor  r12d, r12d
 .loop:
@@ -1329,6 +1340,10 @@ wgt_desktop_erase_rect:
 ; wgt_draw_window(edi=wm slot) — redraw all live widgets owned by one window.
 ;   Occluded widgets (F6) ask for one composition, run after the loop.
 wgt_draw_window:
+    call fb_compose_defer_scene
+    jnc .compose
+    ret
+.compose:
     push r12
     push r13
     mov  r13d, edi

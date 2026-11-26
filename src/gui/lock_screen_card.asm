@@ -2,7 +2,7 @@
 ;; LAYER 6
 ;; PURPOSE Responsive stock-kit sign-in card; presentation never authenticates.
 ;; EXPORTS lock_card_layout, lock_card_state, lock_card_click, lock_card_help_key, lock_card_clock_tick
-;; IMPORTS gui/lock_screen, gui/lock_identity, gui/widget, gui/window, gui/window_mgmt, boot/gop, sec/principal
+;; IMPORTS gui/compose_job, gui/compose_idle, gui/lock_screen, gui/lock_identity, gui/widget, gui/window, gui/window_mgmt, boot/gop, sec/principal
 ;; OWNER saga:login_surfaces
 
 ; Node 4 retains the internal authentication identifier for the unchanged
@@ -75,6 +75,16 @@ lock_card_layout:
     ; it shows whenever the clamped card top leaves it on screen (top >= 116,
     ; so any height >= 436; Bee's 800x600 included). Unseeded time is never
     ; invented.
+    ; One owned scene samples the public clock once. Later tiles, including
+    ; a resumed prefix of its first tile, reuse those widget strings/flags.
+    ; Geometry still follows the mode already bound by the composition owner.
+    cmp byte [rel fb_compose_clip_active],0
+    je .sample_clock
+    mov rax,[rel fb_compose_serial]
+    cmp rax,[rel lock_card_sample_serial]
+    je .identity
+    mov [rel lock_card_sample_serial],rax
+.sample_clock:
     call taskbar_read_wall
     xor  ebx, ebx
     cmp  r13d, 116
@@ -295,6 +305,12 @@ lock_card_clock_tick:
     call taskbar_read_wall
     cmp  byte [rel clock_wall_valid], 1
     jne  .done
+    ; First-owner disclosure deliberately hides both clock rows. Hidden is not
+    ; evidence of a newly valid clock: otherwise every 2 Hz tick repaints the
+    ; entire sign-in frame even though its contents have not changed.
+    call principal_first_owner_available
+    cmp  eax, 1
+    je   .done
     mov  edi, [rel lock_widget_first]
     add  edi, 11
     call wgt_slot_ptr
@@ -317,6 +333,8 @@ lock_card_clock_tick:
     repe cmpsb
     je   .done
 .paint:
+    call fb_compose_defer_periodic
+    jc .done
     call lock_screen_paint
 .done:
     pop  r15
@@ -345,6 +363,8 @@ str_lock_owner_display: db "Owner",0
 str_lock_card_setup: db "Set up PaOS",0
 str_lock_card_recovery: db "Password cannot be recovered",0
 %macro WDATA_gui_lock_screen_card_0 0
+align 8
+lock_card_sample_serial: dq -1
 lock_card_help: db 0
 lock_clock_text: db "~00:00 AM", 0      ; sync marker cell + eight time glyphs
 %endmacro

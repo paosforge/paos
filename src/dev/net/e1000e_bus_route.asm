@@ -1,7 +1,7 @@
 ;; MODULE dev/net/e1000e_bus_route
 ;; LAYER 3
-;; EXPORTS e1000e_bus_cfg_read32, e1000e_bus_cfg_write32, e1000e_bus_route_active, e1000e_bus_identity
-;; IMPORTS bus/pci, boot/serial, boot/smbios
+;; EXPORTS e1000e_bus_cfg_read32, e1000e_bus_cfg_write32, e1000e_bus_route_active, e1000e_bus_identity, e1000e_a1_native_gate
+;; IMPORTS bus/pci, boot/serial, boot/smbios, boot/native_driver_gate, hv/a1_service_selection
 ;; CAPS
 ;; OWNER saga:net
 ; ============================================================================
@@ -31,6 +31,8 @@
 ; Discovery is lazy (first wrapped access) and uses CF8/CFC port config cycles,
 ; valid both pre- and post-ExitBootServices.
 ; ============================================================================
+
+%include "boot/native_driver_gate.inc"
 
 E1KR_82574L_VENDEV equ 0x10D38086
 
@@ -79,6 +81,7 @@ e1000e_bus_route_resolve:
 ; pci_scan_with_filter callback(EDI=bus, ESI=dev, EDX=fn, ECX=vendev).
 ; May clobber caller-saved registers; must preserve RBX/RBP/R12-R15.
 e1kr_scan_cb:
+    A1_NATIVE_NIC_SKIP rdi,rsi,rdx,.out ; physical BDF, before bridge enables
     cmp  cx, 0x8086
     jne  .out
     test edi, edi
@@ -216,6 +219,42 @@ e1000e_bus_identity:
 .bad:
     mov eax, -1
     ret
+
+; ESI/EDX logical dev/fn after config discovery -> CF1 skip/CF0 keep.
+; Resolve is already complete. Match the physical routed bus, never bus0 alias.
+; Every GPR survives, and this path does not discover or enable anything.
+e1000e_a1_native_gate:
+%ifdef PAOS_A1_SERVICE_LINKED
+    push rax
+    push rdi
+    push rcx                         ; align nested calls, preserve all GPRs
+    cmp dword [rel a1_service_state],1
+    jne .allow
+    call e1000e_bus_identity
+    cmp eax,-1
+    je .deny
+    mov edi,eax
+    call a1_native_nic_gate
+    pop rcx
+    pop rdi
+    pop rax
+    ret
+.allow:
+    pop rcx
+    pop rdi
+    pop rax
+    clc
+    ret
+.deny:
+    pop rcx
+    pop rdi
+    pop rax
+    stc
+    ret
+%else
+    clc
+    ret
+%endif
 
 ; Exact pci_cfg_read32 ABI: EDI=bus, ESI=dev, EDX=fn, ECX=offset -> EAX.
 e1000e_bus_cfg_read32:

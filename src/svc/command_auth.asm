@@ -1,4 +1,5 @@
 ;; MODULE svc/command_auth
+%include "core/abi/login_trace.inc"
 %include "core/abi/build_profile.inc"
 ;; LAYER 5
 ;; EXPORTS command_catalog_block_count, command_catalog_block_text, net_audit_verb_name, net_audit_reason_name, net_audit_refusal_meta, command_auth_ssh_active, command_auth_owner_request, command_auth_owner_envelope, command_auth_owner_consumed_for, command_auth_injection_gate, command_session_sync_active, command_auth_parse_hex64, command_auth_init, command_publicity_udp_init, command_auth_legacy_read_kat_cap, command_auth_remote_begin, command_auth_remote_end, command_auth_ticket_owner, command_auth_unwrap_line, command_auth_gate, command_auth_consume_public, command_auth_required_cap, command_auth_register_intercept, command_auth_route_gate, command_auth_refuse, command_auth_note_aihook_proof, command_auth_note_serial_proof, command_auth_stage_refusal, command_auth_stage_ai_probe, command_auth_out_buf, command_auth_out_ready, command_auth_refusal_ready, command_auth_ticket_size, command_auth_message, command_auth_last_sequence, pbm_sb_secureboot, secureboot_try_current_admit, command_session_allow_op, command_session_sync_op, command_dispatch, command_auth_node_id_ensure, command_auth_node_hex, command_auth_node_id_derive
@@ -1188,6 +1189,7 @@ command_auth_unwrap_line:
     cmp  r15, AUTH_CMD_MAX
     ja   .malformed
 
+    LOGIN_TRACE_BEGIN r14,r15          ; bounded parsed inner verb, not yet verified
     mov  rdi, r13
     mov  rsi, r14
     mov  rdx, r15
@@ -1204,6 +1206,7 @@ command_auth_unwrap_line:
     ; returns zero, including after a prior successful request.
     mov  [r13 + AUTH_T_SIGNER_ID], rdx
     call command_auth_scrub_verifier
+    LOGIN_TRACE 2                  ; verification returned, outcome remains private
     test ebx, ebx
     jnz  .wrong_key
     mov  rax, [r13 + AUTH_T_SIGNER_ID]
@@ -1216,6 +1219,7 @@ command_auth_unwrap_line:
     ; Wipe canonical plaintext and SHA block/schedule on every RSA verdict.
     mov  ebx, eax
     call command_auth_scrub_verifier
+    LOGIN_TRACE 2                  ; verification returned, outcome remains private
     test ebx, ebx
     jnz  .wrong_key
     lea  rax, [rel command_auth_owner_key_id]

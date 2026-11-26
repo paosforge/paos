@@ -2,6 +2,9 @@
 ; nonce, TCP incarnation, selected NIC and actual driver generation. Exactly
 ; one SYN-SENT and one ESTABLISHED pulse per boot; no host retry can re-arm it.
 ; Deadlines use the ordinary boot-ms clock. No packet is needed to restore.
+%ifndef PAOS_LAB_CHANNEL
+%error TCP carrier sampler requires the lab profile
+%endif
 %ifndef PAOS_LAB_RTL8126_204
 %define PAOS_LAB_RTL8126_204 0
 %endif
@@ -161,18 +164,7 @@ tcpprobe_link_tick:
     jnz  .deadline
     cmp  qword [rel tpl_down_ms], 0
     jne  .deadline
-    mov  [rel tpl_down_ms], rbx
-    ; Queue the fixed public nonce only AFTER actual physical down. This
-    ; exercises established common retransmission during the measured outage.
-    cmp  qword [rel tpl_state], 2
-    jne  .deadline
-    mov  rdi, [rel tpl_pair]
-    mov  rsi, [rel tpl_pair + 8]
-    lea  rdx, [rel tpl_nonce]
-    mov  ecx, 16
-    mov  r8d, 1
-    call tcp_client_epoch_io
-    mov  [rel tpl_send_rc], rax
+    call tcpprobe_link_down_flight
     jmp  .deadline
 .online:
     cmp  rax, 1
@@ -206,6 +198,66 @@ tcpprobe_link_tick:
 .done:
     pop  r14
     pop  rbx
+.out:
+    ret
+
+; Lab-only, immediately before the ordinary public TCP unbind. RDI is the
+; endpoint's actual bound netdev, not a caller-supplied replacement. This is
+; one fresh physical read, never a scheduled edge or a cached membership bit.
+; The normal retirement follows regardless of refusal/uncertainty here.
+tcpprobe_link_before_retire:
+    cmp  qword [rel tpl_phase], 2
+    jne  .out
+    cmp  rdi, [rel tpl_handle]
+    jne  .out
+    cmp  qword [rel tpl_down_rc], 0
+    jne  .out
+    cmp  qword [rel tpl_down_ms], 0
+    jne  .out                      ; down observation consumes the flight once
+    push rbx
+    call netdev_selected_owner
+    cmp  rax, [rel tpl_handle]
+    jne  .done
+    mov  rdi, [rel tpl_pair]
+    mov  rsi, [rel tpl_pair + 8]
+    lea  rdx, [rel tpl_sample]
+    call tcp_client_epoch_snapshot
+    test rax, rax
+    jnz  .done
+    mov  rax, [rel tpl_sample]
+    cmp  rax, [rel tpl_state]
+    jne  .done
+    mov  rdi, [rel tpl_handle]
+    mov  rsi, [rel tpl_epoch]
+    call netdev_carrier_drill_link
+    test rax, rax
+    jnz  .done                     ; up and unknown are not outage witnesses
+    call boot_ms_now
+    mov  rbx, rax                  ; observation time, never armed_ms+100
+    cmp  rbx, [rel tpl_down_at]
+    jb   .done
+    cmp  rbx, [rel tpl_restore_at]
+    jae  .done                     ; no new flight beyond the original outage
+    call tcpprobe_link_down_flight
+.done:
+    pop  rbx
+.out:
+    ret
+
+; RBX=actual physical-down observation on the same boot clock. Consuming the
+; observation before epoch_io also consumes a refused/uncertain flight: no
+; implicit retry and no second nonce send from the slower periodic sampler.
+tcpprobe_link_down_flight:
+    mov  [rel tpl_down_ms], rbx
+    cmp  qword [rel tpl_state], 2
+    jne  .out
+    mov  rdi, [rel tpl_pair]
+    mov  rsi, [rel tpl_pair + 8]
+    lea  rdx, [rel tpl_nonce]
+    mov  ecx, 16
+    mov  r8d, 1
+    call tcp_client_epoch_io
+    mov  [rel tpl_send_rc], rax
 .out:
     ret
 

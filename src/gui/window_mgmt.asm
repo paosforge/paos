@@ -1,7 +1,7 @@
 ;; MODULE gui/window_mgmt
 ;; LAYER 6
 ;; EXPORTS wmx_reveal_slot, wmx_open_app_window, wmx_terminal_move_op, wmx_tray_notice_paint, wmx_owner_reset_op, wmx_selftest, wm_owner, wmx_owner_open, wmx_owner_clear, wmx_native_bind, wmx_native_arena, wmx_native_dispatch, wmx_native_restart, wm_native_slot, wm_native_stuck, wmx_native_leaked, wmx_principal_may_act, wmx_req_may_act, wmx_frame_may_focus, wmx_stage_locked, wmx_stage_denied, wm_app_title, wmx_label_ptr, wmx_caption_hover, wmx_caption_part_at, wm_chrome, wmx_declare, wmx_move_tsc_last, wmx_move_tsc_max, wmx_draw_tsc, wmx_erase_tsc, wmx_clear_boot_marks, wmx_clear_boot_marks_force, wmx_top_visible_slot, wmx_zstamp_top, wmx_set_geom_slot, wmx_draw_defer_begin, wmx_draw_defer_end, wmx_draw_flush_deferred, wmx_paint_top_slot, wm_gen, wm_no_history, wmx_window_id, wmx_set_no_history, wmx_history_target
-;; IMPORTS gui/format_confirm, gui/adopt_confirm, gui/calendar, core/native_app, gui/guest_desktop, gui/wifi_local, boot/serial, boot/gop, gui/window, gui/widget, gui/widget_tabstrip, gui/widget_console_grid, gui/chat_app, gui/cadence_mark, gui/widget_image, gui/image_viewer, svc/command, dev/input/ps2, gui/lock_screen, sec/session, svc/history, gui/account_local
+;; IMPORTS gui/compose_job, gui/format_confirm, gui/adopt_confirm, gui/calendar, core/native_app, gui/guest_desktop, gui/wifi_local, boot/serial, boot/gop, gui/window, gui/widget, gui/widget_tabstrip, gui/widget_console_grid, gui/chat_app, gui/cadence_mark, gui/widget_image, gui/image_viewer, svc/command, dev/input/ps2, gui/lock_screen, sec/session, svc/history, gui/account_local
 ;; CAPS
 ;; OWNER saga:gui
 
@@ -257,6 +257,12 @@ wmx_draw_str_2x:
 ; WINCHROME and wm_pointer_event: border, title, min, max, close.
 ; ---------------------------------------------------------------------------
 wmx_paint_slot:
+    ; A direct chrome refresh is still a whole scene change. Only the
+    ; clipped idle owner may reach the pixel loops after commands go live.
+    call fb_compose_defer_scene
+    jnc .compose
+    ret
+.compose:
     ; A fullscreen form has no movable/closable chrome. Its stock image and
     ; widget tree own every pixel; no private lock-screen painter exists.
     cmp  byte [rel lock_surface_ready], 1
@@ -657,6 +663,10 @@ wmx_hover_update:
 ; wmx_draw_one(edi=slot) — every slot takes the ONE chrome path. Chat retains
 ; only its temporary app-body callback; it no longer owns any chrome pixels.
 wmx_draw_one:
+    call fb_compose_defer_scene
+    jnc .compose
+    ret
+.compose:
     push rdi
     push r12
     push r13
@@ -732,6 +742,10 @@ wmx_draw_flush_deferred:
     ret
 
 wmx_draw_all:
+    call fb_compose_defer_scene
+    jnc .compose
+    ret
+.compose:
     cmp  byte [rel wmx_draw_defer_depth], 0
     je   .paint
     mov  byte [rel wmx_draw_pending], 1

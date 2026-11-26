@@ -1,9 +1,10 @@
 ;; MODULE gui/lock_screen
+%include "core/abi/login_trace.inc"
 %include "core/abi/build_profile.inc"
 ;; LAYER 6
 ;; PURPOSE Stock sign-in composition; sec/session is the only authority owner.
-;; EXPORTS lock_screen_account_offer, lock_screen_focus_assert, lock_screen_boot_release, lock_screen_notice, lock_screen_init, lock_screen_sync, lock_screen_desktop_start, lock_screen_boot_report, lock_screen_key, lock_screen_click, lock_screen_command_allowed, lock_surface_ready, lock_surface_loading, taskbar_draw_registry, taskbar_attention_tick, lock_composition_ok, lock_desktop_created, lock_wallpaper_load, lock_wallpaper_bind, lock_wallpaper_fit_choice, lock_screen_display_serial
-;; IMPORTS boot/boot_menu, gui/format_confirm, gui/adopt_confirm, gui/calendar, gui/app_launch_flow, gui/app_launcher, gui/lock_ssh_notice, gui/recovery_notice, gui/lock_screen_text, gui/lock_fade, gui/lock_screen_card, gui/form_loader, gui/widget, gui/widget_image, gui/window, gui/window_mgmt, gui/chat_app, gui/demo_three_windows, gui/console_app, gui/widget_console_grid, gui/session_restore, sec/session, sec/principal, svc/command, svc/command_auth, svc/command_cons, svc/command_udp, boot/header, boot/gop, boot/serial, core/lib/str, gui/taskbar, dev/input/ps2, gui/input_route, config/keep_config, sec/keyprov, gui/netmon_form, gui/terminal_consent, sec/terminal_native, gui/account_local, hv/app_network
+;; EXPORTS lock_bg6_stamp, lock_screen_account_offer, lock_screen_focus_assert, lock_screen_boot_release, lock_screen_notice, lock_screen_init, lock_screen_sync, lock_screen_desktop_start, lock_screen_boot_report, lock_screen_key, lock_screen_click, lock_screen_command_allowed, lock_surface_ready, lock_surface_loading, taskbar_draw_registry, taskbar_attention_tick, lock_composition_ok, lock_desktop_created, lock_wallpaper_load, lock_wallpaper_bind, lock_wallpaper_fit_choice, lock_screen_display_serial
+;; IMPORTS gui/compose_job, gui/present_idle, boot/boot_menu, gui/format_confirm, gui/adopt_confirm, gui/calendar, gui/app_launch_flow, gui/app_launcher, gui/lock_ssh_notice, gui/recovery_notice, gui/lock_screen_text, gui/lock_fade, gui/lock_screen_card, gui/form_loader, gui/widget, gui/widget_image, gui/window, gui/window_mgmt, gui/chat_app, gui/demo_three_windows, gui/console_app, gui/widget_console_grid, gui/session_restore, sec/session, sec/principal, svc/command, svc/command_auth, svc/command_cons, svc/command_udp, boot/header, boot/gop, boot/serial, core/lib/str, gui/taskbar, dev/input/ps2, gui/input_route, config/keep_config, sec/keyprov, gui/netmon_form, gui/terminal_consent, sec/terminal_native, gui/account_local, hv/app_network
 ;; OWNER saga:login_surfaces
 
 LOCK_SLOT equ WM_MAX - 1                ; reserved from ordinary WM allocation (the top slot; G9: was the literal 7 = old WM_MAX-1)
@@ -20,7 +21,11 @@ taskbar_draw_registry:
     jne  .workspace
     ret
 .workspace:
+    call fb_compose_defer_scene
+    jc .out
     jmp  taskbar_draw_registry_workspace
+.out:
+    ret
 
 taskbar_attention_tick:
     cmp  byte [rel lock_surface_ready], 1
@@ -195,8 +200,12 @@ lock_screen_register_verbs:
 
 ; Only the sole session owner can call this after a principal bind.
 lock_screen_restore:
+    LOGIN_TRACE 50
     call pwr_m1_restore_on_signin            ; RCQ-27 M1-3: a verified sleep checkpoint (once per boot)
+    LOGIN_TRACE 51
+    LOGIN_TRACE 52
     call lock_screen_show_workspace
+    LOGIN_TRACE 53
     cmp  byte [rel lock_desktop_created], 1
     je   .created
     ; Console startup formats an in-process command reply. Run it only after
@@ -207,6 +216,7 @@ lock_screen_restore:
     mov  rax, [rel lock_restore_op]
     test rax, rax
     jz   .none
+    LOGIN_TRACE 54                ; original GUI restore tail callback
     jmp  rax
 .none:
     mov  eax, -1
@@ -364,8 +374,9 @@ lock_screen_layout_tag:
     jmp  wgt_set_text
 lock_layout_texts: db "US",0,"ES",0,"FR",0,"DE",0
 
-; Reconcile presentation on each session authority epoch, and before a wire
-; reply can acknowledge LOCK/AUTHLOGIN. This stores no second locked bit.
+; Reconcile presentation on each session authority epoch, after a wire reply
+; and before the next input consumer. Authority is committed by the command,
+; independently of this presentation work. This stores no second locked bit.
 lock_screen_sync:
     cmp  byte [rel lock_composition_ok], 1
     jne  .out
@@ -383,6 +394,9 @@ lock_screen_sync:
     cmp  rax, [rel lock_painted_epoch]
     je   .presentation
     mov  [rel lock_painted_epoch], rax
+    ; Calendar/palette erasure and setup-label changes belong to the same
+    ; authority frame, never intermediate scanout copies before lock paint.
+    CADENCE_BATCH_BEGIN
     call wgt_secret_clear
     call lock_screen_drop_input
     call calendar_close                 ; never restore an old flyout after unlock
@@ -429,6 +443,7 @@ lock_screen_sync:
     mov  edi, LOCK_SLOT
     call wmx_zstamp_top
     call lock_screen_paint
+    CADENCE_BATCH_END
     cmp  byte [rel lock_rendered], 1
     je   .out
     mov  byte [rel lock_rendered], 1
@@ -689,6 +704,52 @@ lock_screen_badge_selftest:
 ; rectangle, so bars/alpha can never expose pixels from a previous workspace.
 ; This is presentation only; no session, focus, input or authority state changes.
 lock_wallpaper_bind:
+%ifdef PAOS_IMG_COLD_LOCK
+    cmp byte [rel fb_compose_live],1
+    je .live_bind
+%endif
+    ; COVER's cache key is derived from the source, not the current mode.
+    ; Repainting a tile must not re-probe the entire encoded source on every
+    ; turn. Reuse only a completed, unchanged COVER binding whose exact key
+    ; is still present. An eviction, fit change, or rebind request follows the
+    ; ordinary bind/refusal path below; no missing image is called complete.
+    push rbx
+    push r12
+    mov r12d,[rel lock_widget_first]
+    mov edi,r12d
+    call widget_image_state_ptr
+    cmp dword [rax + WIS_LOAD],WIMG_LOAD_OK
+    jne .cold
+    cmp byte [rax + WIS_REBIND],0
+    jne .cold
+    cmp dword [rax + WIS_FIT],WIMG_FIT_COVER
+    jne .cold
+    mov ecx,[rel lock_wallpaper_fit_choice]
+    test ecx,ecx
+    jz .cover_key
+    cmp ecx,WIMG_FIT_COVER
+    jne .cold
+.cover_key:
+    mov rdi,[rax + WIS_SRC]
+    test rdi,rdi
+    jz .cold
+    mov esi,[rax + WIS_OUTW]
+    mov edx,[rax + WIS_OUTH]
+    call img_cache_lookup
+    test eax,eax
+    jnz .cold
+    mov edi,r12d
+    call widget_image_draw
+    pop r12
+    pop rbx
+    ret
+.cold:
+    pop r12
+    pop rbx
+%ifdef PAOS_IMG_COLD_LOCK
+    cmp byte [rel fb_compose_live],1
+    je .cold_idle                       ; accepting commands: never decode inside paint
+%endif
     mov  edi, [rel lock_widget_first]
     call widget_image_state_ptr
     mov  edx, [rax + WIS_FIT]
@@ -717,6 +778,30 @@ lock_wallpaper_bind:
     cmovnz edx, ecx
     mov  edi, [rel lock_widget_first]
     jmp  widget_image_bind
+%ifdef PAOS_IMG_COLD_LOCK
+.live_bind:
+    call img_cold_lock_cached
+    jc .cold_idle
+    mov edi,[rel lock_widget_first]
+    jmp widget_image_draw
+.cold_idle:
+    mov edi,[rel lock_widget_first]
+    call widget_image_state_ptr
+    mov edx,[rax+WIS_FIT]
+    mov ecx,[rel lock_wallpaper_fit_choice]
+    test ecx,ecx
+    cmovnz edx,ecx
+    mov [rax+WIS_FIT],edx
+    mov dword [rax+WIS_LOAD],WIMG_LOAD_MISSING
+    mov byte [rax+WIS_REBIND],1
+    mov rsi,[rax+WIS_SRC]
+    mov edi,[rel lock_widget_first]
+    call img_cold_queue_lock
+    ; While queued, or on refusal, opaque chrome remains the honest fallback.
+    ; draw sees MISSING and performs only the current bounded compose tile.
+    mov edi,[rel lock_widget_first]
+    jmp widget_image_draw
+%endif
 
 ; Rebind at a session/presentation boundary: a workspace can evict the bitmap.
 ; This runs in normal context, never in a damage painter.
@@ -727,6 +812,15 @@ lock_wallpaper_bind:
 ; mode, and moves the kit group by the change of its centre. The slot's old
 ; width/height are the mode the group was last centred for.
 lock_screen_paint:
+    call fb_compose_defer_scene
+    jnc .compose
+    ret
+.compose:
+    ; Compose the complete sign-in frame in RAM before publishing it. Image
+    ; binding, kit text, the window and the disclosure all damage the shadow;
+    ; presenting each intermediate result copied several whole frames and
+    ; hundreds of small rectangles on the BSP before it could service UDP.
+    CADENCE_BATCH_BEGIN
     mov  edi, [rel lock_widget_first]
     call wgt_slot_ptr                       ; RAX = node 0
     xor  ecx, ecx
@@ -751,6 +845,10 @@ lock_screen_paint:
     call fb_present_all
     PW_REPAINT                       ; optional private diagnostic, same composition owner
     call lock_bg6_stamp                      ; held, withheld or suppressed: no BG6 (the release or a later paint stamps)
+    ; The whole-frame publication consumed this batch's damage, including any
+    ; enclosing batch's union. Do not copy the same frame again at batch end.
+    mov  byte [rel fb_present_valid], 0
+    CADENCE_BATCH_END
     call udp_boot_beacon_observe
     mov  [rel lock_painted_badge], al
     inc  qword [rel lock_paint_count]
@@ -794,6 +892,8 @@ lock_screen_boot_release:
     je   .out
     call lock_fade_begin                  ; router keyboard-live edge, no wait
     mov  byte [rel fb_present_boot_hold], 0
+    call fb_present_live_start             ; live input, bounded even during fade
+    call fb_compose_live_start
     push rax
     mov  rax, [rel fb_present_count]
     call fb_present_all
@@ -802,6 +902,8 @@ lock_screen_boot_release:
 .out:
     cmp  byte [rel lock_fade_active], 1
     je   .done                            ; exact readback is reported at fade completion
+    cmp  byte [rel fb_present_pending], 0
+    jne  .done                            ; no report before all final pixels were copied
     cmp  byte [rel lock_boot_report_owed], 0
     je   .done
     mov  byte [rel lock_boot_report_owed], 0
@@ -860,6 +962,7 @@ lock_screen_show_workspace:
     jne  .out
     cmp  dword [rel wm_state + LOCK_SLOT*4], LOCK_HIDDEN
     je   .out
+    CADENCE_BATCH_BEGIN
     call wgt_secret_clear
     ; KBDBUF exposes the entire raw scancode ring, including consumed bytes.
     ; Erase it before workspace command ingress can observe a password, and
@@ -893,6 +996,8 @@ lock_screen_show_workspace:
     call wallpaper_paint_rect
     call wmx_draw_all
     call fb_present_all
+    mov byte [rel fb_present_valid], 0
+    CADENCE_BATCH_END
 .out:
     ret
 

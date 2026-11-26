@@ -19,6 +19,29 @@
 %endif
 %endmacro
 
+; Candidate-level A1 reservation. Invoke before claim, BAR/MMIO, reset or PCI
+; enable. Unlike class6 policy this keeps the control NIC and every other native
+; candidate. Preserve all registers while adapting the driver's bus/dev/fn.
+%macro A1_NATIVE_NIC_SKIP 4
+%ifdef PAOS_A1_SERVICE_LINKED
+    push rdi
+    push rsi
+    push rdx
+    ; Inputs may themselves be argument registers: stage all three first.
+    push %1
+    push %2
+    push %3
+    pop rdx
+    pop rsi
+    pop rdi
+    call a1_native_nic_gate
+    pop rdx
+    pop rsi
+    pop rdi
+    jc %4
+%endif
+%endmacro
+
 ; A's private complete reservation set excludes NEW PCI NIC binds, including
 ; when common bytes are stale or POISON. This is not the class6 policy gate:
 ; existing native TX/link/recovery never calls it. A's query touches only RAX.

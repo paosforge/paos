@@ -190,11 +190,17 @@ cmd_verb_tcpprobe:
     call tcpprobe_observe
     jmp  .render
 .link_arm:
+%ifdef PAOS_LAB_CHANNEL
     call tcpprobe_link_arm
+%endif
     jmp  .render
 .link_show:
+%ifdef PAOS_LAB_CHANNEL
     call tcpprobe_link_render
     jmp  .publish
+%else
+    jmp  .render                  ; shipped: result=3, no pulse implementation
+%endif
 .send:
     ; A single fixed public nonce is sufficient to exercise established data
     ; retransmission. Never copy arbitrary memory or bypass the epoch guard.
@@ -380,7 +386,9 @@ tcpprobe_retirement_clear:
     ret
 
 %include "svc/command_tcpprobe_reap.inc"
+%ifdef PAOS_LAB_CHANNEL
 %include "svc/command_tcpprobe_link.inc"
+%endif
 
 align 8
 tcpprobe_pair: times 2 dq 0

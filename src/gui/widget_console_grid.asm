@@ -1,7 +1,7 @@
 ;; MODULE gui/widget_console_grid
 ;; LAYER 6
 ;; EXPORTS console_grid_content_state, grid_window_b_retire, grid_release_window, console_grid_register, console_grid_draw, console_grid_wheel, console_grid_reclaim, grid_claim_snapshot, console_grid_dump_for_window, console_grid_claim_plain, console_grid_restore_owner, console_grid_headless_configure, console_grid_headless_draw, grid_append, grid_clear, grid_scroll, grid_resize, grid_dump_visible_page, grid_scrollback_depth, grid_ansi_capture_top_row, grid_instance_open, grid_instance_close, grid_instance_feed, grid_instance_accept_input, grid_instance_load_widget, grid_instance_validate, grid_widget_id, grid_type_id, grid_cols, grid_rows, grid_line_count, grid_view_offset, grid_cadence_slot, grid_kat_ok, grid_mode, grid_dock_owner, grid_owner_generation, grid_visible_cells
-;; IMPORTS gui/interpreter_feed, hv/context_execution, boot/serial, boot/beacon, boot/gop, core/heap, core/cadence, core/time, gui/widget, gui/window, gui/window_mgmt, gui/form_loader, gui/ansi_interp, gui/cadence_mark, svc/command_cons
+;; IMPORTS gui/compose_job, gui/interpreter_feed, hv/context_execution, boot/serial, boot/beacon, boot/gop, core/heap, core/cadence, core/time, gui/widget, gui/window, gui/window_mgmt, gui/form_loader, gui/ansi_interp, gui/cadence_mark, svc/command_cons
 ;; CAPS
 ;; OWNER saga:verb_console
 ; Contract 2150: one allocation-free console cell grid.  Text pixels are drawn
@@ -1460,6 +1460,10 @@ console_grid_headless_configure:
     jmp  grid_clear
 
 console_grid_headless_draw:
+    call fb_compose_defer_scene
+    jnc .draw
+    ret
+.draw:
     push rbx
     push r12
     push r13

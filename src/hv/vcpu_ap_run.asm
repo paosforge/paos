@@ -11,6 +11,7 @@
 ; Caller EDI currentGO, IF0, park guard, epoch IDT, kind4 vcg_frame bound.
 %include "hv/vcpu_ap.inc"
 %include "hv/vcpu_ap_xstate.inc"
+%include "hv/vmx_cache.inc"
 
 %macro VCA_SAVE_GPRS 0
     mov  [rel vca_gpr + 0], rax
@@ -344,6 +345,7 @@ vca_land:
 %define cpu_boundary_fail_stop vca_stop
     HV_BOUNDARY_LAND
 %undef cpu_boundary_fail_stop
+    HV_VMX_CACHE_LAND
     VAX_LAND vca_xstate
     mov  rax, [rel vca_host_cr2]
     mov  cr2, rax

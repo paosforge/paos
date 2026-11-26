@@ -1,6 +1,6 @@
 ;; MODULE dev/blk/nvme
 ;; LAYER 3
-;; EXPORTS nvme_blk_create, nvme_self_exercise, nvme_identify_dma_to, nvme_get_log_error4_dma_to, nvme_quiesce_for_reset, nvme_quiesce_observation, nvme_quiesce_lifetime, nvme_quiesce_completion, nvme_power_gate, nvme_power_command_gate, nvme_io_exec_cooperative, nvme_admin_exec_cooperative, nvme_poll_cq_once, nvme_power_poll
+;; EXPORTS nvme_blk_create, nvme_self_exercise, nvme_identify_dma_to, nvme_get_log_error4_dma_to, nvme_quiesce_for_reset, nvme_quiesce_observation, nvme_quiesce_lifetime, nvme_quiesce_completion, nvme_power_gate, nvme_power_command_gate, nvme_io_exec_cooperative, nvme_admin_exec_cooperative, nvme_poll_cq_once, nvme_power_poll, nvme_identify_chunk
 ;; IMPORTS boot/native_driver_gate, fs/blockdev, fs/storage_access, bus/pci, core/dma, core/time, boot/serial, boot/paging, dev/blk/vmd, bus/pci_claim, boot/boot_v2_handoff
 ;; CAPS mmio dma
 ;; OWNER saga:storage
@@ -111,6 +111,7 @@ nvme_blk_create:
     push r12
 
     mov  byte  [rel nvme_present], 0
+    mov dword [rel nvme_identify_pages_valid], 0
     mov qword [rel nvme_vmd_cfg], 0
     mov  byte  [rel nvme_vmd_child], 0
     mov  byte  [rel nvme_claim_legacy], 0
@@ -707,6 +708,18 @@ nvme_identify:
     ret
 .power_admitted:
     push rbx
+    ; Invalidate both diagnostic copies before either DMA command.
+    mov dword [rel nvme_identify_pages_valid], 0
+    inc qword [rel nvme_identify_pages_epoch]
+    mov eax, [rel nvme_busno]
+    shl eax, 8
+    mov edx, [rel nvme_devno]
+    shl edx, 3
+    or eax, edx
+    or eax, [rel nvme_fn]
+    mov [rel nvme_identify_pages_bdf], eax
+    movzx eax, byte [rel nvme_vmd_child]
+    mov [rel nvme_identify_pages_vmd], eax
     ; A failed Identify cannot retain geometry or raw fields from a prior page.
     mov dword [rel nvme_physical_size], 0
     lea rdi, [rel nvme_identify_fields]
@@ -733,6 +746,12 @@ nvme_identify:
     call nvme_admin_exec
     test eax, eax
     jnz  .ns                                 ; identify-ctrl failed -> leave model/serial empty
+    ; Keep CNS=1 before CNS=0 overwrites the shared DMA page.
+    mov rsi, [rel nvme_idbuf]
+    lea rdi, [rel nvme_identify_controller_page]
+    mov ecx, 4096 / 8
+    rep movsq
+    or dword [rel nvme_identify_pages_valid], 1
     ; Task3470: copy 20-byte serial (bytes 4..23) -> nvme_serial, NUL-term + trim spaces
     mov  rsi, [rel nvme_idbuf]
     add  rsi, 4
@@ -791,6 +810,12 @@ nvme_identify:
     call nvme_admin_exec
     test eax, eax
     jnz  .out
+    ; Completion is independent of namespace-format admission.
+    mov rsi, [rel nvme_idbuf]
+    lea rdi, [rel nvme_identify_namespace_page]
+    mov ecx, 4096 / 8
+    rep movsq
+    or dword [rel nvme_identify_pages_valid], 2
     mov  rbx, [rel nvme_idbuf]
     call nvme_parse_namespace
     pop  rbx
@@ -2323,6 +2348,63 @@ nvme_model_is_qemu:
 ; ---- nvme data (in-image writable; migrates to BSS under full W^X) -----------
 NVME_SCRATCH_LBA equ 0x00A00000            ; reserved scratch sector (bare-metal default)
 
+; Bounded RAM-only observation, no new Identify or disk operation.
+; EDI=CNS1(controller/NSID0) or CNS0(namespace/NSID1), ESI=chunk0..15,
+; RDX=caller-owned320-byte destination. EAX0/-1; refusal writes nothing.
+nvme_identify_chunk:
+    cmp qword [rel nvme_power_gate], 0
+    jne .unavailable
+    cmp edi, 1
+    ja .unavailable
+    cmp esi, 15
+    ja .unavailable
+    test rdx, rdx
+    jz .unavailable
+    mov r9d, 2
+    lea r10, [rel nvme_identify_namespace_page]
+    test edi, edi
+    jz .selected
+    mov r9d, 1
+    lea r10, [rel nvme_identify_controller_page]
+.selected:
+    test [rel nvme_identify_pages_valid], r9d
+    jz .unavailable
+    mov r11d, edi
+    mov r8d, esi
+    shl r8d, 8
+    add r10, r8
+    cld
+    mov rdi, rdx
+    xor eax, eax
+    mov ecx, 320 / 8
+    rep stosq
+    mov dword [rdx], 'NVID'
+    mov byte [rdx+4], '1'
+    mov dword [rdx+8], 1
+    mov dword [rdx+12], 320
+    mov rax, [rel nvme_identify_pages_epoch]
+    mov [rdx+16], rax
+    mov [rdx+24], r11d
+    xor r11d, 1
+    mov [rdx+28], r11d
+    mov [rdx+32], r8d
+    mov dword [rdx+36], 256
+    mov eax, [rel nvme_identify_pages_bdf]
+    mov [rdx+40], eax
+    mov eax, [rel nvme_identify_pages_vmd]
+    mov [rdx+44], eax
+    mov dword [rdx+48], 1
+    mov rsi, r10
+    lea rdi, [rdx+64]
+    mov ecx, 256 / 8
+    rep movsq
+    xor eax, eax
+    ret
+.unavailable:
+    mov eax, -1
+    ret
+
+
 %include "core/abi/wdata.inc" ; WDATA_DEFER; standalone assemblies expand blocks in place
 ; Writable state: deferred to the page-isolated WDATA region (core/abi/wdata.inc).
 %macro WDATA_dev_blk_nvme_0 0
@@ -2446,3 +2528,14 @@ WDATA_BSS_DEFER WDATA_dev_blk_nvme_quiesce
 nvme_class_seen: resb 1
 %endmacro
 WDATA_BSS_DEFER WDATA_dev_blk_nvme_seam
+
+%macro WDATA_dev_blk_nvme_identify_pages 0
+alignb 8
+nvme_identify_pages_epoch: resq 1
+nvme_identify_pages_valid: resd 1
+nvme_identify_pages_bdf: resd 1
+nvme_identify_pages_vmd: resd 1
+nvme_identify_controller_page: resb 4096
+nvme_identify_namespace_page: resb 4096
+%endmacro
+WDATA_BSS_DEFER WDATA_dev_blk_nvme_identify_pages

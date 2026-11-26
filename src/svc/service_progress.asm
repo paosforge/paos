@@ -1242,7 +1242,17 @@ service_progress_authstat_stage:
     bt eax, ebx
     jc .upgrade
     cmp bl, [rel sp_auth_meta+5]
-    jbe .disable
+    ja .ordered
+    ; Reply-before-presentation keeps the existing stage IDs. The sole
+    ; backwards edge is reply/TX -> session sync; elapsed time still follows
+    ; the last observed stage, and repeated stages stay frozen above.
+    cmp ebx, 5
+    jne .disable
+    cmp byte [rel sp_auth_meta+5], 7
+    jb .disable
+    cmp byte [rel sp_auth_meta+5], 9
+    ja .disable
+.ordered:
     call boot_ms_now
     sub rax, [rel sp_auth_meta+52]
     jc .disable

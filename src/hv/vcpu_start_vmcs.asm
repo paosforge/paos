@@ -13,6 +13,7 @@
 %include "hv/vcpu_start.inc"
 %include "hv/vcpu_cpuid.inc"
 %include "hv/vcpu_ap_xstate.inc"
+%include "hv/vmx_cache.inc"
 
 vst_vmcs_init:
     push rbx
@@ -168,6 +169,7 @@ vst_vmcs_init:
 .reset_dynamic:
     mov  edi, 0x6800
     mov  rsi, [rsp + 8]
+    and  rsi, ~HV_CR0_CACHE_BITS         ; reset CD/NW are visible only through shadow
     call vst_vmwrite
     test eax, eax
     jz   .ap_bad
@@ -364,10 +366,11 @@ vst_common_table:
     dq 0x400E,6, 0x4010,6, 0x4014,6
     dq 0x4016,0, 0x4018,0, 0x401A,0, 0x2800,-1, 0x2802,0
     dq 0x2804,0x0007040600070406
-    dq 0x6000,0, 0x6002,(1<<12)|(1<<13)|(1<<19)|(1<<22)|(1<<23)
+    dq 0x6000,HV_CR0_CACHE_BITS, 0x6002,(1<<12)|(1<<13)|(1<<19)|(1<<22)|(1<<23)
     dq 0x6004,0, 0x6006,0
     dq -1,0
 vst_reset_table:
+    dq 0x6004,HV_CR0_CACHE_BITS         ; architectural reset CD/NW, guest-private
     dq 0x800,0, 0x802,0, 0x804,0, 0x806,0, 0x808,0, 0x80A,0
     dq 0x80C,0, 0x80E,0
     dq 0x4800,0xFFFF, 0x4802,0xFFFF, 0x4804,0xFFFF, 0x4806,0xFFFF

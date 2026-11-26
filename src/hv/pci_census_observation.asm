@@ -308,7 +308,8 @@ pcc_command_common:
     ret
 
 ; Private native composition. The span describes only the genuine existing
-; whole-leaf firmware resource + UC identity mapping, not a sized BAR aperture.
+; whole-leaf non-RAM firmware admission + existing UC identity mapping, not a
+; sized BAR aperture. Walk every overlap; no mapping or device write is made.
 ; Its revision is this map observation's original local capture sequence.
 pcc_hp_capture:
     push rbx
@@ -386,7 +387,7 @@ pcc_hp_capture:
     ja .map_tail
     mov rdi,rbx
     and rdi,-0x200000
-    call pci_mmio_resource_page
+    call pci_mmio_nonram_chunk
     test eax,eax
     jz .map_resource
     mov rdi,rbx

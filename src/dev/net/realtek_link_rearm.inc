@@ -96,6 +96,10 @@ REALTEK_LR_CMD_ARMED equ 0x0c       ; RE|TE, not in reset
     je %%woken
 %%reset:
     call %1 %+ _lr_reset
+%ifidni %1,r26
+    cmp eax,1                       ; a fully unwound idle continuation
+    je %%unavailable                ; pending never counts as rearmed
+%endif
     test eax, eax
     jnz %%failed
     ; A rearm counts only once the MAC reads back TE|RE armed.

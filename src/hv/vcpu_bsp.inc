@@ -3,6 +3,7 @@
 %define HV_VCPU_BSP_INC 1
 %include "hv/vcpu_ap.inc"
 %include "hv/vcpu_ap_xstate.inc"
+%include "hv/vmx_cache.inc"
 %macro VCB_ENTRY_GUARD 0
     cmp  dword [rel vcb_handoff_active], 0
     jne  vcb_entry_stop
@@ -49,5 +50,6 @@
 %%single:
     HV_BOUNDARY_HOST_XCR0
 %%done:
+    HV_VMX_CACHE_LAND
 %endmacro
 %endif

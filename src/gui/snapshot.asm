@@ -1403,6 +1403,10 @@ snapshot_native_indicator_present:
     mov rax,[rel session_authority_epoch]
     mov [rel snapshot_native_indicator_session],rax
     call taskbar_draw_registry
+    ; The ordinary registry is deferred once live. This security notice must
+    ; paint its own exact bounded region now, before the explicit scanout and
+    ; before any getter is authorized; an old shadow is never its receipt.
+    call snapshot_indicator_draw
     call fb_present_flush
     ; Explicit rectangle present works even if caller entered a cadence batch.
     mov r8d,8

@@ -53,6 +53,13 @@ command_blk_init:
     xor  r8, r8
     xor  r9, r9                          ; read-only
     call command_register_verb
+    lea rdi, [rel str_verb_blkid]
+    lea rsi, [rel cmd_verb_blkid]
+    xor edx, edx
+    mov ecx, ARGT_TEXT
+    xor r8, r8
+    xor r9, r9                          ; protected cached read, no device IO
+    call command_register_verb
     lea  rdi,[rel str_verb_blkpolicy]
     lea  rsi,[rel cmd_verb_blkpolicy]
     xor edx,edx
@@ -897,3 +904,4 @@ str_verb_blkpolicy: db "BLKPOLICY",0
 %include "svc/command_blk_policy.asm"
 
 %include "svc/command_blk_probe.asm"
+%include "svc/command_blk_identify.asm"

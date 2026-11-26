@@ -631,6 +631,8 @@ paging_xhci_map_high_bar:
     mov  dword [rel paging_hda_xhci_count], 0
     mov  dword [rel paging_hda_overflow], 0
     mov  dword [rel paging_hda_high_proven], 0
+    mov  dword [rel paging_rtl_count], 0
+    mov  dword [rel paging_rtl_overflow], 0
     %ifidn RCQ50_G0_FLR_LAB,1
     mov  dword [rel paging_flr_count], 0
     mov  dword [rel paging_flr_bar], 0
@@ -689,6 +691,9 @@ paging_xhci_map_high_bar:
     out  dx, eax
     mov  edx, 0xCFC
     in   eax, dx
+    cmp  eax, 0x0200000E                 ; RTL8168 revision 0e observation aperture
+    je   .rtl_class
+.normal_class:
     shr  eax, 8
     mov  r8d, eax                        ; class survives config reads
     cmp  eax, 0x010802                   ; same first legacy NVMe as native detect
@@ -734,6 +739,71 @@ paging_xhci_map_high_bar:
     cmp  eax, 0x0C0330                   ; real xHCI class/subclass/progIF
     jne  .advance
     jmp  .read_bar
+.rtl_class:
+    ; Read-only discovery, not device assignment or reset qualification. BAR2
+    ; of this family is used by PCIHPT. Never enable MEM/BME, size a BAR, or
+    ; touch its MMIO here. Keep a private list, outside the HDA handoff.
+    mov  eax, r15d
+    shl  eax, 8
+    or   eax, 0x80000000
+    mov  edx, 0xCF8
+    out  dx, eax
+    mov  edx, 0xCFC
+    in   eax, dx
+    cmp  eax, 0x816810EC
+    jne  .rtl_other                     ; other Ethernet keeps its maintained route
+    mov  eax, ebx
+    and  eax, 0x7F
+    test eax, eax
+    jnz  .advance                       ; ordinary endpoint header only
+    mov  eax, r15d
+    shl  eax, 8
+    or   eax, 0x80000004
+    mov  edx, 0xCF8
+    out  dx, eax
+    mov  edx, 0xCFC
+    in   eax, dx
+    test al, 2
+    jz   .advance                       ; no implicit enabling of memory decode
+    mov  eax, r15d
+    shl  eax, 8
+    or   eax, 0x80000018                 ; BAR2, not BAR0
+    mov  edx, 0xCF8
+    out  dx, eax
+    mov  edx, 0xCFC
+    in   eax, dx
+    mov  r10d, eax
+    and  eax, 0xFFF
+    test eax, eax
+    jz   .rtl_bar                       ; 32-bit, aligned, non-prefetchable MMIO
+    cmp  eax, 4
+    jne  .advance                       ; also excludes I/O and misaligned BARs
+    mov  eax, r15d
+    shl  eax, 8
+    or   eax, 0x8000001C
+    mov  edx, 0xCF8
+    out  dx, eax
+    mov  edx, 0xCFC
+    in   eax, dx
+    test eax, eax
+    jnz  .advance                       ; this bounded route owns low identity only
+.rtl_bar:
+    and  r10d, 0xFFFFF000
+    test r10, r10
+    jz   .advance
+    mov  ecx, [rel paging_rtl_count]
+    cmp  ecx, PAGING_HDA_BARS
+    jae  .rtl_overflow
+    lea  rax, [rel paging_rtl_bars]
+    mov  [rax + rcx*8], r10
+    inc  dword [rel paging_rtl_count]
+    jmp  .advance
+.rtl_overflow:
+    mov  dword [rel paging_rtl_overflow], 1
+    jmp  .advance
+.rtl_other:
+    mov  eax, 0x0200000E
+    jmp  .normal_class
 .nvme_class:
     cmp  dword [rel paging_nvme_found], 0
     jne  .advance                       ; native selects the FIRST matching function
@@ -869,6 +939,27 @@ paging_xhci_map_high_bar:
     call .hda_map_one
     %endif
 .restore:
+    ; All other discovery and retags precede this private, low-only route.
+    ; Reuse the existing exact identity/whole-2MiB non-RAM proof. The shared
+    ; helper conservatively proves a full 16KiB aperture (PCIHPT needs 256B).
+    ; No high PD allocation or HDA receipt/list is offered for a NIC.
+    cmp  dword [rel paging_rtl_overflow], 0
+    jne  .rtl_done
+    xor  ebp, ebp
+.rtl_pending:
+    cmp  ebp, [rel paging_rtl_count]
+    jae  .rtl_done
+    lea  rax, [rel paging_rtl_bars]
+    mov  r10, [rax + rbp*8]
+    mov  rax, r10
+    shr  rax, 30
+    cmp  rax, [rel ident_gib]
+    jae  .rtl_next                      ; never enter the shared high-map publisher
+    call .hda_map_one
+.rtl_next:
+    inc  ebp
+    jmp  .rtl_pending
+.rtl_done:
     call .nvme_map                      ; independent finite mapping after other owners
     pop  r15
     pop  r14
@@ -1711,6 +1802,9 @@ paging_nvme_bar_mapped:
     mov  qword [rel model_heap_alloc_size], 0x4000000
     mov  qword [rel model_heap_size], 0x4000000
 .model_heap_done:
+%ifdef PAOS_IMG_COLD_LIVE
+    call img_cold_boot_reserve          ; optional private image worker/cache, before command acceptance
+%endif
     call hp_mapping_reserve            ; dedicated high-RAM preservation page
     call boot_model_preload             ; verified boot-volume file, before final memory map
 
@@ -2746,6 +2840,10 @@ paging_hda_xhci_count: dd 0
 paging_hda_overflow: dd 0              ; exhaustion refuses ALL HDA retags
 paging_hda_pd_used: dd 0               ; high MMIO pages used by xHCI then HDA
 paging_hda_high_proven: dd 0           ; bits for pending BARs admitted by full proof
+paging_rtl_count: dd 0                ; private BAR2 observations, never HDA handoff
+paging_rtl_overflow: dd 0             ; exhaustion refuses all NIC retags
+align 8
+paging_rtl_bars: times PAGING_HDA_BARS dq 0
 %ifidn RCQ50_G0_FLR_LAB,1
 paging_flr_count: dd 0                 ; RCQ-50 G0 lab: pinned FLR endpoints the walk saw
 paging_flr_bar: dd 0                   ; its 32-bit BAR0 (0: none or unsupported)

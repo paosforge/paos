@@ -152,6 +152,9 @@ img_assets: times (IMG_ASSET_COUNT * IMG_ASSET_ENTSZ) db 0
 ; Public probe/decode refusal preserves EAX and zeros all result fields.
 ; Full structural lint and caps happen here; no allocation is reachable.
 img_probe:
+%ifdef PAOS_IMG_COLD_WORK
+    IMG_COLD_PUBLIC_GUARD
+%endif
     mov  [rel img_active_src], rdi
     mov  [rel img_active_len], rsi
     xor  ebx, ebx
@@ -218,6 +221,9 @@ img_probe:
 
 ; img_decode(RDI=src,RSI=len) -> EAX=status, RBX=RGBA ptr, ECX=w, EDX=h, R8D=fmt.
 img_decode:
+%ifdef PAOS_IMG_COLD_WORK
+    IMG_COLD_PUBLIC_GUARD
+%endif
     mov  [rel img_active_src], rdi
     mov  [rel img_active_len], rsi
     mov  qword [rel img_active_out], 0
@@ -278,6 +284,9 @@ img_decode:
     jmp  img_refusal_clear
 
 img_refusal_clear:
+%ifdef PAOS_IMG_COLD_WORK
+    IMG_COLD_OWNER_ONLY
+%endif
     push rax
     call img_codec_state_clear
     mov  qword [rel img_active_src], 0
@@ -297,6 +306,9 @@ img_refusal_clear:
 ; allocation-free. Clear them at every public boundary: no source pointer,
 ; Huffman table, or partial parse survives a probe/refusal/release.
 img_codec_state_clear:
+%ifdef PAOS_IMG_COLD_WORK
+    IMG_COLD_OWNER_ONLY
+%endif
     push rax
     push rdi
     push rcx
@@ -306,7 +318,11 @@ img_codec_state_clear:
     lea  rcx, [rel img_png_state_end]
     sub  rcx, rdi
     xor  eax, eax
+%ifdef PAOS_IMG_COLD_WORK
+    call img_cold_stosb
+%else
     rep  stosb
+%endif
     pop  rcx
     pop  rdi
     pop  rax
@@ -316,6 +332,10 @@ img_codec_state_clear:
 ; place raw/final pixels in this allocation. img_output_release calls kfree and
 ; atomically rolls the bump back only if this remains the allocator's LIFO tip.
 img_output_alloc:
+%ifdef PAOS_IMG_COLD_WORK
+    cmp byte [rel img_cold_running],1
+    je .cold
+%endif
     mov  [rel img_alloc_size], rdi
     mov  rax, [rel heap_next]
     mov  [rel img_alloc_before], rax
@@ -383,8 +403,26 @@ img_output_alloc:
 .refuse:
     xor  eax, eax
     ret
+%ifdef PAOS_IMG_COLD_WORK
+.cold:
+    mov [rel img_alloc_size],rdi
+    call img_cold_heap_now
+    mov [rel img_alloc_before],rax
+    call img_cold_heap_alloc
+    test rax,rax
+    jz .refuse
+    mov [rel img_active_out],rax
+    push rax
+    call img_cold_heap_now
+    mov [rel img_alloc_after],rax
+    pop rax
+    ret
+%endif
 
 img_output_release:
+%ifdef PAOS_IMG_COLD_WORK
+    IMG_COLD_OWNER_ONLY
+%endif
     push rbx
     mov  rbx, [rel img_active_out]
     test rbx, rbx
@@ -392,10 +430,16 @@ img_output_release:
     cmp  rbx, [rel img_large_base]
     je   .large
     mov  rdi, rbx
+%ifdef PAOS_IMG_COLD_WORK
+    mov  rax, [rel img_alloc_after]
+    mov  rdx, [rel img_alloc_before]
+    call img_cold_heap_rewind
+%else
     call kfree                             ; canonical free API (M1 is a no-op)
     mov  rax, [rel img_alloc_after]        ; expected current tip
     mov  rdx, [rel img_alloc_before]       ; desired prior tip
     lock cmpxchg [rel heap_next], rdx      ; safe only when no intervening alloc
+%endif
     jne  .done                             ; honest leak oracle reports contention
     jmp  .clear
 .large:

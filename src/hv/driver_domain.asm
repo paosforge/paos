@@ -1,7 +1,7 @@
 ;; MODULE hv/driver_domain
 ;; LAYER 5
 ;; EXPORTS nd_begin, nd_prepare, nd_current, nd_stop, nd_backend_stopped, nd_tick, nd_snapshot, nd_cmdline, nd_reserve_allowed
-;; IMPORTS boot/serial, core/lib/fmt, hv/driver_domain_restart, core/memory_budget, hv/filesystem_domain, hv/vmx, hv/vm_profile, hv/nic_selection, hv/a1_nic_selection, hv/nic_assignment, boot/header, boot/native_driver_preload, boot/native_driver_gate, hv/wifi_channel, hv/guestpower, hv/nd_isolation
+;; IMPORTS boot/serial, core/lib/fmt, hv/driver_domain_restart, core/memory_budget, hv/filesystem_domain, hv/vmx, hv/vm_profile, hv/nic_selection, hv/a1_nic_selection, hv/nic_assignment, boot/header, boot/native_driver_preload, boot/native_driver_gate, hv/wifi_channel, hv/guestpower, hv/nd_isolation, hv/a1_service_selection, hv/a1_transaction
 ;; CAPS extension
 ;; OWNER saga:hv
 ;; CONTEXT: bsp_only
@@ -161,6 +161,14 @@ nd_begin:
     jz .bad
     mov r14,[rel nd_clock_ms]
     xor r15d,r15d                   ; legacy singleton mode0
+%ifdef PAOS_A1_SERVICE_SELECTION_INC
+    mov rdi,rbx
+    mov esi,r12d
+    call a1_service_match
+    test eax,eax
+    jz .bad
+    jmp .a1_select
+%endif
     mov rax,[rel native_driver_selected_policy]
     cmp rax,2                       ; immutable build selector, NOT runtime MODE
     je .a1_select
@@ -254,6 +262,14 @@ nd_begin:
     mov dword [rel nd_released],0
     mov dword [rel nd_attached],0
     mov [rel nd_generation],rbp
+%ifdef PAOS_A1_SERVICE_LINKED
+    cmp dword [rel nd_mode],1
+    jne .transaction_ready
+    call nd_a1_transaction_freeze
+    test eax,eax
+    jnz .prestart_failed
+.transaction_ready:
+%endif
     mov byte [rel nd_start_authority],1
     mov rdi,rbx
     mov esi,ebp
@@ -321,9 +337,22 @@ nd_begin:
 ; RDI=exact signed profile,ESI=BDF,RDX=private608. Recheck immutable
 ; build selection on every native capture. No profile include means refusal.
 nd_a1_capture:
+%ifdef PAOS_A1_SERVICE_SELECTION_INC
+    push rdi
+    push rsi
+    push rdx
+    call a1_service_match
+    pop rdx
+    pop rsi
+    pop rdi
+    test eax,eax
+    jz .policy
+    jmp .capture
+%endif
     cmp qword [rel native_driver_selected_policy],2
     jne .policy
 %ifdef PAOS_DRIVER_DOMAIN_PROFILE_INC
+.capture:
     mov ecx,608
     jmp a1_nic_snapshot
 %endif
@@ -452,6 +481,11 @@ nd_prepare:
     sub rax,r12
     cmp rax,ND_CALL_MS
     jae .fault
+%ifdef PAOS_A1_SERVICE_LINKED
+    call nd_a1_transaction_check
+    test eax,eax
+    jnz .a1_refused
+%endif
     ; Original R2 op1 once: family config/MMIO READS only, A1RS retained.
     mov rdi,r12
     call nd_a1_probe

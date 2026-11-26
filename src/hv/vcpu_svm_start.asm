@@ -1,7 +1,7 @@
 ;; MODULE hv/vcpu_svm_start
 ;; LAYER 5
 ;; EXPORTS vsm_enter
-;; IMPORTS hv/vcpu_svm_prepare, hv/vcpu_svm_inputs, hv/vcpu_svm_run, hv/vcpu_svm_dispatch, hv/vcpu_svm_sample, hv/vcpu_start_admit, hv/vcpu_bsp, hv/vcpu_ap, hv/vcpu_ap_run, hv/vcpu_status, hv/svm, hv/vmx, hv/boundary, core/sched, core/time
+;; IMPORTS hv/vcpu_ap_frozen, hv/vcpu_svm_prepare, hv/vcpu_svm_inputs, hv/vcpu_svm_run, hv/vcpu_svm_dispatch, hv/vcpu_svm_sample, hv/vcpu_start_admit, hv/vcpu_bsp, hv/vcpu_ap, hv/vcpu_ap_run, hv/vcpu_status, hv/svm, hv/vmx, hv/boundary, core/sched, core/time
 ;; CAPS
 ;; OWNER saga:hv
 ;; CONTEXT: bsp_only
@@ -149,6 +149,7 @@ vsm_enter:
     call hv_boundary_finish             ; exact AP departure before thaw
     call vsm_native_closed
     mov qword [rel vca_ready], 0
+    mov qword [rel vafs_valid], 0        ; shadow dies with the epoch; reseal rebuilds it
     mov dword [rel vcg_ap], -1
     mov qword [rel vcg_token], 0
     mov dword [rel vcg_go], 0

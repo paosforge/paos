@@ -5,6 +5,8 @@
 ;; CAPS
 ;; OWNER saga:gui_image_pipeline
 
+%include "gui/img/img_cold_hooks.inc"
+
 ; Pure bounded BMP parser/decoder. Existing 24/32 BI_RGB plus a finite subset:
 ; 40-byte DIB: 1/2/4/8 BI_RGB indexed (2bpp Windows CE), 16 BI_RGB default RGB555,
 ; 16 BI_BITFIELDS RGB555/RGB565,
@@ -93,6 +95,7 @@
 ; decode -> EAX status, RBX output, ECX width, EDX height, R8D format.
 
 img_bmp_probe:
+    IMG_COLD_PUBLIC_GUARD
     cld
     xor  ebx, ebx
     xor  ecx, ecx
@@ -394,11 +397,13 @@ img_bmp_probe:
     jne  .unsupported
     add  r9, 8
     dec  ecx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jnz  .v4_zero
     cmp  dword [rdi + 30], 3
     je   .bitfield_depth             ; retain R11 = 122/138, masks are internal
     cmp  r8d, 16
     je   .format_ok                  ; default555 has no palette
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .palette                    ; exact V4/V5 BI_RGB/RLE indexed entrance
 .bitfield_depth:
     cmp  r8d, 16
@@ -534,11 +539,13 @@ img_bmp_probe:
 .core24:
     call img_bmp_core24_span          ; no Windows fields on this branch
     test eax, eax
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jz   .valid
     ret
 .os2:
     call img_bmp_os2_span
     test eax, eax
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jz   .valid
     ret
 .rle8_span:
@@ -567,6 +574,7 @@ img_bmp_probe:
     call img_bmp_rle8
     test eax, eax
     jnz  .unsupported                ; outside this finite complete-row grammar
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .valid
 .bad_magic:
     mov  eax, IMG_E_BAD_MAGIC
@@ -586,6 +594,7 @@ img_bmp_probe:
 
 .embedded:
     cmp  word [rdi + 26], 1
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jne  .unsupported
     jmp  img_bmp_embedded_probe
 
@@ -616,10 +625,12 @@ img_bmp_os2_header:
     ret
 .dword:
     test al, 3
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jz   .yes
     jmp  .no
 .word:
     test al, 1
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jz   .yes
 .no:
     stc
@@ -966,6 +977,7 @@ img_bmp_os2_huffman_bias:
     cmp  edx, 0xffff
     je   .bad
     test edx, 0x8000
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jz   .edge
     and  edx, 0x7fff
     add  r10d, edx
@@ -974,6 +986,7 @@ img_bmp_os2_huffman_bias:
     cmp  eax, ebp
     ja   .bad                       ; makeup and terminating runs cannot cross a row
     cmp  edx, 64
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jae  .code                      ; makeup MUST be followed by a terminator
     test r10d, r10d
     jnz  .visible
@@ -994,21 +1007,24 @@ img_bmp_os2_huffman_bias:
     mov  eax, [rsp + r9*4]
     lea  rdi, [r15 + r8*4]
     mov  ecx, r10d
-    rep stosd
+    IMG_COLD_MEMORY stosd
 .advance:
     add  r8d, r10d
     xor  r9d, 1
     cmp  r8d, ebp
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jb   .run
     call .read_eol
     jc   .bad
     dec  ebx
     jz   .rtc
     test r15, r15
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jz   .row
     mov  eax, ebp
     shl  eax, 2
     sub  r15, rax
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .row
 .rtc:
     mov  ebx, 5                     ; final row EOL is first of six RTC EOLs
@@ -1016,6 +1032,7 @@ img_bmp_os2_huffman_bias:
     call .read_eol
     jc   .bad
     dec  ebx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jnz  .rtc_eol
     mov  rax, r14
     sub  rax, r13
@@ -1028,6 +1045,7 @@ img_bmp_os2_huffman_bias:
     jc   .bad
     test eax, eax
     jnz  .bad
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .padding
 .good:
     xor  eax, eax
@@ -1082,6 +1100,7 @@ img_bmp_os2_huffman_bias:
     test eax, eax
     jnz  .eol_one
     inc  edx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .eol_bit
 .eol_one:
     cmp  edx, 11
@@ -1343,6 +1362,7 @@ img_bmp_os2_rle24_bias:
     mov  [rdx], eax
     add  rdx, 4
     dec  ecx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jnz  .background
     mov  eax, ebx
     dec  eax
@@ -1427,14 +1447,17 @@ img_bmp_os2_rle24_bias:
 .encoded_advance:
     inc  r8d
     dec  r10d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jnz  .pixel
     test r11d, r11d
     jnz  .literal_end
     add  r13, 3
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .token
 .literal_end:
     and  r15d, 1
     add  r13, r15                    ; count parity, independent of file offset
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .token
 .delta:
     mov  rax, r14
@@ -1463,6 +1486,7 @@ img_bmp_os2_rle24_bias:
 .delta_cursor:
     sub  ebx, eax
     mov  r8d, ecx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .token
 .eol:
     test ebx, ebx
@@ -1478,6 +1502,7 @@ img_bmp_os2_rle24_bias:
     sub  r9, rax
 .eol_reset:
     xor  r8d, r8d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .token
 .eob:
     cmp  r13, r14
@@ -1645,6 +1670,7 @@ img_bmp_mask_table:
 .next:
     inc  esi
     cmp  esi, 4
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jb   .mask
     xor  eax, eax
     jmp  .out
@@ -1715,9 +1741,11 @@ img_bmp_palette_check:
     jae  .bad
     inc  ecx
     cmp  ecx, r12d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jb   .pixel
     add  rsi, r9
     dec  r13d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jnz  .row
     xor  eax, eax
     jmp  .out
@@ -1900,6 +1928,7 @@ img_bmp_array_probe:
     cmp  rax, r15
     jbe  .corrupt                   ; finite forward progress, no cycles/alias
     mov  r15, rax
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .chain
 .chain_done:
     cmp  r13, [rsp + 2048]
@@ -1935,10 +1964,12 @@ img_bmp_array_probe:
     jb   .corrupt
 .disjoint:
     add  rbp, 32
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .inner_pair
 .next_pair:
     add  r15, 32
     cmp  r15, r14
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jb   .pairs
     xor  r15d, r15d
 .qualify:
@@ -1967,6 +1998,7 @@ img_bmp_array_probe:
 .saved:
     add  r15, 32
     cmp  r15, r14
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jb   .qualify                   ; validate trailing members' actual pixel grammar
     mov  ecx, [rsp + 2056]
     mov  edx, [rsp + 2060]
@@ -2029,7 +2061,7 @@ img_bmp_array_decode:
     lea  rdi, [rsp + 64]
     mov  rsi, r12
     mov  rdx, r13
-    call sha256_hash
+    IMG_COLD_DIGEST
     mov  rdi, r12
     mov  rsi, r13
     call img_bmp_array_probe
@@ -2046,23 +2078,23 @@ img_bmp_array_decode:
     cmp  rax, r13
     cmovb rax, r13
     mov  [rsp + 32], rax
-    mov  rax, [rel heap_next]
+    IMG_COLD_HEAP_NOW
     mov  [rsp + 40], rax
     mov  rdi, [rsp + 32]
-    call kmalloc
+    IMG_COLD_HEAP_ALLOC
     test rax, rax
     jz   .oom
     mov  r14, rax
-    mov  rax, [rel heap_next]
+    IMG_COLD_HEAP_NOW
     mov  [rsp + 48], rax
     mov  rdi, r14
     mov  rsi, r12
     mov  rcx, r13
-    rep  movsb
+    IMG_COLD_MEMORY movsb
     lea  rdi, [rsp + 96]
     mov  rsi, r14
     mov  rdx, r13
-    call sha256_hash
+    IMG_COLD_DIGEST
     lea  rdi, [rsp + 64]
     lea  rsi, [rsp + 96]
     mov  ecx, 32
@@ -2099,7 +2131,7 @@ img_bmp_array_decode:
     mov  rdi, r14
     mov  rsi, rbx
     mov  rcx, [rsp + 24]
-    rep  movsb
+    IMG_COLD_MEMORY movsb
     call img_output_release
     cmp  qword [rel img_active_out], 0
     jne  .retire_failed
@@ -2128,10 +2160,16 @@ img_bmp_array_decode:
 .scratch_failure:
     mov  ebp, eax
     mov  rdi, r14
+%ifdef PAOS_IMG_COLD_WORK
+    mov  rax, [rsp + 48]
+    mov  rdx, [rsp + 40]
+    call img_cold_heap_rewind
+%else
     call kfree
     mov  rax, [rsp + 48]
     mov  rdx, [rsp + 40]
     lock cmpxchg [rel heap_next], rdx
+%endif
     mov  eax, ebp
     jmp  .refused
 .oom:
@@ -2194,6 +2232,7 @@ img_bmp_embedded_probe:
     jne  .unsupported
     add  r9, 8
     dec  ecx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jnz  .zero_color
     jmp  .profile_ready
 .inline_metadata:
@@ -2319,24 +2358,24 @@ img_bmp_embedded_decode:
     lea  rdi, [rsp + 64]
     mov  rsi, r12
     mov  rdx, r13
-    call sha256_hash
-    mov  rax, [rel heap_next]
+    IMG_COLD_DIGEST
+    IMG_COLD_HEAP_NOW
     mov  [rsp + 40], rax
     mov  rdi, [rsp + 32]
-    call kmalloc
+    IMG_COLD_HEAP_ALLOC
     test rax, rax
     jz   .oom
     mov  r14, rax
-    mov  rax, [rel heap_next]
+    IMG_COLD_HEAP_NOW
     mov  [rsp + 48], rax
     mov  rdi, r14
     mov  rsi, r12
     mov  rcx, r13
-    rep  movsb
+    IMG_COLD_MEMORY movsb
     lea  rdi, [rsp + 96]
     mov  rsi, r14
     mov  rdx, r13
-    call sha256_hash
+    IMG_COLD_DIGEST
     lea  rdi, [rsp + 64]
     lea  rsi, [rsp + 96]
     mov  ecx, 32
@@ -2383,7 +2422,7 @@ img_bmp_embedded_decode:
     mov  rdi, r14
     mov  rsi, rbx
     mov  rcx, [rsp + 24]
-    rep  movsb                       ; owned codec output -> first allocation
+    IMG_COLD_MEMORY movsb                       ; owned codec output -> first allocation
     call img_output_release          ; releases only the nested codec block
     cmp  qword [rel img_active_out], 0
     jne  .retire_failed               ; never publish over a contended release
@@ -2410,10 +2449,16 @@ img_bmp_embedded_decode:
 .scratch_failure:
     mov  ebp, eax
     mov  rdi, r14
+%ifdef PAOS_IMG_COLD_WORK
+    mov  rax, [rsp + 48]
+    mov  rdx, [rsp + 40]
+    call img_cold_heap_rewind
+%else
     call kfree
     mov  rax, [rsp + 48]
     mov  rdx, [rsp + 40]
     lock cmpxchg [rel heap_next], rdx
+%endif
     mov  eax, ebp
     call img_refusal_clear
     jmp  .out
@@ -2450,7 +2495,7 @@ img_bmp_extended_rle_decode:
     lea  rdi, [rsp]
     mov  rsi, r12
     mov  rdx, r13
-    call sha256_hash
+    IMG_COLD_DIGEST
     mov  eax, r14d
     imul rax, r15
     shl  rax, 2
@@ -2466,11 +2511,11 @@ img_bmp_extended_rle_decode:
     mov  rsi, r12
     mov  r12, rax                    ; from here only the private source is read
     mov  rcx, r13
-    rep  movsb
+    IMG_COLD_MEMORY movsb
     lea  rdi, [rsp + 32]
     mov  rsi, r12
     mov  rdx, r13
-    call sha256_hash
+    IMG_COLD_DIGEST
     lea  rdi, [rsp]
     lea  rsi, [rsp + 32]
     mov  ecx, 32
@@ -2521,6 +2566,7 @@ img_bmp_extended_rle_decode:
     ret
 
 img_bmp_decode:
+    IMG_COLD_PUBLIC_GUARD
     cld
     mov  rax, rdi
     add  rax, rsi
@@ -2528,6 +2574,7 @@ img_bmp_decode:
     cmp  rsi, 2
     jb   .ordinary
     cmp  word [rdi], 'BA'
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     je   img_bmp_array_decode
 .ordinary:
     push r12
@@ -2663,7 +2710,7 @@ img_bmp_decode:
     lea  rdi, [rsp + 32]
     mov  rsi, r12
     mov  rdx, r13
-    call sha256_hash                 ; bounded original, before allocator callbacks
+    IMG_COLD_DIGEST                 ; bounded original, before allocator callbacks
     test rax, rax
     jnz  .table_changed
     mov  eax, [rsp + 4]              ; retain actual short/full header personality
@@ -2803,7 +2850,7 @@ img_bmp_decode:
     lea  rdi, [rsp + 80]             ; original frame64..95, disjoint digest
     mov  rsi, r12
     mov  rdx, r13
-    call sha256_hash
+    IMG_COLD_DIGEST
     add  rsp, 8
     pop  r11
     test rax, rax
@@ -2815,6 +2862,7 @@ img_bmp_decode:
     jne  .v2_changed                 ; header, palette, gap AND pixels stay bound
     add  ecx, 8
     cmp  ecx, 32
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jb   .os2_digest
     push r11
     sub  rsp, 8
@@ -3152,6 +3200,7 @@ img_bmp_decode:
     xor  edx, edx
     cmp  eax, [rsp + 124]
     cmovae eax, edx                  ; refused index selects validated palette[0]
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jae  .raw_palette_refuse         ; retain unsigned refusal and CMP flags
     cmp  dword [rsp + 4], 12
     je   .core_palette_pixel         ; no RGBQUAD or clrUsed field on CORE
@@ -3204,9 +3253,11 @@ img_bmp_decode:
 .output_next:
     add  rdi, 4
     inc  ecx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .pixel
 .next_row:
     inc  r8d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .row
 .success:
     mov  eax, [rsp + 4]
@@ -3510,6 +3561,7 @@ img_bmp_rle8_bias:
     mov  [rdx], eax
     add  rdx, 4
     dec  ecx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jnz  .background
 .bottom_output:
     mov  eax, ebx
@@ -3613,8 +3665,10 @@ img_bmp_rle8_bias:
 .advance:
     inc  r8d
     dec  r10d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jnz  .pixel
     test r11d, r11d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jz   .token
     mov  eax, ecx
     cmp  edi, 8
@@ -3623,8 +3677,10 @@ img_bmp_rle8_bias:
     shr  eax, 1                     ; RLE4 packed bytes, including odd last nibble
 .literal_end_parity:
     test al, 1
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jz   .token
     inc  r13                        ; odd literal padding already qualified
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .token
 .delta:
     mov  rax, r14
@@ -3661,6 +3717,7 @@ img_bmp_rle8_bias:
 .delta_cursor:
     sub  ebx, eax
     mov  r8d, ecx
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .token
 .eol:
     test ebx, ebx
@@ -3677,6 +3734,7 @@ img_bmp_rle8_bias:
     sub  r9, rax                    ; current x to start of preceding row
 .eol_reset:
     xor  r8d, r8d
+    IMG_COLD_STEP                    ; bounded loop backedge, flags preserved
     jmp  .token
 .eob:
     cmp  r13, r14

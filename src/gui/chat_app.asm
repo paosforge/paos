@@ -1,7 +1,7 @@
 ;; MODULE gui/chat_app
 ;; LAYER 6
 ;; EXPORTS chat_terminal_close_op, chat_app_init, chat_app_tick, chat_declare, chat_process, fb_draw_char, fb_draw_str_n, sec_text_escape, sec_text_escape_row, fb_draw_scalar, fb_draw_wide16, wm_repaint_all, wm_zstamp, wm_zcounter, chat_out_buf, chat_out_ready
-;; IMPORTS boot/serial, boot/gop, gui/window, gui/window_mgmt, gui/cadence_mark, svc/command, core/native_app, core/lib/fmt, core/lib/str
+;; IMPORTS gui/compose_job, gui/compose_idle, gui/compose_glyph, boot/serial, boot/gop, gui/window, gui/window_mgmt, gui/cadence_mark, svc/command, core/native_app, core/lib/fmt, core/lib/str
 ;; CAPS
 ;; OWNER saga:gui
 ; ============================================================================
@@ -114,6 +114,16 @@ fb_draw_char:
     shl  eax, 4
     lea  rsi, [rel font_8x16]
     add  rsi, rax
+    cmp byte [rel fb_compose_clip_active],0
+    je .whole_cell
+    push rdx
+    mov dl,8
+    mov r10d,8
+    mov r11d,16
+    call fb_compose_glyph
+    pop rdx
+    jmp .done
+.whole_cell:
     ; dst = fb_base + (y*stride + x)*4
     ; Coordinates and pitch are 32-bit inputs; retain the full pixel index.
     mov  eax, [rel fb_stride]
@@ -193,6 +203,16 @@ fb_draw_scalar:
     shl  eax, 4
     lea  rsi, [rel font_8x16]
     add  rsi, rax
+    cmp byte [rel fb_compose_clip_active],0
+    je .whole_cell
+    push rdx
+    mov dl,8
+    mov r10d,8
+    mov r11d,16
+    call fb_compose_glyph
+    pop rdx
+    jmp .done
+.whole_cell:
     ; Coordinates and pitch are 32-bit inputs; retain the full pixel index.
     mov  eax, [rel fb_stride]
     mov  r10d, r9d
@@ -265,6 +285,16 @@ fb_draw_wide16:
     add  eax, 16
     cmp  eax, [rel fb_height]
     ja   .done
+    cmp byte [rel fb_compose_clip_active],0
+    je .whole_cell
+    push rdx
+    mov dl,16
+    mov r10d,16
+    mov r11d,16
+    call fb_compose_glyph
+    pop rdx
+    jmp .done
+.whole_cell:
     ; Coordinates and pitch are 32-bit inputs; retain the full pixel index.
     mov  eax, [rel fb_stride]
     mov  r10d, r9d
@@ -496,6 +526,10 @@ sec_text_escape:
 ; ONE wmx_paint_slot path; this module retains only its temporary app body.
 ; ---------------------------------------------------------------------------
 chat_draw_window:
+    call fb_compose_defer_scene
+    jnc .compose
+    ret
+.compose:
     push rdi
     CADENCE_BATCH_BEGIN
     mov  edi, CHAT_SLOT
@@ -506,6 +540,10 @@ chat_draw_window:
     ret
 
 chat_draw_body:
+    call fb_compose_defer_scene
+    jnc .compose
+    ret
+.compose:
     push rbx
     push rcx
     push r8

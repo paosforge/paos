@@ -23,6 +23,27 @@ FM_OUTPUT equ 6
 FM_DONE equ 7
 FM_FAILED equ 8
 FM_HASH_BYTES equ 4096
+; Which gate stopped a measurement (T1-5 S1b, rc-root 2026-11-22 02:24:17).
+; Wire values: append only, never renumber.
+FM_GATE_CANCEL equ 1
+FM_GATE_LOCKED equ 2
+FM_GATE_AUTH_EPOCH equ 3               ; expected/got = session authority epoch
+FM_GATE_CLOCK equ 4
+FM_GATE_DEADLINE equ 5                 ; expected = deadline, got = now, us
+FM_GATE_DISABLED equ 6
+FM_GATE_EMPTY equ 7
+FM_GATE_REVOKED equ 8                  ; check = GD_CHK_*, expected/got = surface epoch
+FM_GATE_LENGTH equ 9                   ; expected/got = bytes
+FM_GATE_STATE equ 10
+FM_GATE_STEP equ 11                    ; expected/got = SMP_PC_* result
+FM_GATE_RETIRE equ 12
+FM_GATE_TIME equ 13
+FM_GATE_RELEASE equ 14
+FM_GATE_BEGIN equ 15                   ; got = SMP_PC_* refusal
+FM_GATE_COMPARE equ 16
+FM_GATE_HASH equ 17
+FM_GATE_HASH_FINAL equ 18
+FM_GATE_DIGEST equ 19
 struc fm_record
  .us: resq 1
  .digest: resb 32
@@ -150,6 +171,7 @@ fm_command:
     jne .reply
     cmp byte [rel fm_state], FM_DONE
     jae .reply
+    mov byte [rel fm_at], FM_GATE_CANCEL
     call fm_abort
     jmp .reply
 .start:
@@ -177,6 +199,14 @@ fm_command:
     mov qword [rel fm_len], 0
     mov qword [rel fm_width], 0
     mov qword [rel fm_height], 0
+    mov qword [rel fm_expected], 0
+    mov qword [rel fm_got], 0
+    mov byte [rel fm_retry], 0
+    mov byte [rel fm_at], 0
+    mov byte [rel fm_gate], 0
+    mov byte [rel fm_check], 0
+    mov byte [rel fm_stop_stage], 0
+    mov byte [rel fm_stop_why], 0
     lea rdi, [rel fm_source_digest]
     mov ecx, 4
     rep stosq
@@ -209,8 +239,8 @@ fm_command:
     ret
 
 ; Returns EAX=1 if this turn belongs to measurement (skip ordinary desktop
-; housekeeping). WAIT permits native capture; at BEGIN it freezes S and takes
-; custody before the ordinary owner can publish an async job.
+; housekeeping). WAIT owns CAPTURE before its first source byte; at BEGIN it
+; freezes S before the ordinary owner can publish an async job.
 guest_frame_measure_tick:
     push rbx
     push rbp
@@ -220,23 +250,40 @@ guest_frame_measure_tick:
     jz .inactive
     cmp eax, FM_DONE
     jae .inactive
+    mov byte [rel fm_at], FM_GATE_LOCKED
     call gd_locked                       ; idle has no command authority frame
     test eax, eax
     jnz .fail
+    mov byte [rel fm_at], FM_GATE_AUTH_EPOCH
     mov rax, [rel session_authority_epoch]
     cmp rax, [rel fm_epoch]
     jne .fail
+    mov byte [rel fm_at], FM_GATE_CLOCK
     call time_monotonic_now_us
     test rax, rax
     jz .fail
+    mov byte [rel fm_at], FM_GATE_DEADLINE
     cmp rax, [rel fm_deadline]
     jae .fail
+    cmp byte [rel fm_retry], 0
+    jne .retry
     cmp byte [rel fm_state], FM_WAIT
     jne .owned
+    mov byte [rel fm_at], FM_GATE_DISABLED
     cmp byte [rel gd_stage_state], GD_ST_DISABLED
     je .fail
+    cmp byte [rel gd_stage_state], GD_ST_CAPTURE
+    jne .wait_begin
+    ; Take custody before the first source byte, not only after its last row.
+    ; A composition repaint can then reuse the same bounded fresh-capture retry
+    ; as later measurement phases, rather than scrub both private frames first.
+    mov qword [rel gd_stage_job], 0      ; CAPTURE has not submitted a COPY job
+    mov byte [rel fm_retry], 1
+    jmp .retry
+.wait_begin:
     cmp byte [rel gd_stage_state], GD_ST_BEGIN
-    jne .inactive                       ; let normal CAPTURE make bounded progress
+    jne .inactive                       ; ordinary retirement/scrub may still owe work
+    mov byte [rel fm_at], FM_GATE_EMPTY
     mov rdi, [rel gd_stage_len]
     test rdi, rdi
     jz .fail
@@ -250,13 +297,16 @@ guest_frame_measure_tick:
     call sha256_stream_init
     mov byte [rel fm_state], FM_SOURCE
 .owned:
+    mov byte [rel fm_at], FM_GATE_REVOKED
     mov edi, [rel gd_stage_slot]
     call gd_stage_still_ours
     test eax, eax
-    jz .fail
+    jz .revoked
+    mov byte [rel fm_at], FM_GATE_LENGTH
     mov rax, [rel fm_len]
     cmp rax, [rel gd_stage_len]
     jne .fail
+    mov byte [rel fm_at], FM_GATE_STATE
     movzx eax, byte [rel fm_state]
     cmp eax, FM_SOURCE
     je .hash
@@ -273,15 +323,18 @@ guest_frame_measure_tick:
     mov rdi, [rel gd_stage_job]
     lea rsi, [rel gd_stage_blk]
     call smp_par_step
+    mov byte [rel fm_at], FM_GATE_STEP
     cmp eax, SMP_PC_PENDING
     je .active
     cmp eax, SMP_PC_COMPLETE
     jne .fail
+    mov byte [rel fm_at], FM_GATE_RETIRE
     cmp edx, 1
     jne .fail
     call fm_record_ptr
     mov rbp, rax
     mov rax, [rel smp_pc_finished_us]
+    mov byte [rel fm_at], FM_GATE_TIME
     sub rax, [rel fm_started_us]
     jc .fail
     mov [rbp + fm_record.us], rax
@@ -299,6 +352,7 @@ guest_frame_measure_tick:
     rep movsq                          ; actual terminal retirement precedes read
     mov rdi, [rel gd_stage_job]
     lea rsi, [rel gd_stage_blk]
+    mov byte [rel fm_at], FM_GATE_RELEASE
     call smp_par_release
     test eax, eax
     jz .fail
@@ -334,6 +388,7 @@ guest_frame_measure_tick:
 .parallel:
     call smp_par_begin
 .begun:
+    mov byte [rel fm_at], FM_GATE_BEGIN
     lea rsp, [rsp + SMP_PF_CTX_SZ]
     jc .fail
     mov [rel gd_stage_job], rax
@@ -377,6 +432,7 @@ guest_frame_measure_tick:
     mov rdi, [rel gd_stage_d]
     add rdi, [rel fm_cursor]
     mov rcx, r12
+    mov byte [rel fm_at], FM_GATE_COMPARE
     repe cmpsb                          ; independent full-byte comparison
     jne .fail
     mov rsi, [rel gd_stage_d]
@@ -384,6 +440,7 @@ guest_frame_measure_tick:
 .hash_update:
     lea rdi, [rel fm_sha]
     mov rdx, r12
+    mov byte [rel fm_at], FM_GATE_HASH
     call sha256_stream_update
     test rax, rax
     jnz .fail
@@ -398,6 +455,7 @@ guest_frame_measure_tick:
     lea rsi, [rax + fm_record.digest]
 .hash_final:
     lea rdi, [rel fm_sha]
+    mov byte [rel fm_at], FM_GATE_HASH_FINAL
     call sha256_stream_final
     test rax, rax
     jnz .fail
@@ -406,6 +464,7 @@ guest_frame_measure_tick:
     call fm_record_ptr
     lea rdi, [rax + fm_record.digest]
     lea rsi, [rel fm_source_digest]
+    mov byte [rel fm_at], FM_GATE_DIGEST
     mov ecx, 32
     repe cmpsb
     jne .fail
@@ -418,10 +477,77 @@ guest_frame_measure_tick:
 .next:
     mov qword [rel fm_cursor], 0
     mov byte [rel fm_state], FM_POISON
+    jmp .active
+; A composition change invalidates the sample, not the original command.
+; Keep the captured guest/window binding, nonce, authority and 60s deadline.
+; No ordinary desktop preparation can replace that binding during a retry.
+.revoked:
+    cmp byte [rel gd_stage_check], GD_CHK_COMPOSITION
+    jne .fail
+    cmp qword [rel fb_surface_epoch], -1
+    je .fail                            ; saturated epoch cannot establish ownership
+    mov byte [rel gd_stage_check], GD_CHK_PLAN
+    call gd_stage_plan_ok               ; composition was before this final check
+    test eax, eax
+    jz .fail
+    mov rax, [rel fb_surface_epoch]
+    mov [rel gd_stage_pub_epoch], rax
+    lea rdi, [rel fm_records]
+    xor eax, eax
+    mov ecx, (fm_record_size * 6) / 8
+    rep stosq                           ; all six trials must use the fresh sample
+    lea rdi, [rel fm_source_digest]
+    mov ecx, 4
+    rep stosq
+    mov qword [rel fm_trial], 0
+    mov qword [rel fm_cursor], 0
+    mov byte [rel fm_retry], 1
+    mov byte [rel fm_state], FM_WAIT
+    mov rdi, [rel gd_stage_job]
+    test rdi, rdi
+    jz .recapture
+    lea rsi, [rel gd_stage_blk]
+    call smp_par_cancel
+    mov byte [rel gd_stage_state], GD_ST_QUARANTINED
+    jmp .active                         ; no writes while a worker still owns D
+.retry:
+    mov byte [rel fm_at], FM_GATE_REVOKED
+    mov edi, [rel gd_stage_slot]
+    call gd_stage_still_ours             ; same binding, including every context check
+    test eax, eax
+    jz .revoked
+    cmp byte [rel gd_stage_state], GD_ST_QUARANTINED
+    jne .capture_retry
+    mov rdi, [rel gd_stage_job]
+    lea rsi, [rel gd_stage_blk]
+    call smp_par_status
+    cmp edx, 1
+    jne .active                         ; bounded poll, never wait on an AP
+    mov rdi, [rel gd_stage_job]
+    lea rsi, [rel gd_stage_blk]
+    call smp_par_release
+    test eax, eax
+    jz .active
+    mov qword [rel gd_stage_job], 0
+.recapture:
+    mov qword [rel gd_stage_cursor], 0
+    mov byte [rel gd_stage_state], GD_ST_CAPTURE
+    jmp .active                         ; no read on the retirement/cancel turn
+.capture_retry:
+    cmp byte [rel gd_stage_state], GD_ST_CAPTURE
+    jne .capture_ready
+    call gd_stage_housekeep             ; one existing bounded capture step
+    jmp .active
+.capture_ready:
+    cmp byte [rel gd_stage_state], GD_ST_BEGIN
+    jne .fail
+    mov byte [rel fm_retry], 0
+    jmp .active                         ; next measurement turn freezes the fresh S
 .active:
     mov eax, 1
     jmp .out
 .fail:
+    mov [rel fm_fail_value], rax        ; a status or clock gate's observed value
     call fm_abort
     jmp .active
 .inactive:
@@ -433,8 +559,12 @@ guest_frame_measure_tick:
     ret
 
 fm_abort:
+    call fm_stop_save                  ; before cancel/discard rewrites stage and why
+    cmp byte [rel fm_retry], 0
+    jne .owned
     cmp byte [rel fm_state], FM_WAIT
     je .done                            ; ordinary stage still owns its work
+ .owned:
     mov rdi, [rel gd_stage_job]
     test rdi, rdi
     jz .scrub
@@ -446,6 +576,61 @@ fm_abort:
     call gd_stage_discard               ; existing guard-checked bounded scrub
 .done:
     mov byte [rel fm_state], FM_FAILED
+    ret
+
+; Saved once per measurement: fm_abort is reached only below FM_DONE.
+; Reads the stopping operands only. Clobbers RAX, RCX, RDX and flags.
+fm_stop_save:
+    mov al, [rel gd_stage_state]
+    mov [rel fm_stop_stage], al
+    mov al, [rel gd_stage_why]
+    mov [rel fm_stop_why], al
+    xor ecx, ecx                       ; expected
+    xor edx, edx                       ; got
+    movzx eax, byte [rel fm_at]
+    mov [rel fm_gate], al
+    cmp eax, FM_GATE_AUTH_EPOCH
+    jne .deadline
+    mov rcx, [rel fm_epoch]
+    mov rdx, [rel session_authority_epoch]
+    jmp .saved
+.deadline:
+    cmp eax, FM_GATE_DEADLINE
+    jne .revoked
+    mov rcx, [rel fm_deadline]
+    mov rdx, [rel fm_fail_value]
+    cmp byte [rel gd_stage_state], GD_ST_SCRUB
+    jne .saved
+    mov al, [rel gd_stage_stale_check]   ; preserve the predicate lost before WAIT timed out
+    mov [rel fm_check], al
+    jmp .saved
+.revoked:
+    cmp eax, FM_GATE_REVOKED
+    jne .length
+    mov al, [rel gd_stage_check]
+    mov [rel fm_check], al
+    mov rcx, [rel gd_stage_pub_epoch]
+    mov rdx, [rel fb_surface_epoch]
+    jmp .saved
+.length:
+    cmp eax, FM_GATE_LENGTH
+    jne .step
+    mov rcx, [rel fm_len]
+    mov rdx, [rel gd_stage_len]
+    jmp .saved
+.step:
+    cmp eax, FM_GATE_STEP
+    jne .begin
+    mov ecx, SMP_PC_COMPLETE
+    mov edx, [rel fm_fail_value]
+    jmp .saved
+.begin:
+    cmp eax, FM_GATE_BEGIN
+    jne .saved
+    mov edx, [rel fm_fail_value]
+.saved:
+    mov [rel fm_expected], rcx
+    mov [rel fm_got], rdx
     ret
 
 fm_record_ptr:
@@ -533,6 +718,30 @@ fm_reply:
     inc ebx
     cmp ebx, MAXCORE
     jb .cpu
+    lea rdi, [rel fm_gate_key]
+    call chat_put_str
+    movzx edi, byte [rel fm_gate]
+    call chat_put_dec
+    lea rdi, [rel fm_check_key]
+    call chat_put_str
+    movzx edi, byte [rel fm_check]
+    call chat_put_dec
+    lea rdi, [rel fm_expected_key]
+    call chat_put_str
+    mov rdi, [rel fm_expected]
+    call chat_put_dec
+    lea rdi, [rel fm_got_key]
+    call chat_put_str
+    mov rdi, [rel fm_got]
+    call chat_put_dec
+    lea rdi, [rel fm_stage_key]
+    call chat_put_str
+    movzx edi, byte [rel fm_stop_stage]
+    call chat_put_dec
+    lea rdi, [rel fm_why_key]
+    call chat_put_str
+    movzx edi, byte [rel fm_stop_why]
+    call chat_put_dec
     ret
 fm_hex32:
     push rbx
@@ -582,6 +791,12 @@ fm_count_key: db ' count=',0
 fm_job_key: db ' job=',0
 fm_online_key: db ' online=',0
 fm_chunks_key: db ' chunks=',0
+fm_gate_key: db ' gate=',0
+fm_check_key: db ' check=',0
+fm_expected_key: db ' expected=',0
+fm_got_key: db ' got=',0
+fm_stage_key: db ' stage=',0
+fm_why_key: db ' why=',0
 %macro WDATA_guest_frame_measure 0
 alignb 8
 fm_records: resb fm_record_size * 6
@@ -597,7 +812,16 @@ fm_len: resq 1
 fm_width: resq 1
 fm_height: resq 1
 fm_started_us: resq 1
+fm_expected: resq 1
+fm_got: resq 1
+fm_fail_value: resq 1
+fm_retry: resb 1
 fm_state: resb 1
+fm_at: resb 1
+fm_gate: resb 1
+fm_check: resb 1
+fm_stop_stage: resb 1
+fm_stop_why: resb 1
 fm_char: resb 2
 %endmacro
 WDATA_BSS_DEFER WDATA_guest_frame_measure

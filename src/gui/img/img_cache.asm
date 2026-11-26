@@ -1,7 +1,7 @@
 ;; MODULE gui/img/img_cache
 ;; LAYER 6
 ;; EXPORTS img_cache_init, img_cache_reset, img_cache_bind, img_cache_lookup, img_cache_nat_blit, img_cache_forget
-;; IMPORTS gui/img/img_core, gui/img/img_rgba_resize, gui/window, core/heap, svc/command
+;; IMPORTS gui/compose_idle, gui/img/img_core, gui/img/img_rgba_resize, gui/window, core/heap, svc/command
 ;; CAPS
 ;; OWNER saga:gui_image_pipeline
 
@@ -60,7 +60,7 @@ img_cache_forget:
     mov  rcx, [rdx + ICE_BYTES]
     xor  eax, eax
     cld
-    rep  stosb
+    IMG_COLD_MEMORY stosb              ; worker retirement yields outside cache metadata
     pop  rcx
     pop  rdi
     mov  qword [rdx + ICE_ASSET], 0
@@ -291,6 +291,7 @@ img_cache_bind:
     call img_cache_lookup
     test eax, eax
     jz   .success_return
+    IMG_COLD_BUSY_JUMP .oom
     inc  qword [rel img_cache_misses]
     cmp  qword [rel img_cache_base], 0
     je   .oom
@@ -453,6 +454,7 @@ img_cache_nat_blit:
     push r13
     push r14
     push r15
+    push 0                            ; this call owns no prepaid raster yet
     mov  [rel img_nb_ow], esi
     mov  [rel img_nb_oh], edx
     mov  [rel img_nb_sx0], ecx
@@ -488,6 +490,41 @@ img_cache_nat_blit:
     add  rax, r11
     cmp  rax, rdx
     ja   .refuse
+    cmp byte [rel fb_compose_clip_active],0
+    je .full_map
+    ; Preserve output sampling dimensions, but intersect BEFORE computing
+    ; column maps or expanding a single source row. A clipped final blit
+    ; alone would still do an entire frame of CPU work here.
+    mov r8d,[rel img_nb_x]
+    mov r9d,[rel img_nb_y]
+    mov r10d,[rel img_nb_w]
+    mov r11d,[rel img_nb_h]
+    call fb_compose_intersect
+    jc .done
+    call fb_compose_take
+    jc .done
+    mov eax,r8d
+    sub eax,[rel img_nb_x]
+    add [rel img_nb_sx0],eax
+    mov eax,r9d
+    sub eax,[rel img_nb_y]
+    add [rel img_nb_sy0],eax
+    mov [rel img_nb_x],r8d
+    mov [rel img_nb_y],r9d
+    mov [rel img_nb_w],r10d
+    mov [rel img_nb_h],r11d
+    ; Partial maps are deliberately never advertised as a cached full map.
+    mov dword [rel img_cache_map_nw],0
+    mov ecx,[rel img_nb_sx0]
+    mov eax,ecx
+    add eax,r10d
+    mov [rel img_nb_map_end],eax
+    inc byte [rel fb_compose_prepaid]
+    mov byte [rsp],1
+    jmp .map_col
+.full_map:
+    mov eax,[rel img_nb_ow]
+    mov [rel img_nb_map_end],eax
     mov  eax, [rel img_cache_ret_nw]
     cmp  eax, [rel img_cache_map_nw]
     jne  .map
@@ -496,7 +533,7 @@ img_cache_nat_blit:
 .map:
     xor  ecx, ecx
 .map_col:
-    cmp  ecx, [rel img_nb_ow]
+    cmp  ecx, [rel img_nb_map_end]
     jae  .map_done
     mov  eax, ecx
     mul  dword [rel img_cache_ret_nw]
@@ -505,6 +542,8 @@ img_cache_nat_blit:
     inc  ecx
     jmp  .map_col
 .map_done:
+    cmp byte [rel fb_compose_clip_active],0
+    jne .mapped
     mov  eax, [rel img_cache_ret_nw]
     mov  [rel img_cache_map_nw], eax
     mov  eax, [rel img_nb_ow]
@@ -570,6 +609,11 @@ img_cache_nat_blit:
 .refuse:
     mov  eax, 1
 .return:
+    cmp byte [rsp],0
+    je .not_prepaid
+    dec byte [rel fb_compose_prepaid]
+.not_prepaid:
+    add rsp,8
     pop  r15
     pop  r14
     pop  r13
@@ -790,6 +834,7 @@ img_cache_scratch: dq 0                 ; RCQ-27: map[px] dd, then row[px] dd
 img_cache_scratch_px: dd 0
 img_cache_map_nw: dd 0                  ; the map's key; nw 0 never matches a raster
 img_cache_map_ow: dd 0
+img_nb_map_end: dd 0
 img_nb_ow: dd 0
 img_nb_oh: dd 0
 img_nb_sx0: dd 0

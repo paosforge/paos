@@ -20,7 +20,7 @@ Website: https://paosforge.com · Simulator: https://paosforge.com/simulator/
 
 ## What this repository is
 
-- A **one-way snapshot** of the source, copied from our private development system. This is snapshot 7: source version 0.0.328, an engineering build of 2026-11-18.
+- A **one-way snapshot** of the source, copied from our private development system. This is snapshot 8: source version 0.0.328, an engineering build of 2026-11-23.
 - It has **no development history**. Each new snapshot is added as one new commit on top of the last.
 - It contains the OS source, the programs that run inside the Linux virtual machines, the SDK, the generators for the font, Unicode, text and input-method tables, the third-party sources those use, and the license files.
 - It does **not** contain our test lab tools, internal notes, prebuilt boot files or signing keys.
@@ -34,11 +34,13 @@ Website: https://paosforge.com · Simulator: https://paosforge.com/simulator/
 
 ## Where things stand
 
-PaOS 0.1 is defined as 47 required items. Each closes only when its checks pass on all six reference machines on one build.
-When this snapshot was made, **12 of 47** were closed.
+PaOS 0.1 is defined as 47 required items. Each closes when its applicable checks pass on one build across the six reference machines; explicit exceptions and emulator-equivalent checks are noted below.
+When this snapshot was made, **14 of 47** were closed.
 
-Closed so far are mostly the low-level foundations, as tested on our current hardware: one image that boots on all six machines, the core Secure Boot chain (the full try-and-install journey isn't checked yet), recovery from a bad boot, use of all processor cores, hardware discovery, interrupts and clocks, memory protection, hardware error handling, the common driver framework, the old separate Console retired from view in favour of Terminal (hidden, with no Start entry; a protected recovery path stays), and the cryptography and identity base.
-The desktop apps, the Linux guest, storage, networking features and the Try/install journey are **still open**.
+Closed so far are mostly the low-level foundations, as tested on our current hardware: one image that boots on all six machines, the core Secure Boot chain (the full try-and-install journey isn't checked yet), recovery from a bad boot, use of all processor cores, hardware discovery, interrupts and clocks, memory protection, hardware error handling, the common driver framework, the old separate Console retired from view in favour of Terminal (hidden, with no Start entry; a protected recovery path stays), the cryptography and identity base, disk sector geometry checks, and system information including the device name.
+For disk sector geometry, 512-byte transfers passed on four machines; that check was not applicable on the Dell and HP. Refusing unsupported 4Kn geometry before I/O and keeping refused geometry out of the healthy state passed using emulator-equivalent checks, not real 4Kn disks. One transfer result was regraded from its saved original after a grader correction. Broader disk compatibility is planned for 0.2. System information passed its checks on all six machines, including the measured device name.
+
+The other desktop apps, the Linux guest, broader storage and networking features, and the Try/install journey are **still open**.
 
 ## The six machines we test on
 

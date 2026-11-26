@@ -569,6 +569,7 @@ rtl8168_hw_bringup:
     jmp  .out
 
 .found:
+    A1_NATIVE_NIC_SKIP r15,r14,r13,.scan_next
     and  dword [rel rtl8168_dev + dev.flags], ~NETDEV_F_ABSENT   ; a chip is there (a bind failure is a fault)
     mov  [rel rtl8168_pci_bus], r15d
     mov  [rel rtl8168_pci_dev], r14d

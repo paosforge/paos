@@ -2,6 +2,33 @@
 ; Actual firmware LoadImage is the oracle. Neither image is ever started.
 ; The signed diagnostic Manager binds both embedded public PE byte strings.
 %ifdef PBM_DIAG_SB_PAIR
+; Measure without adding raw input bytes to the PE. Large pairs use the
+; maintained preparer's exact LZ4 block and single covered-byte mutation.
+; The ordinary and combined-object small-pair paths remain byte-for-byte raw.
+%ifndef PBM_MSI_COMBINED_OBJECT
+[section .sbprobe_measure nobits]
+sbprobe_input_start: incbin PBM_DIAG_SB_POSITIVE
+sbprobe_input_end:
+sbprobe_bad_input_start: incbin PBM_DIAG_SB_NEGATIVE
+sbprobe_bad_input_end:
+__SECT__
+%if sbprobe_input_end-sbprobe_input_start != sbprobe_bad_input_end-sbprobe_bad_input_start
+%error "SB pair PE sizes must match"
+%endif
+%if sbprobe_input_end-sbprobe_input_start < 512 || sbprobe_input_end-sbprobe_input_start > 2097152
+%error "SB pair PE must be 512B..2MiB"
+%endif
+%if sbprobe_input_end - sbprobe_input_start > 393216
+%strcat SBPROBE_PACKED_INCLUDE PBM_DIAG_SB_POSITIVE, ".sb3.inc"
+%include SBPROBE_PACKED_INCLUDE
+%if SBPROBE_PACKED_BYTES != sbprobe_input_end - sbprobe_input_start
+%error "SB pair packed size differs from raw PE"
+%endif
+%if SBPROBE_MUTATION_OFFSET >= SBPROBE_PACKED_BYTES
+%error "SB pair mutation outside PE"
+%endif
+%endif
+%endif
 %ifndef PBM_PRODUCTION_WITNESS
 %error "SB pair requires the reviewed production entry witness"
 %endif
@@ -47,6 +74,9 @@ pbm_sb_negative_probe:
     push rdi
     cld
     mov byte [rel sbprobe_pass], 0
+%ifdef SBPROBE_PACKED_BYTES
+    mov qword [rel sbprobe_pool], 0
+%endif
 %ifdef PBM_MSI_COMBINED_OBJECT
     mov qword [rel sbprobe_detail + 16], -1
     mov qword [rel sbprobe_detail + 24], 0
@@ -81,7 +111,14 @@ pbm_sb_negative_probe:
     test eax, eax
     jnz .finish
 
+%ifdef SBPROBE_PACKED_BYTES
+    call sbprobe_unpack_pair
+    test eax, eax
+    jnz .finish
+    mov r9, [rel sbprobe_pool]
+%else
     lea r9, [rel sbprobe_positive]
+%endif
     call .load
     mov [rel sbprobe_record + 16], rax
 %ifdef PBM_MSI_COMBINED_OBJECT
@@ -97,7 +134,12 @@ pbm_sb_negative_probe:
     call .unload
     test rax, rax
     jnz .finish
+%ifdef SBPROBE_PACKED_BYTES
+    mov r9, [rel sbprobe_pool]
+    add r9, SBPROBE_PACKED_BYTES
+%else
     lea r9, [rel sbprobe_negative]
+%endif
     call .load
     mov [rel sbprobe_record + 24], rax
 %ifdef PBM_MSI_COMBINED_OBJECT
@@ -156,6 +198,22 @@ pbm_sb_negative_probe:
     je .finish
     call .unload
 .finish:
+%ifdef SBPROBE_PACKED_BYTES
+    mov rcx, [rel sbprobe_pool]
+    test rcx, rcx
+    jz .pool_done
+    mov rax, [rel boot_services]
+    PBM_FW_ENTER 32
+    call [rax + 0x48]               ; FreePool: no pair storage survives child entry
+    PBM_FW_LEAVE 32
+    test rax, rax
+    jz .pool_done
+    mov byte [rel sbprobe_pass], 0
+    mov rax, 'PSBTBAD2'
+    mov [rel sbprobe_record], rax
+.pool_done:
+    mov qword [rel sbprobe_pool], 0
+%endif
 %ifdef PBM_MSI_COMBINED_OBJECT
     call sbprobe_detail_persist
     test eax, eax
@@ -188,7 +246,11 @@ pbm_sb_negative_probe:
     mov rdx, [rel image_handle]
     xor r8d, r8d                    ; SourceBuffer is the exact embedded PE
     PBM_FW_ENTER 48
+%ifdef SBPROBE_PACKED_BYTES
+    mov qword [rsp + 32], SBPROBE_PACKED_BYTES
+%else
     mov qword [rsp + 32], sbprobe_positive_end - sbprobe_positive
+%endif
     lea r10, [rel sbprobe_child]
     mov [rsp + 40], r10
     call [rax + 0xC8]               ; LoadImage, not StartImage
@@ -253,6 +315,145 @@ pbm_sb_negative_probe:
 .trust_bad:
     mov eax, 1
     ret
+
+%ifdef SBPROBE_PACKED_BYTES
+; Allocate transient firmware storage, reconstruct the exact positive image,
+; copy it and apply the builder-verified one-byte XOR. Neither image is started.
+sbprobe_unpack_pair:
+    push rsi
+    push rdi
+    mov rax, 'PSBPK001'
+    cmp [rel sbprobe_positive], rax
+    jne .bad
+    cmp qword [rel sbprobe_positive + 8], SBPROBE_PACKED_BYTES
+    jne .bad
+    cmp qword [rel sbprobe_positive + 16], SBPROBE_MUTATION_OFFSET
+    jne .bad
+    cmp qword [rel sbprobe_positive + 24], 1
+    jne .bad
+    cmp qword [rel sbprobe_positive + 32], sbprobe_positive_end-sbprobe_positive-40
+    jne .bad
+    mov ecx, 2                     ; EfiLoaderData, never a fixed PaOS reservation
+    mov edx, SBPROBE_PACKED_BYTES * 2
+    lea r8, [rel sbprobe_pool]
+    mov rax, [rel boot_services]
+    PBM_FW_ENTER 32
+    call [rax + 0x40]               ; AllocatePool
+    PBM_FW_LEAVE 32
+    test rax, rax
+    jnz .bad
+    cmp qword [rel sbprobe_pool], 0
+    je .bad
+    lea rsi, [rel sbprobe_positive + 40]
+    lea rdx, [rel sbprobe_positive_end]
+    mov rdi, [rel sbprobe_pool]
+    mov ecx, SBPROBE_PACKED_BYTES
+    call sbprobe_lz4
+    test eax, eax
+    jnz .bad
+    mov rsi, [rel sbprobe_pool]
+    lea rdi, [rsi + SBPROBE_PACKED_BYTES]
+    mov ecx, SBPROBE_PACKED_BYTES
+    rep movsb
+    mov rax, [rel sbprobe_pool]
+    xor byte [rax + SBPROBE_PACKED_BYTES + SBPROBE_MUTATION_OFFSET], 1
+    xor eax, eax
+    jmp .out
+.bad:
+    mov eax, 1
+.out:
+    pop rdi
+    pop rsi
+    ret
+
+; Bounded raw LZ4 block decoder. RSI=input, RDX=end, RDI=output, ECX=exact
+; output bytes. Every read/write and backwards match is checked before access.
+; A truncated block or any non-exact output refuses the diagnostic.
+sbprobe_lz4:
+    push rbx
+    push rbp
+    push r12
+    mov r8, rdi                    ; output start
+    lea r9, [rdi + rcx]             ; output end
+    mov r10, rdx                   ; input end
+.token:
+    cmp rsi, r10
+    jae .bad
+    movzx ebx, byte [rsi]
+    inc rsi
+    mov ecx, ebx
+    shr ecx, 4
+    cmp ecx, 15
+    jne .literals
+    call .extend
+    test eax, eax
+    jnz .bad
+.literals:
+    lea rax, [rsi + rcx]
+    cmp rax, r10
+    ja .bad
+    lea rax, [rdi + rcx]
+    cmp rax, r9
+    ja .bad
+    rep movsb
+    cmp rsi, r10
+    je .done
+    lea rax, [rsi + 2]
+    cmp rax, r10
+    ja .bad
+    movzx edx, word [rsi]
+    add rsi, 2
+    test edx, edx
+    jz .bad
+    mov rbp, rdi
+    sub rbp, rdx
+    cmp rbp, r8
+    jb .bad
+    mov ecx, ebx
+    and ecx, 15
+    cmp ecx, 15
+    jne .match
+    call .extend
+    test eax, eax
+    jnz .bad
+.match:
+    add ecx, 4
+    lea rax, [rdi + rcx]
+    cmp rax, r9
+    ja .bad
+    mov r12, rsi
+    mov rsi, rbp
+    rep movsb                     ; deliberately permits overlapping matches
+    mov rsi, r12
+    jmp .token
+.done:
+    cmp rdi, r9
+    jne .bad
+    xor eax, eax
+    jmp .out
+.extend:
+    cmp rsi, r10
+    jae .extend_bad
+    movzx eax, byte [rsi]
+    inc rsi
+    add ecx, eax
+    cmp ecx, SBPROBE_PACKED_BYTES  ; length cannot wrap or exceed the output
+    ja .extend_bad
+    cmp eax, 255
+    je .extend
+    xor eax, eax
+    ret
+.extend_bad:
+    mov eax, 1
+    ret
+.bad:
+    mov eax, 1
+.out:
+    pop r12
+    pop rbp
+    pop rbx
+    ret
+%endif
 
 ; Separate diagnostic name preserves the established PaOSMgrDiag entry witness.
 ; This record is observation only, never manifest/journal/authentication input.
@@ -356,8 +557,14 @@ sbprobe_var_name: dw 'P','a','O','S','S','b','P','r','o','b','e',0
 sbprobe_detail_name: dw 'P','a','O','S','S','b','D','e','t','a','i','l',0
 %endif
 align 8
-sbprobe_positive: incbin PBM_DIAG_SB_POSITIVE
+sbprobe_positive:
+%ifdef SBPROBE_PACKED_BYTES
+SBPROBE_PACKED_DATA
+%else
+incbin PBM_DIAG_SB_POSITIVE
+%endif
 sbprobe_positive_end:
+%ifndef SBPROBE_PACKED_BYTES
 sbprobe_negative: incbin PBM_DIAG_SB_NEGATIVE
 sbprobe_negative_end:
 %if (sbprobe_positive_end - sbprobe_positive) < 512 || (sbprobe_positive_end - sbprobe_positive) > 2097152
@@ -365,6 +572,7 @@ sbprobe_negative_end:
 %endif
 %if (sbprobe_negative_end - sbprobe_negative) != (sbprobe_positive_end - sbprobe_positive)
 %error "SB pair PE sizes must match"
+%endif
 %endif
 %endif
 %endmacro
@@ -382,6 +590,9 @@ sbprobe_detail_readback: times 72 db 0
 sbprobe_record: db 'PSBTBAD2'
     dq PBM_DIAG_ENTRY_NONCE, -1, -1
 sbprobe_child: dq 0
+%ifdef SBPROBE_PACKED_BYTES
+sbprobe_pool: dq 0
+%endif
 sbprobe_trust_size: dq 0
 sbprobe_trust_attrs: dd 0
 sbprobe_pass: db 0

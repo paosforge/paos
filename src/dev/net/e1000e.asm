@@ -679,6 +679,21 @@ e1000e_snapshot_discover_bar:
     shr  eax, 16
     cmp  eax, 0x0200                              ; Ethernet controller?
     jne  .disc_next
+%ifdef PAOS_A1_SERVICE_LINKED
+    push rdi
+    push rsi
+    push rdx
+    xor edi,edi
+    mov esi,ebx
+    shr esi,3
+    mov edx,ebx
+    and edx,7
+    call e1000e_a1_native_gate
+    pop rdx
+    pop rsi
+    pop rdi
+    jc .disc_next
+%endif
     mov  [rel e1000e_devid], r10d                 ; record matched devid + QEMU flag
     mov  byte [rel e1000e_is_qemu], 0
     cmp  r10d, E1000_QEMU_DEVID
@@ -936,6 +951,21 @@ e1000e_early_kick:
     mov  byte [rel e1000e_nic_absent], 1
     jmp  .done
 .found:
+%ifdef PAOS_A1_SERVICE_LINKED
+    push rdi
+    push rsi
+    push rdx
+    xor edi,edi
+    mov esi,ebx
+    shr esi,3
+    mov edx,ebx
+    and edx,7
+    call e1000e_a1_native_gate
+    pop rdx
+    pop rsi
+    pop rdi
+    jc .scan_next
+%endif
     ; One common image owns different static LAN addresses only through this
     ; live PCI identity.  Unknown Intel Ethernet remains usable as a class
     ; device, but receives no fleet address profile.

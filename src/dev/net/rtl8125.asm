@@ -1572,6 +1572,7 @@ rtl8125_recover_active:
 rtl8125_discover_cb:
     cmp  ecx, R5_VENDEV
     jne  .ret
+    A1_NATIVE_NIC_SKIP rdi,rsi,rdx,.ret
     mov  eax, [rel rtl8125_matches]
     inc  dword [rel rtl8125_matches]
     cmp  eax, R5_MAX_SCAN

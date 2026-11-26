@@ -42,9 +42,11 @@ VCG_KICK_VECTOR   equ SMP_IDLE_WAKE_VECTOR
     test dword [rel vcg_abort], VCG_ABORT_BIT
     jnz  vcg_bsp_abort_seen
     mov  r8d, [rel vcg_go]
+    ; Publish DOWN even when the AP has already ACKed this GO generation.
+    ; The closed cycle must retain GO == DOWN == ACK for vcl_check.
+    mov  [rel vcg_down], r8d
     cmp  r8d, [rel vcg_ack]
     je   %%down
-    mov  [rel vcg_down], r8d
     ; Kick vCPU1: in guest mode a host IPI is an external-interrupt exit.
     mov  edx, [rel vcg_apic + 4]
     mov  eax, SMP_ICR_FIXED | VCG_KICK_VECTOR

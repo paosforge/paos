@@ -2,7 +2,7 @@
 ;; LAYER 6
 ;; PURPOSE Center-cover lock images with a soft black scrim and bounded paint storage.
 ;; EXPORTS img_cover_blit
-;; IMPORTS gui/window
+;; IMPORTS gui/window, gui/compose_idle
 ;; OWNER saga:gui_image_pipeline
 
 ; RDI -> immutable 48-byte request: src:u64, len:u64, sw:u32, sh:u32,
@@ -24,6 +24,7 @@ img_cover_blit:
     push r14
     push r15
     sub  rsp, 2176
+    mov qword [rsp+64],0                ; scoped prepaid ownership
     cld
     test rdi, rdi
     jz   .refuse
@@ -112,9 +113,32 @@ img_cover_blit:
     sub  eax, [rsp + 12]
     shr  eax, 1
     mov  [rsp + 36], eax                ; crop y
-    xor  r12d, r12d                    ; tile x
+    ; Bound mapping, source sampling and row-run traversal, not merely the
+    ; final blit. Sampling still uses the original virtual cover geometry.
+    mov r8d,[rsp+16]
+    mov r9d,[rsp+20]
+    mov r10d,[rsp+8]
+    mov r11d,[rsp+12]
+    call fb_compose_intersect
+    jc .empty
+    call fb_compose_take
+    jc .empty
+    sub r8d,[rsp+16]
+    sub r9d,[rsp+20]
+    mov [rsp+40],r8d                   ; clipped first column
+    mov [rsp+44],r9d                   ; clipped first row
+    add r10d,r8d
+    add r11d,r9d
+    mov [rsp+48],r10d                  ; clipped exclusive column
+    mov [rsp+52],r11d                  ; clipped exclusive row
+    cmp byte [rel fb_compose_clip_active],0
+    je .not_prepaid
+    inc byte [rel fb_compose_prepaid]
+    mov byte [rsp+64],1
+.not_prepaid:
+    mov r12d,[rsp+40]                  ; tile x, original output phase
 .tile:
-    mov  r13d, [rsp + 8]
+    mov  r13d, [rsp + 48]
     sub  r13d, r12d
     cmp  r13d, 256
     jbe  .tile_size
@@ -134,7 +158,7 @@ img_cover_blit:
     inc  ebp
     cmp  ebp, r13d
     jb   .map
-    xor  r14d, r14d                    ; output row
+    mov  r14d, [rsp+44]                ; output row, original sampling phase
 .row:
     mov  eax, [rsp + 36]
     add  eax, r14d
@@ -190,8 +214,8 @@ img_cover_blit:
     xor  edx, edx
     div  rcx
     sub  eax, [rsp + 36]
-    cmp  eax, [rsp + 12]
-    cmova eax, [rsp + 12]
+    cmp  eax, [rsp + 52]
+    cmova eax, [rsp + 52]
     mov  r15d, eax                      ; next row
     sub  eax, r14d
     mov  r11d, eax
@@ -204,16 +228,21 @@ img_cover_blit:
     mov  r10d, r13d
     call fb_blit_rgba
     mov  r14d, r15d
-    cmp  r14d, [rsp + 12]
+    cmp  r14d, [rsp + 52]
     jb   .row
     add  r12d, r13d
-    cmp  r12d, [rsp + 8]
+    cmp  r12d, [rsp + 48]
     jb   .tile
+.empty:
     xor  eax, eax
     jmp  .out
 .refuse:
     mov  eax, 1
 .out:
+    cmp byte [rsp+64],0
+    je .unpaid
+    dec byte [rel fb_compose_prepaid]
+.unpaid:
     add  rsp, 2176
     pop  r15
     pop  r14

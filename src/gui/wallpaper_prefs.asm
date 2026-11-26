@@ -1,6 +1,6 @@
 ;; MODULE gui/wallpaper_prefs
 ;; LAYER 6
-;; EXPORTS wallpaper_prefs_scan, wallpaper_prefs_click, wallpaper_prefs_key, wallpaper_prefs_tick, wallpaper_stock_import, wallpaper_stock_choice, wp_ids, wp_live
+;; EXPORTS wallpaper_prefs_scan, wallpaper_prefs_click, wallpaper_prefs_key, wallpaper_prefs_tick, wallpaper_stock_import, wallpaper_stock_prepare, wallpaper_stock_choice, wp_ids, wp_live
 ;; IMPORTS dev/ps2, gui/start_programs, gui/form_loader, gui/widget, gui/window, gui/widget_image, gui/img/img_core, gui/img/img_source, gui/img/img_cache, gui/config_prefs, sec/session, sec/principal, svc/command, svc/command_auth, boot/boot_esp_guid, fs/vfs
 ;; CAPS CAP_GUI
 ;; OWNER rc-codex-av
@@ -21,6 +21,27 @@ wallpaper_stock_import:                 ; boot-only, already validated record
     mov [rel wallpaper_stock_choice], dil
     mov byte [rel wp_restore], 1
 .out:
+    ret
+
+; Called once during boot initialization, before the command loop accepts
+; requests. The initial GUID search can scan disks; it must never run on the
+; login tick or inside a command. Later cold loads use only this cached mount.
+wallpaper_stock_prepare:
+%ifdef PAOS_IMG_COLD_LIVE
+    mov dword [rel wp_cold_handle],-1
+    cmp byte [rel boot_esp_part_guid_ok],1
+    jne .out
+    lea rdi,[rel boot_esp_part_guid]
+    call vfs_open_boot_esp
+    cmp rax,-1
+    je .out
+    mov [rel wp_cold_handle],eax
+    mov rax,[rel boot_esp_part_guid]
+    mov [rel wp_cold_guid],rax
+    mov rax,[rel boot_esp_part_guid+8]
+    mov [rel wp_cold_guid+8],rax
+.out:
+%endif
     ret
 
 wallpaper_prefs_scan:
@@ -172,6 +193,13 @@ wallpaper_prefs_tick:
     jne .out
     cmp byte [rel command_auth_remote_active], 0
     jne .out
+%ifdef PAOS_IMG_COLD_LIVE
+    ; A canceled lock decode still has bounded retirement to finish. Keep a
+    ; signed restore or human choice pending until the single owner is free;
+    ; queue contention must not consume a preference without applying it.
+    cmp byte [rel img_cold_mode],0
+    jne .out
+%endif
     push rbx
     push r12
     push r13
@@ -204,6 +232,10 @@ wallpaper_prefs_tick:
     test eax, eax
     jnz .refused
     call wp_load
+%ifdef PAOS_IMG_COLD_LIVE
+    cmp eax,2
+    je .queued
+%endif
     test eax, eax
     jnz .refused
     ; Save only a human change. Restoring a signed preference never rewrites it.
@@ -217,6 +249,13 @@ wallpaper_prefs_tick:
     jz .say
     lea rsi, [rel wp_s_runtime]
     jmp .say
+%ifdef PAOS_IMG_COLD_LIVE
+.queued:
+    cmp dword [rel wp_pending_slot],-1
+    je .done                            ; signed restore never rewrites preferences
+    lea rsi,[rel wp_s_loading]
+    jmp .say
+%endif
 .refused:
     lea rsi, [rel wp_s_refused]
 .say:
@@ -292,21 +331,42 @@ wp_load:
     je .embedded
     cmp byte [rel boot_esp_part_guid_ok], 1
     jne .bad
+%ifdef PAOS_IMG_COLD_LIVE
+    mov rax,[rel boot_esp_part_guid]
+    cmp rax,[rel wp_cold_guid]
+    jne .bad
+    mov rax,[rel boot_esp_part_guid+8]
+    cmp rax,[rel wp_cold_guid+8]
+    jne .bad
+    mov edi,[rel wp_cold_handle]
+    cmp edi,-1
+    je .bad
+%else
     lea rdi, [rel boot_esp_part_guid]
     call vfs_open_boot_esp
     cmp rax, -1
     je .bad
     mov edi, eax
+%endif
     mov eax, r14d
     dec eax
     imul eax, WP_PATH_SIZE
     lea rsi, [rel wp_paths]
     add rsi, rax
     mov edx, WP_PATH_LEN
+%ifdef PAOS_IMG_COLD_LIVE
+    mov ecx,r14d
+    call img_cold_queue_file
+    test eax,eax
+    jnz .bad
+    mov eax,2                           ; queued, not applied or saved yet
+    ret
+%else
     call img_source_acquire
     test rax, rax
     jz .bad
     mov r15, rax
+%endif
 .bind:
     mov rdi, rax
     mov esi, [rel fb_width]
@@ -349,8 +409,22 @@ wp_load:
     call img_asset_find
     test rax, rax
     jz .bad
+%ifdef PAOS_IMG_COLD_LIVE
+    ; Even the tiny embedded BMP can require a full-screen scale/eviction.
+    ; Queue the same private worker; restore keeps the current frame until done.
+    mov rsi,rax
+    mov edi,-1
+    xor edx,edx
+    mov ecx,10
+    call img_cold_queue_file
+    test eax,eax
+    jnz .bad
+    mov eax,2
+    ret
+%else
     mov r15, rax
     jmp .bind
+%endif
 .embedded_current:
     ; Embedded rows/bytes are immutable. Re-resolve the one supported name;
     ; never interpret an embedded row as an owned VFS source descriptor.
@@ -391,6 +465,57 @@ wp_load:
     mov eax, -1
     ret
 
+%ifdef PAOS_IMG_COLD_LIVE
+; The coordinator calls once after completion on the ordinary idle stack.
+; A pending stock choice gets no Saved credit until complete publication, and
+; a stale/closed/replaced picker cannot save under another local authority.
+wp_cold_complete:
+    cmp dword [rel img_cold_stock],255
+    je .out
+    cmp dword [rel img_cold_picker_slot],-1
+    je .out                             ; signed login restore never saves
+    push rbx
+    push r12
+    push r13
+    push r14
+    mov r12d,PRIN_OWNER
+    mov r13,[rel img_cold_epoch]
+    mov r14d,[rel img_cold_stock]
+    mov eax,[rel wp_pending_slot]
+    cmp eax,[rel img_cold_picker_slot]
+    jne .done
+    mov eax,[rel wp_pending_widget]
+    cmp eax,[rel img_cold_picker_widget]
+    jne .done
+    call wp_owner_current
+    test eax,eax
+    jnz .done
+    lea rsi,[rel wp_s_refused]
+    cmp byte [rel img_cold_result],2
+    jne .say
+    mov rdi,r12
+    mov rsi,r13
+    call config_prefs_save
+    lea rsi,[rel wp_s_saved]
+    test eax,eax
+    jz .say
+    lea rsi,[rel wp_s_runtime]
+.say:
+    cmp byte [rel wp_live],1
+    jne .done
+    mov edi,[rel wp_ids]
+    call wgt_set_text
+    call wmx_draw_all
+.done:
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+.out:
+    ret
+%endif
+
+wp_s_loading: db 'Loading; current wallpaper kept',0
 wp_s_saved: db 'Saved',0
 wp_s_runtime: db 'Applied until restart; save failed',0
 wp_s_refused: db 'Unavailable; wallpaper kept',0
@@ -407,8 +532,14 @@ WP_PATH_SIZE equ WP_PATH_LEN+1
 %include "core/abi/wdata.inc"
 %macro WDATA_gui_wallpaper_prefs 0
 align 8, db 0
+%ifdef PAOS_IMG_COLD_LIVE
+wp_cold_handle: dd -1
+align 8, db 0
+wp_cold_guid: times 16 db 0
+%endif
 wp_pid: dq 0
 wp_epoch: dq 0
+align 64, db 0
 wp_ids: times WP_COUNT dd -1
 wp_slot: dd -1
 wp_pending_slot: dd -1

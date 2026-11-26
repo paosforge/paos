@@ -2,7 +2,7 @@
 ;; LAYER 6
 ;; PURPOSE Native Terminal B consent, continuous read notice, exact physical approvals.
 ;; EXPORTS terminal_consent_configure, terminal_consent_init, terminal_consent_tick, terminal_consent_present, terminal_consent_visible, terminal_consent_draw, terminal_consent_press
-;; IMPORTS gui/window_mgmt, gui/widget, gui/window, gui/taskbar, gui/wm_pointer, gui/calendar, gui/snapshot, gui/start_programs, sec/session, sec/principal, svc/command, svc/command_auth, dev/input/ps2, boot/gop, core/time
+;; IMPORTS gui/compose_job, gui/present_idle, gui/window_mgmt, gui/widget, gui/window, gui/taskbar, gui/wm_pointer, gui/calendar, gui/snapshot, gui/start_programs, sec/session, sec/principal, svc/command, svc/command_auth, dev/input/ps2, boot/gop, core/time
 ;; CAPS CAP_GUI
 ;; OWNER saga:live_terminal_consent
 ; Codex / rc-live-claude. No executor, policy store or guest-callable approval.
@@ -182,6 +182,9 @@ terminal_consent_present:
     test eax,eax
     jz .bad
     call taskbar_draw_registry
+    ; A queued registry draw is not evidence that the read notice is visible.
+    ; Paint only this bounded security region before its synchronous copy.
+    call terminal_consent_draw
     call fb_present_flush
     mov r8d,8
     mov r9d,[rel fb_height]
@@ -313,6 +316,7 @@ tc_scan:
     ret
 
 tc_close:
+    mov byte [rel tc_page_credit_pending],0
     mov byte [rel tc_armed],0
     mov byte [rel tc_intent],0
     mov qword [rel tc_id],0
@@ -636,6 +640,7 @@ tc_tick_inner:
     call tc_refresh
     test eax,eax
     jz .retire
+    call tc_page_presented
     cmp qword [rel tc_state+TC_ST_COUNT],0
     je .pending
     call terminal_consent_visible
@@ -1131,6 +1136,7 @@ tc_build:
     ret
 
 tc_render:
+    mov byte [rel tc_page_credit_pending],0
     push rbx
     push r12
     mov byte [rel tc_armed],0
@@ -1171,6 +1177,17 @@ tc_render:
     cmp ebx,TC_ROWS
     jb .loop
     call wmx_draw_all
+    cmp byte [rel fb_compose_live],0
+    je .synchronous_boot
+    ; A live draw only queues composition. Its old shadow is never an action
+    ; page receipt, and a 600x432 synchronous copy would block the command loop.
+    mov rax,[rel fb_compose_serial]
+    mov [rel tc_page_before_serial],rax
+    mov rax,[rel session_authority_epoch]
+    mov [rel tc_page_authority],rax
+    mov byte [rel tc_page_credit_pending],1
+    jmp .out
+.synchronous_boot:
     call fb_present_flush
     call tc_display_ok
     test eax,eax
@@ -1196,6 +1213,46 @@ tc_render:
 .out:
     pop r12
     pop rbx
+    ret
+
+ ; Called only from the ordinary idle consent tick, never a painter. The
+; presenter serial exists only after the entire newly composed frame reached
+; scanout. Revalidate the current composition context and consent geometry;
+; an old serial, partial/abandoned job, new owner, or hidden page earns nothing.
+tc_page_presented:
+    cmp byte [rel tc_page_credit_pending],1
+    jne .out
+    cmp byte [rel tc_mode],0
+    je .out
+    cmp byte [rel fb_compose_pending],0
+    jne .out
+    cmp byte [rel fb_present_pending],0
+    jne .out
+    mov rax,[rel session_authority_epoch]
+    cmp rax,[rel tc_page_authority]
+    jne .out
+    mov rax,[rel fb_present_completed_serial]
+    cmp rax,[rel tc_page_before_serial]
+    jbe .out
+    cmp rax,[rel fb_compose_serial]
+    jne .out
+    call fb_compose_context_current
+    jc .out
+    mov rax,[rel fb_surface_epoch]
+    cmp rax,[rel fb_present_completed_surface_epoch]
+    jne .out
+    call tc_display_ok
+    test eax,eax
+    jz .out
+    call tc_safe
+    test eax,eax
+    jnz .out
+    movzx ecx,byte [rel tc_page]
+    mov eax,1
+    shl eax,cl
+    or [rel tc_seen],al
+    mov byte [rel tc_page_credit_pending],0
+.out:
     ret
 
 tc_title: db 'Terminal access',0
@@ -1263,6 +1320,10 @@ tc_action_offsets: db 8,16,24,32,40,48,56,64,72,80,200,208,104,112,120,128
 
 %include "core/abi/wdata.inc"
 %macro WDATA_terminal_consent 0
+align 8
+tc_page_before_serial: dq 0
+tc_page_authority: dq 0
+tc_page_credit_pending: db 0
 align 8
 tc_callbacks: times 7 dq 0
 tc_prev_click: dq 0

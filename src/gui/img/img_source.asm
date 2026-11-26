@@ -37,6 +37,8 @@ ISS_STAT      equ ISS_MAP + fs_extent_map_size + 16
 ISS_PATH      equ ISS_STAT + fs_stat_size
 ISS_SZ        equ (ISS_PATH + ISS_PATH_CAP + 1 + 15) & ~15
 
+%include "gui/img/img_cold_hooks.inc"
+
 ; EAX=0 only for the current owner-bound desktop frame. AUTH1/MUTATE is
 ; necessary but cannot borrow another local session or act on PaOS chrome.
 img_source_authority:
@@ -82,6 +84,7 @@ img_source_current:
     mov  edi, [r12 + ISS_HANDLE]
     lea  rsi, [r12 + ISS_MAP]
     call vfs_file_extents_current
+    IMG_COLD_STEP                     ; outside the filesystem call and its scratch
     test eax, eax
     jnz  .bad
     ; stat_path resolves this OWNED path again. The generation check below
@@ -91,7 +94,8 @@ img_source_current:
     mov  edx, [r12 + ISS_PATHLEN]
     lea  rcx, [r12 + ISS_STAT]
     mov  qword [rcx + fs_stat.flags], 0
-    call vfs_stat_path
+    IMG_COLD_FS_CALL vfs_stat_path
+    IMG_COLD_STEP
     test rax, rax
     jnz  .bad
     cmp  dword [r12 + ISS_STAT + fs_stat.reserved], 0
@@ -102,6 +106,7 @@ img_source_current:
     mov  edi, [r12 + ISS_HANDLE]
     lea  rsi, [r12 + ISS_MAP]
     call vfs_file_extents_current
+    IMG_COLD_STEP
     test eax, eax
     jnz  .bad
     mov  rax, [rel vfs_write_generation]
@@ -119,6 +124,9 @@ img_source_current:
 ; a future explicit lock consumer) may outlive the desktop selection. Never
 ; recycle its row merely because its decoded cache entry was evicted/reset.
 img_source_retire:
+%ifndef PAOS_IMG_COLD_LIVE
+    IMG_COLD_BUSY_JUMP .cold_busy
+%endif
     push r12
     mov  r12, rdi
     lea  rax, [rel img_source_slots]
@@ -137,6 +145,23 @@ img_source_retire:
     je   .held
     add  rax, WIS_SZ
     loop .widgets
+%ifdef PAOS_IMG_COLD_LIVE
+    cmp byte [rel img_cold_running],1
+    je .retire_now
+    ; Detach is already committed, but neither cache eviction nor a full
+    ; source scrub belongs on a command/picker stack. Retain ownership until
+    ; the single idle worker rechecks references and completes retirement.
+    lea rax,[rel img_source_slots]
+    mov ecx,1
+    cmp r12,rax
+    je .defer
+    mov ecx,2
+.defer:
+    or byte [rel img_cold_retire_mask],cl
+    xor eax,eax                         ; queued, allocation is still owned
+    jmp .out
+.retire_now:
+%endif
     call img_cache_forget
     test eax, eax
     jnz  .held
@@ -150,13 +175,13 @@ img_source_retire:
     mov  ecx, ISS_CAP/8
     xor  eax, eax
     cld
-    rep  stosq
+    IMG_COLD_MEMORY stosq
 .metadata:
     mov  rdi, r12
     mov  ecx, ISS_SZ/8
     xor  eax, eax
     cld
-    rep  stosq
+    IMG_COLD_MEMORY stosq
     mov  [r12 + IMG_ASSET_PTR], r8       ; slot is free only after teardown
 .done:
     xor  eax, eax
@@ -166,11 +191,17 @@ img_source_retire:
 .out:
     pop  r12
     ret
+%ifdef PAOS_IMG_COLD_WORK
+.cold_busy:
+    mov eax,1                         ; suspended worker retains its source rows
+    ret
+%endif
 
 ; EDI=explicit mount handle, RSI=absolute path, EDX=exact path length.
 ; RAX=owned immutable IMG_ASSET row / 0 refusal. No live state/pin changes.
 ; The caller must either publish after img_source_current or retire the row.
 img_source_acquire:
+    IMG_COLD_BUSY_JUMP .cold_busy
     push rbx
     push rbp
     push r12
@@ -263,7 +294,8 @@ img_source_acquire:
     mov  edx, r15d
     lea  rcx, [r12 + ISS_MAP]
     mov  r8d, 1
-    call vfs_file_extents              ; validates regular file + complete chain
+    IMG_COLD_FS_CALL vfs_file_extents  ; validates regular file + complete chain
+    IMG_COLD_STEP                     ; paired FAT lease restores ordinary scratch on yield
     test rax, rax
     jle  .fail
     mov  rax, [r12 + ISS_MAP + fs_extent_map.size]
@@ -303,7 +335,8 @@ img_source_acquire:
     mov  r8, [r12 + IMG_ASSET_PTR]
     add  r8, rbp
     mov  r9, rbx
-    call vfs_read_at_path
+    IMG_COLD_FS_CALL vfs_read_at_path
+    IMG_COLD_STEP                     ; complete <=64KiB read; paired lease isolates any saved FS stack
     cmp  rax, rbx
     jne  .fail                         ; short, zero, error and over-return refuse
     mov  rdi, r12
@@ -348,6 +381,11 @@ img_source_acquire:
     pop  rbp
     pop  rbx
     ret
+%ifdef PAOS_IMG_COLD_WORK
+.cold_busy:
+    xor eax,eax                       ; no second source acquisition between turns
+    ret
+%endif
 .check_component:
     test ebx, ebx
     jz   .bad_component

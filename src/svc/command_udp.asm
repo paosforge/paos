@@ -1,7 +1,8 @@
 ;; MODULE svc/command_udp
+%include "core/abi/login_trace.inc"
 %include "core/abi/build_profile.inc"
 ;; LAYER 5
-;; EXPORTS command_udp_dhcp_accept, cmd_verb_bootlog, command_udp_progress_enter, command_udp_progress_complete, command_udp_progress_snapshot, udp_audit_redacted, udp_net_is_credential_verb, command_udp_init, command_udp_poll, command_udp_reset_request_state, command_udp_bind_domain, command_udp_unbind_domain, command_udp_domain_arp_probe, command_udp_capture_reply, command_udp_gres_reply_take, command_udp_gres_reply_retire, udp_boot_beacon_tick, udp_boot_beacon_observe, arp_frame_view, udp_parse_u64, hp_perf_declare, fault_verb_declare, hp_upload_arena_init, hp_upload_canaries_intact, hp_upload_bounds_selftest, ephform_bind_loader, ephform_transport_discard, ephform_selftest, udp_our_mac, udp_our_ip2, udp_our_ip3, udp_ingress_handle, command_udp_status_snapshot, command_acpi_public_observation, udp_primary_mac, netlist_buf, netlist_ready, netlist_cur, udp_display_probe_op, udp_display_serial, command_udp_arp_observation_current
+;; EXPORTS command_udp_login_trace, command_udp_dhcp_accept, cmd_verb_bootlog, command_udp_progress_enter, command_udp_progress_complete, command_udp_progress_snapshot, udp_audit_redacted, udp_net_is_credential_verb, command_udp_init, command_udp_poll, command_udp_reset_request_state, command_udp_bind_domain, command_udp_unbind_domain, command_udp_domain_arp_probe, command_udp_capture_reply, command_udp_gres_reply_take, command_udp_gres_reply_retire, udp_boot_beacon_tick, udp_boot_beacon_observe, arp_frame_view, udp_parse_u64, hp_perf_declare, fault_verb_declare, hp_upload_arena_init, hp_upload_canaries_intact, hp_upload_bounds_selftest, ephform_bind_loader, ephform_transport_discard, ephform_selftest, udp_our_mac, udp_our_ip2, udp_our_ip3, udp_ingress_handle, command_udp_status_snapshot, command_acpi_public_observation, udp_primary_mac, netlist_buf, netlist_ready, netlist_cur, udp_display_probe_op, udp_display_serial, command_udp_arp_observation_current
 ;; IMPORTS net/usb_command_member, svc/command_parser_census, hv/driver_domain, svc/command_hp_serial, svc/driver_domain_return, core/runtime_failure_record, svc/runtime_failure_sources, svc/device_reconnect_request, svc/device_reconnect, core/maintenance_record, svc/native_fault, svc/command_memory_consumer, svc/service_progress, svc/aer_poll, core/failure_record, core/idle_prof, svc/command_uac1_input_probe, svc/command_uac1_capture, svc/command_wav_playback, boot/serial, boot/gop, boot/header, boot/beacon, boot/pmod_loader, core/idt, core/diag, core/log, core/time, core/build_id, core/lib/fmt, core/lib/cksum, core/lib/crc32, core/csprng, lib/safe_buffer, net/netdev, net/dhcp, net/dns, net/ntp, net/icmp, net/tcp, net/tls13, dev/net/e1000e, dev/net/rtl8168, dev/net/rtl8125, boot/smbios, dev/blk/nvme, dev/blk/ahci, dev/net/virtio_domain, sec/job_receipt, svc/command, svc/command_pci_mmio, svc/command_cons, svc/command_auth, svc/clipboard, svc/command_ssh, svc/ssh, svc/command_web, svc/command_dns, svc/command_ntp, svc/command_netcheck, svc/command_tls13, svc/command_net_diag, svc/hotpatch, svc/command_blk, svc/command_scap, svc/command_filmstrip, svc/command_bootmenu, svc/command_guestfile, svc/command_datacrypto, svc/command_fs, svc/command_backup, svc/command_software_stop, fs/vfs, data/crypto_envelope, data/kvstore, hv/amdvi, hv/vtd, dev/blk/vmd, hv/guest_surface, hv/cdp_bridge, svc/command_privacy, svc/command_srvstat, svc/command_compat, bus/acpi, bus/superio, core/lib/sha256, net/arp_cache, svc/command_audit, svc/ssh_channel, dev/power/ec_power, svc/command_shutdown, sec/principal, svc/boot_gates, core/reset_wipe, boot/paging, sec/replay_floor, boot/boot_v2_handoff, boot/boot_v2_health, sec/ucode_preload, sec/cpu_microcode_boot
 ;; CAPS
 ;; OWNER saga:command
@@ -587,6 +588,15 @@ command_udp_public_tcp_clear:
     jz   .out
     cmp  dword [rel udp_public_tcp_retire_ip], 0
     jne  .out                                  ; preserve original pending owner
+%ifdef PAOS_LAB_CHANNEL
+    ; The lab pulse's 100ms sampler may trail this genuine link-loss path.
+    ; Take a fresh exact-generation down witness and queue its owned flight
+    ; before unbind retires it. No waiting, extra cut or change to retirement.
+    push rsi
+    mov  rdi, [rel udp_public_tcp_bound_handle]
+    call tcpprobe_link_before_retire
+    pop  rsi
+%endif
     mov  [rel udp_public_tcp_retire_ip], esi
     mov  eax, [rel udp_public_tcp_bound_mac]
     mov  [rel udp_public_tcp_retire_mac], eax
@@ -2542,7 +2552,9 @@ command_udp_poll:
     pop  rax
     popfq
     call command_udp_linktest_tick             ; restore runs even while RX is silent
+%ifdef PAOS_LAB_CHANNEL
     call tcpprobe_link_tick                     ; finite TCP-owned PHY restoration
+%endif
     call command_udp_public_tick
     pushfq
     push rax
@@ -5327,6 +5339,7 @@ udp_dispatch_line:
     push rbx
     push r12
     push r13
+    LOGIN_TRACE 0                  ; retire the previous diagnostic request
     call command_udp_reset_request_state
     call vtd_data_drop                          ; RCQ-10: hv/vtd's staged line is request-scoped too
     call command_udp_wipe_request_buffers       ; RCQ-10: no prior request's text stays in a reply buffer
@@ -5640,7 +5653,29 @@ udp_dispatch_line:
     mov  rcx, [rel udp_auth_ticket + AUTH_T_PRINCIPAL]
     call udp_net_audit_refusal
 .send_reply:
-    ; GUI registers this callback; the transport owns no presentation state.
+    ; Transmit the completed command result before presentation work. A full
+    ; lock repaint can take seconds while a guest starts; it must not hold an
+    ; already accepted STATUS reply past the host's four-second deadline.
+
+    pushfq
+    push rax
+    mov  eax, 33
+    call command_udp_progress_enter
+    pop  rax
+    popfq
+%ifidn RCQ_SERVICE_PROGRESS_RMP1_AUTHSTAT,1
+    UDP_AUTHSTAT_STAGE 7,0
+%else
+%ifidn RCQ_SERVICE_PROGRESS_AUTHSTAT,1
+    UDP_AUTHSTAT_STAGE 7,0
+%endif
+%endif
+
+    LOGIN_TRACE 11                 ; original result is ready, not yet sent
+    call udp_send_reply
+    LOGIN_TRACE 12                 ; send returned; not proof of delivery
+    LOGIN_TRACE 0
+    ; GUI registers this post-reply callback; the transport owns no presentation state.
     ; The sync may consume a credential typed at the LOCAL lock screen; mark the
     ; window so sec/session judges that unlock as local, never as this remote
     ; request's own (remote-unlock split, ADMIN 2026-09-30 06:22).
@@ -5667,21 +5702,6 @@ udp_dispatch_line:
 %endif
 %endif
 
-    pushfq
-    push rax
-    mov  eax, 33
-    call command_udp_progress_enter
-    pop  rax
-    popfq
-%ifidn RCQ_SERVICE_PROGRESS_RMP1_AUTHSTAT,1
-    UDP_AUTHSTAT_STAGE 7,0
-%else
-%ifidn RCQ_SERVICE_PROGRESS_AUTHSTAT,1
-    UDP_AUTHSTAT_STAGE 7,0
-%endif
-%endif
-
-    call udp_send_reply
     call command_udp_request_boundary          ; RCQ-10: whatever this reply did not frame is retired
 %ifidn RCQ_SERVICE_PROGRESS_RMP1_AUTHSTAT,1
     UDP_AUTHSTAT_STAGE 10,0
@@ -8595,6 +8615,14 @@ udp_send_reply:
     lea  rsi, [rel str_udp_modelrun_typed]
     call strcmp
     test rax, rax
+    jz   .base_typed_status
+    ; A frozen isolation proof may be unready or refused. Preserve its native
+    ; status instead of publishing generic OK without an AISO value.
+.base_check_appisoobs:
+    lea  rdi, [rel udp_line]
+    lea  rsi, [rel str_udp_appisoobs_typed]
+    call strcmp
+    test eax, eax
     jz   .base_typed_status
 %if !PAOS_PUBLIC_BUILD
     ; The valid module control must reflect its checked native return too.
@@ -18800,6 +18828,7 @@ str_udp_version_live: db "[PAOS64] P7 svc: VERSION injected from build (matches 
 str_udp_web_version: db " VERSION=", PAOS_VERSION_TEXT, 0
 str_udp_hook_typed: db "HOOK", 0
 str_udp_modelrun_typed: db "MODELRUN", 0
+str_udp_appisoobs_typed: db 'APPISOOBS',0
 str_udp_r_ok:       db " OK ARG=", 0
 str_udp_r_refused:  db " REFUSED ARG=", 0
 %if !PAOS_PUBLIC_BUILD
@@ -18841,7 +18870,7 @@ str_udp_r_bid:      db " bid=", 0
 str_udp_r_uptime:   db " UPTIME_S=", 0               ; 1018 live uptime (patch-continuity grade)
 ; RCQ-19: the verbs whose handlers stage blk_out_buf / vtd_out_buf (udp_line_in_list)
 udp_principal_line_verbs: db "PRINREAD", 0, "PRINWRITE", 0, 0
-udp_blk_line_verbs: db "BLKGEOMFILE", 0, "BLKGEOM", 0, "BLKPOLICY", 0, "BLKINFO", 0, "BLKREAD", 0, "BLKWRITE", 0, "BLKFLUSH", 0, "BLK_RW", 0, 0
+udp_blk_line_verbs: db "BLKGEOMFILE", 0, "BLKGEOM", 0, "BLKPOLICY", 0, "BLKID", 0, "BLKINFO", 0, "BLKREAD", 0, "BLKWRITE", 0, "BLKFLUSH", 0, "BLK_RW", 0, 0
 udp_vtd_line_verbs: db "VTD", 0, "DDOM", 0, "DMAVIOL", 0, "DMAVIOL_CHECK", 0, "DMAVIOL4", 0, "DMAVIOL4_CHECK", 0, "DMAVIOLA", 0, "DMAVIOLA_CHECK", 0, "STALEOWNER", 0, 0
 str_udp_r_bootsession: db " BOOT_SESSION=", 0          ; 1316 same-session continuity proof
 str_udp_r_niclink:  db " NIC_LINK=", 0                ; 1029: live link of the command NIC in every reply
@@ -19334,3 +19363,5 @@ str_udp_pciscan_no_node: db "unavailable", 0
 str_verb_wav_info_reply: db "WAVPLAY",0
 
 str_udp_pciscan_bootnonce: db " boot_nonce=",0
+
+%include "svc/login_stage_wire.inc"

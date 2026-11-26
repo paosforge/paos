@@ -1,7 +1,7 @@
 ;; MODULE gui/guest_desktop
 ;; LAYER 6
 ;; EXPORTS guest_desktop_wheel, guest_desktop_show, guest_desktop_tick, guest_desktop_key_byte, guest_desktop_pointer, guest_desktop_draw_body, gd_slot, gd_capture, gd_blits, gd_keys_sent, gd_ptr_sent, gd_releases
-;; IMPORTS gui/calendar, boot/gop, boot/paging, core/heap, core/time, core/smp, gui/window, gui/cadence_mark, gui/window_mgmt, gui/lock_screen, gui/wm_pointer, gui/input_route, gui/summon_palette, gui/widget, gui/widget_tabstrip, gui/widget_listview, sec/session, hv/vmx, hv/hv_ops, hv/vm_profile, hv/guestinput, hv/guestdisplay
+;; IMPORTS gui/compose_idle, gui/calendar, boot/gop, boot/paging, core/heap, core/time, core/smp, gui/window, gui/cadence_mark, gui/window_mgmt, gui/lock_screen, gui/wm_pointer, gui/input_route, gui/summon_palette, gui/widget, gui/widget_tabstrip, gui/widget_listview, sec/session, hv/vmx, hv/hv_ops, hv/vm_profile, hv/guestinput, hv/guestdisplay
 ;; CAPS CAP_GUI
 ;; OWNER saga:hv
 ; ============================================================================
@@ -657,6 +657,26 @@ gd_blit:
     mov  edi, ebx
     mov  rsi, rsp
     call gd_view
+    cmp  byte [rel fb_compose_clip_active], 0
+    je   .whole_view
+    ; Keep the fitted sampling axes (VX/VY/VW/VH) unchanged. Only the
+    ; visible output rectangle is narrowed, before entering the row/pixel
+    ; loops. A final clipped damage rectangle alone would still rasterize
+    ; the entire guest in this idle turn. The descriptor is on this call's
+    ; stack and is never retained across transport turns.
+    mov  r8d, [rsp + GV_OX]
+    mov  r9d, [rsp + GV_OY]
+    mov  r10d, [rsp + GV_OW]
+    mov  r11d, [rsp + GV_OH]
+    call fb_compose_intersect
+    jc   .out
+    call fb_compose_take
+    jc   .out
+    mov  [rsp + GV_OX], r8
+    mov  [rsp + GV_OY], r9
+    mov  [rsp + GV_OW], r10
+    mov  [rsp + GV_OH], r11
+.whole_view:
     mov  r14, [rsp + GV_OW]
     imul r14, [rsp + GV_OH]
     xor  r12d, r12d
@@ -769,6 +789,24 @@ GD_WHY_GUEST      equ 5     ; the pair overlaps the guest reservation (disabled)
 GD_WHY_REENTRY    equ 6     ; entered RUNNING/READY (dropped)
 GD_WHY_STALE      equ 7     ; revalidation failed after CF=0 (dropped)
 GD_WHY_CF1        equ 8     ; the lane refused or timed out (quarantined)
+; gd_stage_still_ours: the predicate it was testing. Append only, never renumber.
+GD_CHK_CAPTURE       equ 1
+GD_CHK_SLOT          equ 2
+GD_CHK_GEN           equ 3
+GD_CHK_WINDOW_EPOCH  equ 4
+GD_CHK_SESSION_EPOCH equ 5
+GD_CHK_GUEST         equ 6
+GD_CHK_TARGET        equ 7
+GD_CHK_LOCKED        equ 8
+GD_CHK_WINDOW        equ 9
+GD_CHK_TOP           equ 10
+GD_CHK_OVERLAY       equ 11
+GD_CHK_SCREEN        equ 12
+GD_CHK_GEOMETRY      equ 13
+GD_CHK_PAIR          equ 14
+GD_CHK_SURFACE       equ 15
+GD_CHK_COMPOSITION   equ 16
+GD_CHK_PLAN          equ 17
 
 ; gd_stage_tick(EDI=slot) — the idle refresh's draw. The tick has already
 ; proved the window is the guest's, top, visible, unlocked and overlay-free,
@@ -850,6 +888,7 @@ gd_stage_tick:
     mov  [rax + GD_STAGE_D_OFF + GD_STAGE_LEN + 8], rdx
     mov  byte [rel gd_stage_state], GD_ST_IDLE
 .snapshot:
+    mov  byte [rel gd_stage_stale_check], 0
     mov  [rel gd_stage_src], r12
     mov  [rel gd_stage_start], r13d
     mov  [rel gd_stage_slot], ebx
@@ -997,6 +1036,7 @@ gd_stage_tick:
 gd_stage_still_ours:
     push rbx
     mov  ebx, edi
+    mov  byte [rel gd_stage_check], GD_CHK_CAPTURE
     call guestdisplay_capture_span
     test rax, rax
     jz   .no
@@ -1006,19 +1046,24 @@ gd_stage_still_ours:
     jne  .no
     cmp  ecx, [rel gd_stage_start]
     jne  .no
+    mov  byte [rel gd_stage_check], GD_CHK_SLOT
     cmp  ebx, [rel gd_stage_slot]
     jne  .no
     cmp  ebx, [rel gd_slot]
     jne  .no
+    mov  byte [rel gd_stage_check], GD_CHK_GEN
     mov  eax, [rel gd_opened_gen]
     cmp  eax, [rel gd_stage_gen]
     jne  .no
+    mov  byte [rel gd_stage_check], GD_CHK_WINDOW_EPOCH
     mov  rax, [rel gd_window_epoch]
     cmp  rax, [rel gd_stage_window_epoch]
     jne  .no
+    mov  byte [rel gd_stage_check], GD_CHK_SESSION_EPOCH
     mov  rax, [rel session_authority_epoch]
     cmp  rax, [rel gd_stage_epoch]
     jne  .no
+    mov  byte [rel gd_stage_check], GD_CHK_GUEST
     mov  rax, [rel vm_profile_active]
     cmp  rax, [rel gd_stage_profile]
     jne  .no
@@ -1040,26 +1085,32 @@ gd_stage_still_ours:
     mov  eax, [rel vm_profile_dev_mask]
     cmp  eax, [rel gd_stage_devices]
     jne  .no
+    mov  byte [rel gd_stage_check], GD_CHK_TARGET
     mov  al, [rel keep_presentation_target]
     cmp  al, [rel gd_stage_target]
     jne  .no
     cmp  al, PRESENTATION_CLI
     je   .no
+    mov  byte [rel gd_stage_check], GD_CHK_LOCKED
     call gd_locked
     test eax, eax
     jnz  .no
+    mov  byte [rel gd_stage_check], GD_CHK_WINDOW
     call gd_window_ours
     test eax, eax
     jz   .no
     lea  rcx, [rel wm_state]
     cmp  dword [rcx + rbx*4], WM_VISIBLE
     jne  .no
+    mov  byte [rel gd_stage_check], GD_CHK_TOP
     call wmx_paint_top_slot
     cmp  eax, ebx
     jne  .no
+    mov  byte [rel gd_stage_check], GD_CHK_OVERLAY
     call gd_overlay_open
     test eax, eax
     jnz  .no
+    mov  byte [rel gd_stage_check], GD_CHK_SCREEN
     mov  rax, [rel fb_base]
     cmp  rax, [rel gd_stage_fb]
     jne  .no
@@ -1084,6 +1135,7 @@ gd_stage_still_ours:
     mov  eax, [rel fb_stride]
     cmp  eax, [rel gd_stage_fbs]
     jne  .no
+    mov  byte [rel gd_stage_check], GD_CHK_GEOMETRY
     lea  rdx, [rel wm_owner]
     mov  rax, [rdx + rbx*8]
     cmp  rax, [rel gd_stage_win_owner]
@@ -1104,6 +1156,7 @@ gd_stage_still_ours:
     mov  eax, [rdx + rbx*4]
     cmp  eax, [rel gd_stage_wh]
     jne  .no
+    mov  byte [rel gd_stage_check], GD_CHK_PAIR
     call gd_stage_pair_ok
     test eax, eax
     jz   .no
@@ -1111,18 +1164,23 @@ gd_stage_still_ours:
     call gd_stage_guest_apart
     test eax, eax
     jz   .no
+    mov  byte [rel gd_stage_check], GD_CHK_SURFACE
     call gd_stage_surface_ok
     test eax, eax
     jz   .no
+    mov  byte [rel gd_stage_check], GD_CHK_COMPOSITION
     mov  rax, [rel fb_surface_epoch]
     cmp  rax, -1
     je   .no
     cmp  rax, [rel gd_stage_pub_epoch]
     jne  .no                               ; foreign composition revokes EVERY phase
+    mov  byte [rel gd_stage_check], GD_CHK_PLAN
     call gd_stage_plan_ok
     pop  rbx
     ret
 .no:
+    mov  al, [rel gd_stage_check]
+    mov  [rel gd_stage_stale_check], al  ; survives bounded cleanup, observation only
     xor  eax, eax
     pop  rbx
     ret
@@ -2422,5 +2480,7 @@ gd_stage_worked:    resb 1              ; reset only at entry to actual idle tic
 gd_stage_state:     resb 1              ; GD_ST_*
 gd_stage_dirty:     resb 1              ; S/D hold a captured frame
 gd_stage_why:       resb 1              ; GD_WHY_* of the last refresh not shown from D
+gd_stage_check:     resb 1              ; GD_CHK_* last tested by still_ours; meaningful only after it refused
+gd_stage_stale_check: resb 1            ; last failed predicate for the current staging binding
 %endmacro
 WDATA_BSS_DEFER WDATA_gui_guest_desktop_stage

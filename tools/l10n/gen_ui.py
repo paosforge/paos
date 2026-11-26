@@ -11,10 +11,10 @@ import sys
 
 ROOT = Path(__file__).absolute().parents[2]
 INPUT = 'third_party/localization/'
-MANIFEST_SHA = 'c8a67e210e45f290f794e2f96f37e7f621796fba75ccd80e954c0171803b1fb0'
+MANIFEST_SHA = '87f40384c69926bcf78ce2096681d19b2b974a62eb9f02260b06bd6df57c11cb'
 RECIPE_SHA = '82d2d888564c5f91eda1310897ea72f6ccc35975ff22df85715ba29b532e0e84'
 EXPECTED = {
-    'l10n_catalog.inc': 'd3fc4c969baf08f7adbf23e3a27f12bbce2ba137b0dfd2afa74eba0394e4b7bc',
+    'l10n_catalog.inc': '7af0e7eb4df441f092b2741b8a09910009de260002799fa0f1b198008dc07332',
     'l10n_glyphs.inc': 'fa810fbb41c33c4094e5d86cb38a39d27133f96befe0d14270e5c987a4148376',
 }
 
